@@ -4,6 +4,7 @@ package launch
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -23,17 +24,66 @@ type Spec struct {
 
 // Exec inicia o processo com exec.Command, em uma sessão própria (Setsid), e
 // o solta: o daemon não espera pelo término nem herda seus sinais.
-type Exec struct{}
+type Exec struct {
+	// ShowEnv devolve a saída de `systemctl --user show-environment` (nil =
+	// roda o systemctl de verdade). Injetável em testes.
+	ShowEnv func() ([]byte, error)
+}
+
+// graphicalVars são as variáveis que o terminal precisa para abrir janela.
+var graphicalVars = []string{"DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"}
+
+// withGraphicalEnv completa env com as variáveis gráficas que faltam, lidas
+// de show-environment (o daemon do systemd pode ter subido antes do login
+// gráfico). Falha ao consultar deixa env como está.
+func withGraphicalEnv(env []string, show func() ([]byte, error)) []string {
+	have := map[string]bool{}
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && v != "" {
+			have[k] = true
+		}
+	}
+	missing := false
+	for _, k := range graphicalVars {
+		if !have[k] {
+			missing = true
+		}
+	}
+	if !missing {
+		return env
+	}
+	if show == nil {
+		show = func() ([]byte, error) { return exec.Command("systemctl", "--user", "show-environment").Output() }
+	}
+	out, err := show()
+	if err != nil {
+		return env
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || v == "" || have[k] {
+			continue
+		}
+		for _, g := range graphicalVars {
+			if k == g {
+				env = append(env, k+"="+v)
+				have[k] = true
+			}
+		}
+	}
+	return env
+}
 
 var _ Launcher = Exec{}
 
 // Start executa argv sem esperar. O término é recolhido em segundo plano
 // para não deixar zumbi.
-func (Exec) Start(argv []string) error {
+func (e Exec) Start(argv []string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("comando vazio")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = withGraphicalEnv(os.Environ(), e.ShowEnv)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return err
@@ -94,8 +144,8 @@ func TerminalArgv(terminalCmd []string, dir string, env map[string]string, agent
 // TerminalArgvWith resolve terminalCmd[0] e, pelo nome do binário, usa o
 // formato de execução de comando do terminal: terminator aceita -e com uma
 // string (rodada por $SHELL -c, também na partida a frio); gnome-terminal usa
-// "-- sh -c"; konsole, xterm, xfce4-terminal, alacritty e kitty usam
-// "-e sh -c". Desconhecido: terminalCmd + o script como último argumento.
+// "-- sh -c" (o wrapper da Debian usa -e); xfce4-terminal usa "-x sh -c";
+// konsole, xterm, alacritty e kitty usam "-e sh -c". Desconhecido: terminalCmd + o script como último argumento.
 // Diretório e variáveis vão dentro do script porque o terminator e o
 // gnome-terminal reaproveitam uma instância aberta via DBus e descartam o
 // cwd e o env de quem chamou.
@@ -106,12 +156,19 @@ func TerminalArgvWith(resolve Resolver, terminalCmd []string, dir string, env ma
 			base := filepath.Base(bin)
 			switch {
 			case base == "terminator":
-				// O terminator roda a string com $SHELL -c; sh -c explícito
-				// vale mesmo se o shell do usuário for fish etc.
+				// O terminator roda a string com $SHELL -c; o sh -c explícito
+				// é seguro com shells de login POSIX (bash/zsh/dash). Shells
+				// fish/csh não são suportados no piloto.
 				return []string{bin, "-e", "/bin/sh -c " + quote(script)}
+			case base == "gnome-terminal.wrapper":
+				// Shim Perl da Debian, estilo xterm: descarta "--".
+				return []string{bin, "-e", "/bin/sh", "-c", script}
+			case base == "xfce4-terminal":
+				// O -e do xfce4-terminal recebe UMA string; -x recebe argv.
+				return []string{bin, "-x", "/bin/sh", "-c", script}
 			case strings.HasPrefix(base, "gnome-terminal"):
 				return []string{bin, "--", "/bin/sh", "-c", script}
-			case base == "konsole", base == "xterm", base == "xfce4-terminal", base == "alacritty", base == "kitty":
+			case base == "konsole", base == "xterm", base == "alacritty", base == "kitty":
 				return []string{bin, "-e", "/bin/sh", "-c", script}
 			}
 		}

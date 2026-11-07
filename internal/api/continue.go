@@ -18,8 +18,8 @@ const (
 	// slugNone é o "prompt" que só entrega o pacote de retomada (via
 	// NOBRE_RESUME e SessionStart), sem texto renderizado.
 	slugNone = "nenhum"
-	// maxPromptBytes limita o prompt inicial, que viaja na linha de comando.
-	maxPromptBytes  = 100 << 10
+	// maxArgBytes limita cada argumento do comando final (o prompt viaja nele).
+	maxArgBytes     = 128 << 10
 	msgPromptTooBig = `prompt grande demais para abrir no terminal; use "Nenhum"`
 )
 
@@ -120,12 +120,8 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 			usedSlug = pr.Slug
 		}
 	}
-	if len(initial) > maxPromptBytes || strings.ContainsRune(initial, 0) {
+	if strings.ContainsRune(initial, 0) {
 		writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
-		return
-	}
-	if err := s.checkoutCardBranch(c, p.Path); err != nil {
-		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	resolve := s.deps.ResolveTerminal
@@ -133,6 +129,16 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 		resolve = launch.ResolveBinary
 	}
 	argv := launch.TerminalArgvWith(resolve, set.TerminalCmd, p.Path, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(initial))
+	for _, a := range argv {
+		if len(a) >= maxArgBytes { // MAX_ARG_STRLEN do Linux é 131072
+			writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
+			return
+		}
+	}
+	if err := s.checkoutCardBranch(c, p.Path); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err := s.deps.Launcher.Start(argv); err != nil {
 		writeError(w, http.StatusInternalServerError, "não consegui abrir o terminal: "+err.Error())
 		return

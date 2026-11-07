@@ -24,6 +24,8 @@ func TestTerminalArgvTemplates(t *testing.T) {
 		"x-terminal-emulator": "/usr/bin/terminator",
 		"gnome-terminal":      "/usr/bin/gnome-terminal.real",
 		"xterm":               "/usr/bin/xterm",
+		"wrapper":             "/usr/bin/gnome-terminal.wrapper",
+		"xfce":                "/usr/bin/xfce4-terminal",
 		"kitty":               "/usr/bin/kitty",
 		"meu-term":            "/opt/meu-term",
 	})
@@ -35,6 +37,8 @@ func TestTerminalArgvTemplates(t *testing.T) {
 		{"terminator via x-terminal-emulator", []string{"x-terminal-emulator", "-e"},
 			[]string{"/usr/bin/terminator", "-e", "/bin/sh -c " + quote(wantScript)}},
 		{"gnome-terminal", []string{"gnome-terminal", "--"}, []string{"/usr/bin/gnome-terminal.real", "--", "/bin/sh", "-c", wantScript}},
+		{"wrapper do gnome-terminal", []string{"wrapper", "--"}, []string{"/usr/bin/gnome-terminal.wrapper", "-e", "/bin/sh", "-c", wantScript}},
+		{"xfce4-terminal", []string{"xfce"}, []string{"/usr/bin/xfce4-terminal", "-x", "/bin/sh", "-c", wantScript}},
 		{"xterm", []string{"xterm"}, []string{"/usr/bin/xterm", "-e", "/bin/sh", "-c", wantScript}},
 		{"kitty", []string{"kitty", "-x"}, []string{"/usr/bin/kitty", "-e", "/bin/sh", "-c", wantScript}},
 		{"desconhecido", []string{"meu-term", "--run"}, []string{"meu-term", "--run", wantScript}},
@@ -51,5 +55,27 @@ func TestTerminalArgvTemplates(t *testing.T) {
 func TestExecStartRejectsEmpty(t *testing.T) {
 	if err := (Exec{}).Start(nil); err == nil {
 		t.Fatal("esperava erro")
+	}
+}
+
+func TestWithGraphicalEnvFillsMissing(t *testing.T) {
+	show := func() ([]byte, error) {
+		return []byte("DISPLAY=:1\nXAUTHORITY=/run/xa\nHOME=/x\nWAYLAND_DISPLAY=\n"), nil
+	}
+	got := withGraphicalEnv([]string{"DISPLAY=:0", "PATH=/bin"}, show)
+	want := []string{"DISPLAY=:0", "PATH=/bin", "XAUTHORITY=/run/xa"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	// nada falta: não consulta
+	full := []string{"DISPLAY=:0", "WAYLAND_DISPLAY=w", "XAUTHORITY=x", "DBUS_SESSION_BUS_ADDRESS=d"}
+	called := false
+	withGraphicalEnv(full, func() ([]byte, error) { called = true; return nil, nil })
+	if called {
+		t.Fatal("consultou sem necessidade")
+	}
+	// erro: env intacto
+	if got := withGraphicalEnv([]string{"A=b"}, func() ([]byte, error) { return nil, fmt.Errorf("x") }); len(got) != 1 {
+		t.Fatalf("got %q", got)
 	}
 }

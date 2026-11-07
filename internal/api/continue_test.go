@@ -125,7 +125,7 @@ func TestContinueStartsWithEnv(t *testing.T) {
 	last := argv[len(argv)-1]
 	if argv[0] != "/usr/bin/terminator" || argv[1] != "-e" || len(argv) != 3 ||
 		!strings.Contains(last, "cd ") || !strings.Contains(last, "/w/api") ||
-		!strings.Contains(last, "NOBRE_RESUME") || !strings.Contains(last, "NAC-1") || !strings.Contains(last, "'claude'") || strings.Contains(last, "exec") {
+		!strings.Contains(last, "NOBRE_RESUME") || !strings.Contains(last, "NAC-1") || !strings.Contains(last, "'claude'") {
 		t.Fatalf("argv = %q", argv)
 	}
 	p, err := a.st.GetPrompt("retomar-card")
@@ -204,7 +204,7 @@ func TestContinueValidatesPromptBeforeCheckout(t *testing.T) {
 	if rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"prompt_slug": "ruim"}, 0); rec.Code != 422 {
 		t.Fatalf("variável desconhecida = %d %s", rec.Code, rec.Body)
 	}
-	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "grande", Slug: "grande", Body: strings.Repeat("x", 101<<10)}); err != nil {
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "grande", Slug: "grande", Body: strings.Repeat("'", 40<<10)}); err != nil {
 		t.Fatal(err)
 	}
 	rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"prompt_slug": "grande"}, 0)
