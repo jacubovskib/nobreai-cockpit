@@ -9,6 +9,10 @@ const DEV_ORIGINS = new Set(['http://localhost:5173', 'http://127.0.0.1:5173'])
 export default defineConfig({
   plugins: [react()],
   server: {
+    // DEV_ORIGINS fixa a porta 5173: sem strictPort o Vite pularia para 5174 e o
+    // WebSocket dos terminais seria recusado.
+    port: 5173,
+    strictPort: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:7420',
