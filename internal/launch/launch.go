@@ -117,16 +117,39 @@ func ResolveBinary(name string) (string, error) {
 	return p, nil
 }
 
-// Script monta o comando de shell que roda o agente: entra em dir, define as
-// variáveis e roda o agente (sem exec, para a janela avisar quando ele sai
-// com erro, ou quando o cd falha, e esperar Enter antes de fechar).
-func Script(dir string, env map[string]string, agentArgv []string) string {
+// PathWithDir põe dir no começo de path (lista separada por ":"), se ainda
+// não estiver nela.
+func PathWithDir(path, dir string) string {
+	if dir == "" {
+		return path
+	}
+	if path == "" {
+		return dir
+	}
+	for _, d := range strings.Split(path, ":") {
+		if d == dir {
+			return path
+		}
+	}
+	return dir + ":" + path
+}
+
+// Script monta o comando de shell que roda o agente: exporta path (se não
+// vazio; a janela reaproveitada do terminator tem o PATH da instância já
+// aberta), entra em dir, define as variáveis e roda o agente (sem exec, para
+// a janela avisar quando ele sai com erro, ou quando o cd falha, e esperar
+// Enter antes de fechar).
+func Script(path, dir string, env map[string]string, agentArgv []string) string {
 	keys := make([]string, 0, len(env))
 	for k := range env {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	parts := []string{"cd " + quote(dir) + " &&"}
+	var parts []string
+	if path != "" {
+		parts = append(parts, "export PATH="+quote(path)+";")
+	}
+	parts = append(parts, "cd "+quote(dir)+" &&")
 	for _, k := range keys {
 		parts = append(parts, k+"="+quote(env[k]))
 	}
@@ -137,8 +160,8 @@ func Script(dir string, env map[string]string, agentArgv []string) string {
 }
 
 // TerminalArgv monta o argv que abre o agente num terminal (ResolveBinary).
-func TerminalArgv(terminalCmd []string, dir string, env map[string]string, agentArgv []string) []string {
-	return TerminalArgvWith(ResolveBinary, terminalCmd, dir, env, agentArgv)
+func TerminalArgv(terminalCmd []string, path, dir string, env map[string]string, agentArgv []string) []string {
+	return TerminalArgvWith(ResolveBinary, terminalCmd, path, dir, env, agentArgv)
 }
 
 // TerminalArgvWith resolve terminalCmd[0] e, pelo nome do binário, usa o
@@ -146,11 +169,11 @@ func TerminalArgv(terminalCmd []string, dir string, env map[string]string, agent
 // string (rodada por $SHELL -c, também na partida a frio); gnome-terminal usa
 // "-- sh -c" (o wrapper da Debian usa -e); xfce4-terminal usa "-x sh -c";
 // konsole, xterm, alacritty e kitty usam "-e sh -c". Desconhecido: terminalCmd + o script como último argumento.
-// Diretório e variáveis vão dentro do script porque o terminator e o
+// PATH, diretório e variáveis vão dentro do script porque o terminator e o
 // gnome-terminal reaproveitam uma instância aberta via DBus e descartam o
 // cwd e o env de quem chamou.
-func TerminalArgvWith(resolve Resolver, terminalCmd []string, dir string, env map[string]string, agentArgv []string) []string {
-	script := Script(dir, env, agentArgv)
+func TerminalArgvWith(resolve Resolver, terminalCmd []string, path, dir string, env map[string]string, agentArgv []string) []string {
+	script := Script(path, dir, env, agentArgv)
 	if len(terminalCmd) > 0 {
 		if bin, err := resolve(terminalCmd[0]); err == nil {
 			base := filepath.Base(bin)

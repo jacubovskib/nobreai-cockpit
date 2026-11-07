@@ -25,7 +25,15 @@ func agentsAPI(t *testing.T) (*testAPI, string, string) {
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	skills := t.TempDir()
 	ad := claude.New(st, adapter.Deps{Now: func() time.Time { return testNow }})
-	ad.SetPaths(claude.Paths{SettingsPath: settings, SkillsDir: skills, NobreBin: "/opt/bin/nobre", ClaudeBin: "/nao/existe"})
+	// O nobre dos hooks precisa existir para o Detect dar os hooks como OK.
+	nobre := filepath.Join(t.TempDir(), "opt", "bin", "nobre")
+	if err := os.MkdirAll(filepath.Dir(nobre), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nobre, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ad.SetPaths(claude.Paths{SettingsPath: settings, SkillsDir: skills, NobreBin: nobre, ClaudeBin: "/nao/existe"})
 	hub := NewHub()
 	t.Cleanup(hub.Close)
 	h := New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Adapters: map[string]adapter.Adapter{"claude": ad}})

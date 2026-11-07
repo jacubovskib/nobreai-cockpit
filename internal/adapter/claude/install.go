@@ -180,24 +180,39 @@ func containsEntry(entries []any, want map[string]any) bool {
 	return false
 }
 
-// missingHooks lista os eventos sem hook nosso em settingsPath.
-func missingHooks(settingsPath string) ([]string, error) {
+// installedHooks lista os eventos sem hook nosso em settingsPath e os
+// binários (sem repetição, na ordem) que os hooks nossos chamam.
+func installedHooks(settingsPath string) (missing, bins []string, err error) {
 	root, _, exists, err := loadSettings(settingsPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !exists {
-		return nil, fmt.Errorf("%s não existe", settingsPath)
+		return nil, nil, fmt.Errorf("%s não existe", settingsPath)
 	}
 	hooks, _ := root["hooks"].(map[string]any)
-	var missing []string
+	seen := map[string]bool{}
 	for _, ev := range hookEvents {
 		entries, _ := hooks[ev].([]any)
 		if countOurs(entries) == 0 {
 			missing = append(missing, ev)
 		}
+		for _, e := range entries {
+			m, _ := e.(map[string]any)
+			hs, _ := m["hooks"].([]any)
+			for _, h := range hs {
+				hm, _ := h.(map[string]any)
+				if c, _ := hm["command"].(string); isOurs(c) {
+					b := c[:strings.Index(c, " hook claude ")]
+					if !seen[b] {
+						seen[b] = true
+						bins = append(bins, b)
+					}
+				}
+			}
+		}
 	}
-	return missing, nil
+	return missing, bins, nil
 }
 
 // InstallHooks mescla os hooks do Cockpit em settingsPath, preservando o que já

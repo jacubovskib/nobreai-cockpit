@@ -27,7 +27,7 @@ type Adapter struct {
 var _ adapter.Adapter = (*Adapter)(nil)
 
 // New cria o adaptador sem caminhos de instalação (use SetPaths; o nobred usa
-// DefaultPaths). New. deps.Now nil vira time.Now; Git e Publish podem ser nil.
+// DefaultPaths). deps.Now nil vira time.Now; Git e Publish podem ser nil.
 func New(st *store.Store, deps adapter.Deps) *Adapter {
 	if deps.Now == nil {
 		deps.Now = time.Now
@@ -39,9 +39,11 @@ func (a *Adapter) Name() string { return "claude" }
 
 func (a *Adapter) ProcessNames() []string { return []string{"claude"} }
 
-func (a *Adapter) LaunchCommand(initialPrompt string) []string {
+func (a *Adapter) Binary() string { return a.cliPath() }
+
+func (a *Adapter) LaunchCommand(bin, initialPrompt string) []string {
 	// "--" evita que um prompt começando com "-" seja lido como opção.
-	return []string{"claude", "--", initialPrompt}
+	return []string{bin, "--", initialPrompt}
 }
 
 // Wait espera as leituras de transcript em andamento (desligamento e testes).

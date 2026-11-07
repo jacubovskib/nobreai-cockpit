@@ -45,7 +45,9 @@ type env struct {
 	launch  *fakeLauncher
 	procDir string
 	project string
-	now     atomic.Int64 // UnixNano
+	// claudeBin é o CLI falso que o continue põe no comando.
+	claudeBin string
+	now       atomic.Int64 // UnixNano
 }
 
 func (e *env) clock() time.Time { return time.Unix(0, e.now.Load()).UTC() }
@@ -74,10 +76,15 @@ func newEnv(t *testing.T) *env {
 	hub := api.NewHub()
 	t.Cleanup(hub.Close)
 	e.ad = claude.New(e.st, adapter.Deps{Now: e.clock, Publish: hub.Publish})
+	// CLI falso: o continue resolve o claude para um caminho absoluto.
+	e.claudeBin = filepath.Join(t.TempDir(), "claude")
+	must(t, os.WriteFile(e.claudeBin, []byte("#!/bin/sh\n"), 0o755))
+	e.ad.SetPaths(claude.Paths{ClaudeBin: e.claudeBin})
 	e.srv = httptest.NewServer(api.New(e.st, api.Deps{
 		Now: e.clock, Hub: hub, ProcRoot: e.procDir,
-		Adapters: map[string]adapter.Adapter{"claude": e.ad},
-		Launcher: e.launch,
+		Adapters:    map[string]adapter.Adapter{"claude": e.ad},
+		Launcher:    e.launch,
+		SessionPATH: "/usr/bin:/opt/nobre/bin",
 		ResolveTerminal: func(string) (string, error) {
 			return "/usr/bin/xterm", nil
 		},
@@ -293,12 +300,19 @@ func TestHandoffEndToEnd(t *testing.T) {
 		t.Fatalf("lançamentos = %d", len(e.launch.calls))
 	}
 	script := e.launch.calls[0][len(e.launch.calls[0])-1]
-	for _, want := range []string{"cd '" + e.project + "'", "NOBRE_RESUME='NAC-1'", "'claude' '--' ",
+	for _, want := range []string{"export PATH='/usr/bin:/opt/nobre/bin';", "cd '" + e.project + "'", "NOBRE_RESUME='NAC-1'",
+		"'" + e.claudeBin + "' '--' ",
 		// Prompt inicial padrão renderizado (o que o painel da UI envia).
 		"Você está continuando o card NAC-1 (Refresh de token OAuth).",
 		"falta tratar o callback expirado"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script do terminal sem %q:\n%s", want, script)
+		}
+	}
+	// O pacote de retomada não vai no argv: chega no SessionStart de B.
+	for _, pkgOnly := range []string{"Renovar 60 s antes de expirar", "lógica de renovação", "go test ./auth/... -run Refresh"} {
+		if strings.Contains(script, pkgOnly) {
+			t.Fatalf("script do terminal repete o pacote (%q):\n%s", pkgOnly, script)
 		}
 	}
 

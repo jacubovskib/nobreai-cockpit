@@ -23,7 +23,9 @@ func TestRenderDraftBody(t *testing.T) {
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("desconhecida = %d %s", rec.Code, rec.Body)
 	}
-	if u := decode[struct{ Unknown []string `json:"unknown"` }](t, rec).Unknown; len(u) != 1 || u[0] != "nao.existe" {
+	if u := decode[struct {
+		Unknown []string `json:"unknown"`
+	}](t, rec).Unknown; len(u) != 1 || u[0] != "nao.existe" {
 		t.Fatalf("unknown = %v", u)
 	}
 	if rec := a.do(t, "POST", "/api/prompts/render", map[string]any{"card": "NAC-999", "body": "x"}, 0); rec.Code != http.StatusNotFound {

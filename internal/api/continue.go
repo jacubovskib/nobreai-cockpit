@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -21,6 +22,7 @@ const (
 	// maxArgBytes limita cada argumento do comando final (o prompt viaja nele).
 	maxArgBytes     = 128 << 10
 	msgPromptTooBig = `prompt grande demais para abrir no terminal; use "Nenhum"`
+	msgNoAgentBin   = "não encontrei o comando claude; rode nobre setup de um terminal onde `claude` funciona"
 )
 
 // continueCard: POST /api/cards/{key}/continue {agent, mode, prompt_slug, force}
@@ -63,6 +65,12 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.deps.Launcher == nil {
 		writeError(w, http.StatusServiceUnavailable, "lançador indisponível")
+		return
+	}
+	// Caminho absoluto: o terminal e o systemd não têm ~/.local/bin no PATH.
+	bin := ad.Binary()
+	if bin == "" {
+		writeError(w, http.StatusConflict, msgNoAgentBin)
 		return
 	}
 	c, err := s.st.GetCard(r.PathValue("key"))
@@ -110,7 +118,9 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if pr.Slug != "" {
-			text, ok := s.renderBody(w, pr.Body, c.Key)
+			// O pacote de retomada chega pelo SessionStart (NOBRE_RESUME);
+			// repeti-lo no prompt só duplicaria o contexto.
+			text, ok := s.renderCardBody(w, pr.Body, c.Key, false)
 			if !ok {
 				return
 			}
@@ -128,7 +138,11 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	if resolve == nil {
 		resolve = launch.ResolveBinary
 	}
-	argv := launch.TerminalArgvWith(resolve, set.TerminalCmd, p.Path, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(initial))
+	path := s.deps.SessionPATH
+	if path == "" {
+		path = os.Getenv("PATH")
+	}
+	argv := launch.TerminalArgvWith(resolve, set.TerminalCmd, path, p.Path, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(bin, initial))
 	for _, a := range argv {
 		if len(a) >= maxArgBytes { // MAX_ARG_STRLEN do Linux é 131072
 			writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)

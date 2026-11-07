@@ -12,9 +12,13 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
+// registeredPhrase abre o contexto do SessionStart quando a sessão é
+// registrada no board; a skill global só usa o nobre quando a vê.
+const registeredPhrase = "NobreAI Cockpit: esta sessão é registrada no board"
+
 // instructions é o começo do contexto injetado no SessionStart: quando criar
 // card (spec 6.0) e os comandos nobre.
-const instructions = `NobreAI Cockpit: esta sessão é registrada no board.
+const instructions = registeredPhrase + `.
 Crie um card com nobre start "<título>" quando começar algo que precisa de histórico: tarefa de várias etapas, mudanças em vários arquivos ou trabalho que outro agente pode continuar. Se o usuário pedir um card, crie; se citar uma chave NAC-, use nobre resume <KEY>. Perguntas rápidas não viram card.
 Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
 
@@ -51,7 +55,10 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 			sess.CardID = &c.ID
 		}
 	}
-	if !sess.FullCapture && resumed == nil && notFound == "" {
+	// Compactação numa sessão com card: o pacote de retomada some do
+	// contexto junto com o resto e é reinjetado.
+	compacted := p.Source == "compact" && resumed == nil && sess.CardID != nil
+	if !sess.FullCapture && resumed == nil && notFound == "" && !compacted {
 		return adapter.HookReply{}, nil
 	}
 
@@ -66,6 +73,13 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 			return adapter.HookReply{}, err
 		}
 		fmt.Fprintf(&b, "\n\nEsta sessão está no card %s · %s.", c.Key, c.Title)
+		if compacted {
+			pkg, err := a.resumePackage(c, sess.ID)
+			if err != nil {
+				return adapter.HookReply{}, err
+			}
+			fmt.Fprintf(&b, " O contexto foi compactado; continue a partir do pacote de retomada do card.\n\n%s", pkg)
+		}
 	}
 	if sess.FullCapture {
 		paused, err := a.pausedCards(sess, resumed)

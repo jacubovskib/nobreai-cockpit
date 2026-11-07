@@ -151,3 +151,13 @@ func TestMeStartAndContent(t *testing.T) {
 		t.Fatalf("markdown = %q", md)
 	}
 }
+
+func TestMeStartWithoutProjectAsksTheUser(t *testing.T) {
+	a := newTestAPI(t)
+	a.liveSession(t, "claude:s", 4242, "")
+	rec := a.do(t, "POST", "/api/me/start", map[string]string{"title": "Novo"}, 4242)
+	want := "Este repositório não está cadastrado no NobreAI Cockpit. Peça ao usuário para cadastrar (nobre project add); não cadastre por conta própria."
+	if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != want {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}

@@ -18,8 +18,12 @@ type Adapter interface {
 	HandleHook(ctx context.Context, h HookCall) (HookReply, error)
 	Detect() Detection
 	Install() (InstallReport, error)
-	// LaunchCommand devolve o argv que inicia o agente com o prompt inicial.
-	LaunchCommand(initialPrompt string) []string
+	// Binary é o caminho absoluto do CLI do agente, sem resolver symlinks (o
+	// nome do processo tem de bater com ProcessNames); "" = não encontrado.
+	Binary() string
+	// LaunchCommand devolve o argv que inicia o agente bin (vindo de Binary)
+	// com o prompt inicial.
+	LaunchCommand(bin, initialPrompt string) []string
 }
 
 // HookCall é a chamada de hook repassada pelo `nobre hook`.

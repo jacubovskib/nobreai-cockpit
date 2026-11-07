@@ -100,17 +100,25 @@ func run(dbPath string, seedDemo bool) error {
 	hub := api.NewHub()
 	git := gitinfo.Exec{}
 	claudeAdapter := claude.New(st, adapter.Deps{Now: time.Now, Git: git, Publish: hub.Publish})
-	claudeAdapter.SetPaths(claude.DefaultPaths())
+	paths := claude.DefaultPaths()
+	claudeAdapter.SetPaths(paths)
+	// O terminal do "Continuar" recebe o PATH do daemon com o diretório do
+	// nobre: a sessão nova chama nobre (skill) e o próprio claude.
+	sessionPATH := os.Getenv("PATH")
+	if paths.NobreBin != "" {
+		sessionPATH = launch.PathWithDir(sessionPATH, filepath.Dir(paths.NobreBin))
+	}
 	// As leituras de transcript em segundo plano terminam antes de st.Close
 	// (defers rodam em ordem inversa).
 	defer claudeAdapter.Wait()
 	handler := api.New(st, api.Deps{
-		Now:      time.Now,
-		ProcRoot: "/proc",
-		Git:      git,
-		Launcher: launch.Exec{},
-		Hub:      hub,
-		Adapters: map[string]adapter.Adapter{"claude": claudeAdapter},
+		Now:         time.Now,
+		ProcRoot:    "/proc",
+		Git:         git,
+		Launcher:    launch.Exec{},
+		Hub:         hub,
+		Adapters:    map[string]adapter.Adapter{"claude": claudeAdapter},
+		SessionPATH: sessionPATH,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.

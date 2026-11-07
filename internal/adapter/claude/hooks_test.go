@@ -743,7 +743,31 @@ func TestAdapterIdentity(t *testing.T) {
 	a := New(nil, adapter.Deps{})
 	var _ adapter.Adapter = a
 	if a.Name() != "claude" || !slices.Equal(a.ProcessNames(), []string{"claude"}) ||
-		!slices.Equal(a.LaunchCommand("oi"), []string{"claude", "--", "oi"}) {
+		!slices.Equal(a.LaunchCommand("/x/claude", "oi"), []string{"/x/claude", "--", "oi"}) {
 		t.Fatal("identidade do adaptador")
+	}
+}
+
+func TestSessionStartCompactReinjectsResumePackage(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	if _, err := e.st.CreateCard(domain.Card{Title: "Migrar OAuth2", ProjectID: p.ID, Branch: "main",
+		WhereStopped: "falta o teste do refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	e.call(t, "session_start")
+	if err := e.st.AttachSession(sessID, "NAC-1", true); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", with("source", "compact")))
+	for _, want := range []string{"NAC-1", "## Onde parei", "falta o teste do refresh"} {
+		if !strings.Contains(ctx, want) {
+			t.Fatalf("compact sem %q:\n%s", want, ctx)
+		}
+	}
+	// Num resume comum segue só a linha do card.
+	ctx = additionalContext(t, e.call(t, "session_start", with("source", "resume")))
+	if !strings.Contains(ctx, "Esta sessão está no card NAC-1") || strings.Contains(ctx, "## Onde parei") {
+		t.Fatalf("resume:\n%s", ctx)
 	}
 }

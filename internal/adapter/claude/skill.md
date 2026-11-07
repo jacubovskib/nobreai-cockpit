@@ -5,7 +5,13 @@ description: Use quando a tarefa tiver várias etapas, mudar vários arquivos ou
 
 # NobreAI Cockpit
 
-O Cockpit é o quadro (kanban) onde o trabalho dos agentes fica registrado em cards. Toda sessão já é registrada; o card guarda o histórico que permite outro agente continuar sem perguntar nada.
+O Cockpit é o quadro (kanban) onde o trabalho dos agentes fica registrado em cards. O card guarda o histórico que permite outro agente continuar sem perguntar nada.
+
+## Antes de tudo: esta sessão é registrada?
+
+- Use os comandos `nobre` só quando o contexto desta sessão contiver a frase "NobreAI Cockpit: esta sessão é registrada no board". Ela chega no início da sessão quando o repositório está cadastrado no Cockpit.
+- Sem essa frase, não rode `nobre start`, `nobre resume` nem os outros comandos, e não cadastre o repositório (`nobre project add`) por conta própria. Se o usuário pedir um card, diga que o repositório não está cadastrado e que ele mesmo pode cadastrar com `nobre project add`.
+- Se um comando `nobre` responder que o repositório não está cadastrado, avise o usuário e siga sem card; não cadastre por conta própria.
 
 ## Quando criar um card
 

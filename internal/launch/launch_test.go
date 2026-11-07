@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const wantScript = `cd '/w/api' && NOBRE_RESUME='NAC-1' 'claude' '--' 'Continue o NAC-1: '\''x'\'''; s=$?; if [ $s -ne 0 ]; then printf '%s\n' "NobreAI Cockpit: o agente saiu com código $s (Enter fecha)"; read -r _; fi`
+const wantScript = `export PATH='/usr/bin:/opt/nobre'; cd '/w/api' && NOBRE_RESUME='NAC-1' 'claude' '--' 'Continue o NAC-1: '\''x'\'''; s=$?; if [ $s -ne 0 ]; then printf '%s\n' "NobreAI Cockpit: o agente saiu com código $s (Enter fecha)"; read -r _; fi`
 
 func fakeResolve(m map[string]string) Resolver {
 	return func(n string) (string, error) {
@@ -45,7 +45,7 @@ func TestTerminalArgvTemplates(t *testing.T) {
 		{"não resolve", []string{"sumiu", "-e"}, []string{"sumiu", "-e", wantScript}},
 	}
 	for _, c := range cases {
-		got := TerminalArgvWith(res, c.cmd, "/w/api", env, agent)
+		got := TerminalArgvWith(res, c.cmd, "/usr/bin:/opt/nobre", "/w/api", env, agent)
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
 		}
@@ -77,5 +77,31 @@ func TestWithGraphicalEnvFillsMissing(t *testing.T) {
 	// erro: env intacto
 	if got := withGraphicalEnv([]string{"A=b"}, func() ([]byte, error) { return nil, fmt.Errorf("x") }); len(got) != 1 {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestScriptExportsQuotedPATH(t *testing.T) {
+	got := Script("/a b:/it's", "/w", nil, []string{"/home/u/.local/bin/claude"})
+	want := `export PATH='/a b:/it'\''s'; cd '/w' && '/home/u/.local/bin/claude'; `
+	if len(got) < len(want) || got[:len(want)] != want {
+		t.Fatalf("script = %q", got)
+	}
+	// Sem PATH não exporta nada.
+	if got := Script("", "/w", nil, []string{"x"}); got[:4] != "cd '" {
+		t.Fatalf("script = %q", got)
+	}
+}
+
+func TestPathWithDir(t *testing.T) {
+	cases := []struct{ path, dir, want string }{
+		{"/usr/bin:/bin", "/home/u/.local/bin", "/home/u/.local/bin:/usr/bin:/bin"},
+		{"/usr/bin:/home/u/.local/bin", "/home/u/.local/bin", "/usr/bin:/home/u/.local/bin"},
+		{"", "/opt/n", "/opt/n"},
+		{"/usr/bin", "", "/usr/bin"},
+	}
+	for _, c := range cases {
+		if got := PathWithDir(c.path, c.dir); got != c.want {
+			t.Errorf("PathWithDir(%q, %q) = %q, quero %q", c.path, c.dir, got, c.want)
+		}
 	}
 }

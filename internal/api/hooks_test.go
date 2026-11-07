@@ -33,7 +33,8 @@ func (f *fakeAdapter) HandleHook(ctx context.Context, h adapter.HookCall) (adapt
 }
 func (f *fakeAdapter) Detect() adapter.Detection               { return adapter.Detection{} }
 func (f *fakeAdapter) Install() (adapter.InstallReport, error) { return adapter.InstallReport{}, nil }
-func (f *fakeAdapter) LaunchCommand(p string) []string         { return []string{"fake", p} }
+func (f *fakeAdapter) Binary() string                          { return "/x/fake" }
+func (f *fakeAdapter) LaunchCommand(bin, p string) []string    { return []string{bin, p} }
 
 func newHookAPI(t *testing.T, adapters map[string]adapter.Adapter) *testAPI {
 	t.Helper()

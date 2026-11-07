@@ -165,6 +165,12 @@ func (s *server) renderDraft(w http.ResponseWriter, r *http.Request) {
 // renderBody renderiza body com as variáveis do card (vazio = sem variáveis).
 // Em caso de erro já respondeu e devolve false.
 func (s *server) renderBody(w http.ResponseWriter, body, cardKey string) (string, bool) {
+	return s.renderCardBody(w, body, cardKey, true)
+}
+
+// renderCardBody é renderBody com a escolha de montar o pacote de retomada;
+// sem ele, {{card.pacote}} vira vazio.
+func (s *server) renderCardBody(w http.ResponseWriter, body, cardKey string, withPackage bool) (string, bool) {
 	vars := prompts.Vars{}
 	if cardKey != "" {
 		c, err := s.st.GetCard(cardKey)
@@ -177,10 +183,12 @@ func (s *server) renderBody(w http.ResponseWriter, body, cardKey string) (string
 			writeStoreError(w, err, "")
 			return "", false
 		}
-		pkg, err := resume.ForCard(s.st, s.deps.Git, c, "")
-		if err != nil {
-			writeStoreError(w, err, "")
-			return "", false
+		pkg := ""
+		if withPackage {
+			if pkg, err = resume.ForCard(s.st, s.deps.Git, c, ""); err != nil {
+				writeStoreError(w, err, "")
+				return "", false
+			}
 		}
 		vars = resume.Vars(d.Card, d.Content, pkg, d.Readiness)
 	}

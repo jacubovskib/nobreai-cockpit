@@ -30,6 +30,9 @@ type Deps struct {
 	Git      gitinfo.GitInfo
 	// ResolveTerminal resolve o binário do terminal (nil = launch.ResolveBinary).
 	ResolveTerminal launch.Resolver
+	// SessionPATH é o PATH exportado no script do terminal aberto pelo
+	// "Continuar" (vazio = o PATH do daemon).
+	SessionPATH string
 	// Hub é compartilhado com quem mais publica mudanças (adaptadores,
 	// reconciliação); o dono deve chamar Hub.Close no desligamento.
 	Hub *Hub

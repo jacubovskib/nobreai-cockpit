@@ -70,6 +70,9 @@ func cliVersion(bin string) string {
 // SetPaths troca os caminhos do adaptador (testes e instalação customizada).
 func (a *Adapter) SetPaths(p Paths) { a.paths = p }
 
+// cliPath acha o CLI do Claude Code: Paths.ClaudeBin, se definido, vale
+// sozinho; senão o PATH do processo e, por fim, ~/.local/bin/claude (onde o
+// instalador do Claude Code o põe, fora do PATH do systemd).
 func (a *Adapter) cliPath() string {
 	if a.paths.ClaudeBin != "" {
 		if _, err := os.Stat(a.paths.ClaudeBin); err == nil {
@@ -77,10 +80,38 @@ func (a *Adapter) cliPath() string {
 		}
 		return ""
 	}
-	if p, err := exec.LookPath("claude"); err == nil {
+	home, _ := os.UserHomeDir()
+	return resolveCommand("claude", exec.LookPath, home)
+}
+
+// resolveCommand devolve o caminho absoluto de name no PATH (lookPath) ou em
+// <home>/.local/bin, sem seguir symlinks: o comm do processo vem do nome do
+// arquivo executado e tem de continuar sendo name. "" = não encontrado.
+func resolveCommand(name string, lookPath func(string) (string, error), home string) string {
+	if p, err := lookPath(name); err == nil && p != "" {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
+		}
+	}
+	if home == "" {
+		return ""
+	}
+	p := filepath.Join(home, ".local", "bin", name)
+	if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode().Perm()&0o111 != 0 {
 		return p
 	}
 	return ""
+}
+
+// binaryExists diz se o comando de um hook existe: caminho com "/" é
+// conferido no disco; nome solto, no PATH.
+func binaryExists(b string) bool {
+	if !strings.Contains(b, "/") {
+		_, err := exec.LookPath(b)
+		return err == nil
+	}
+	st, err := os.Stat(b)
+	return err == nil && !st.IsDir()
 }
 
 // Detect monta o checklist de saúde do Claude Code: CLI, hooks, skill e
@@ -94,7 +125,7 @@ func (a *Adapter) Detect() adapter.Detection {
 	cli := a.cliPath()
 	d.Found = cli != ""
 	d.Path = cli
-	cliCheck := adapter.Check{Key: "cli", Label: "CLI encontrado", OK: d.Found, Detail: "claude não está no PATH"}
+	cliCheck := adapter.Check{Key: "cli", Label: "CLI encontrado", OK: d.Found, Detail: "claude não está no PATH nem em ~/.local/bin"}
 	if d.Found {
 		if a.paths.Version != nil {
 			d.Version = a.paths.Version(cli)
@@ -103,15 +134,22 @@ func (a *Adapter) Detect() adapter.Detection {
 	}
 
 	hooks := adapter.Check{Key: "hooks", Label: "Hooks instalados"}
-	missing, err := missingHooks(a.paths.SettingsPath)
+	missing, bins, err := installedHooks(a.paths.SettingsPath)
 	switch {
 	case err != nil:
 		hooks.Detail = err.Error()
-	case len(missing) == 0:
+	case len(missing) > 0:
+		hooks.Detail = "faltam: " + strings.Join(missing, ", ")
+	default:
 		hooks.OK = true
 		hooks.Detail = strings.Join(hookEvents, ", ")
-	default:
-		hooks.Detail = "faltam: " + strings.Join(missing, ", ")
+		for _, b := range bins {
+			if !binaryExists(b) {
+				hooks.OK = false
+				hooks.Detail = "aponta para um binário que não existe: " + b
+				break
+			}
+		}
 	}
 
 	skill := adapter.Check{Key: "skill", Label: "Skill do Cockpit instalada"}

@@ -274,7 +274,11 @@ func TestDetectAllGoodAndNoCLI(t *testing.T) {
 	e := newEnv(t)
 	p := writeSettings(t, "")
 	skills := t.TempDir()
-	e.a.SetPaths(Paths{SettingsPath: p, SkillsDir: skills, NobreBin: bin, ClaudeBin: filepath.Join(t.TempDir(), "ausente")})
+	nobre := filepath.Join(t.TempDir(), "nobre")
+	if err := os.WriteFile(nobre, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.a.SetPaths(Paths{SettingsPath: p, SkillsDir: skills, NobreBin: nobre, ClaudeBin: filepath.Join(t.TempDir(), "ausente")})
 	if _, err := e.a.Install(); err != nil {
 		t.Fatal(err)
 	}

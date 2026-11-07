@@ -3,6 +3,8 @@ package api
 import (
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -33,9 +35,22 @@ func (g *fakeGit) Checkout(_, b string) error {
 	return nil
 }
 
-// continueAPI monta a API com lançador e git falsos; devolve o card NAC-1
-// (branch "feat/x") num projeto em /w/api.
-func continueAPI(t *testing.T, g *fakeGit) (*testAPI, *fakeLauncher) {
+// sessionPATH é o PATH que o continue exporta no script dos testes.
+const sessionPATH = "/usr/bin:/opt/nobre/bin"
+
+// fakeClaude cria um executável "claude" falso e devolve o caminho.
+func fakeClaude(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// continueAPI monta a API com lançador e git falsos e o CLI claude em
+// claudeBin; devolve o card NAC-1 (branch "feat/x") num projeto em /w/api.
+func continueAPI(t *testing.T, g *fakeGit, claudeBin ...string) (*testAPI, *fakeLauncher) {
 	t.Helper()
 	st, err := store.Open(t.TempDir() + "/cockpit.db")
 	if err != nil {
@@ -45,9 +60,16 @@ func continueAPI(t *testing.T, g *fakeGit) (*testAPI, *fakeLauncher) {
 	hub := NewHub()
 	t.Cleanup(hub.Close)
 	ad := claude.New(st, adapter.Deps{Now: func() time.Time { return testNow }})
+	bin := ""
+	if len(claudeBin) > 0 {
+		bin = claudeBin[0]
+	} else {
+		bin = fakeClaude(t)
+	}
+	ad.SetPaths(claude.Paths{ClaudeBin: bin})
 	l := &fakeLauncher{}
 	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub,
-		Adapters: map[string]adapter.Adapter{"claude": ad}, Launcher: l, Git: g,
+		Adapters: map[string]adapter.Adapter{"claude": ad}, Launcher: l, Git: g, SessionPATH: sessionPATH,
 		ResolveTerminal: func(n string) (string, error) {
 			if n == "x-terminal-emulator" {
 				return "/usr/bin/terminator", nil
@@ -125,7 +147,8 @@ func TestContinueStartsWithEnv(t *testing.T) {
 	last := argv[len(argv)-1]
 	if argv[0] != "/usr/bin/terminator" || argv[1] != "-e" || len(argv) != 3 ||
 		!strings.Contains(last, "cd ") || !strings.Contains(last, "/w/api") ||
-		!strings.Contains(last, "NOBRE_RESUME") || !strings.Contains(last, "NAC-1") || !strings.Contains(last, "'claude'") {
+		!strings.Contains(last, "NOBRE_RESUME") || !strings.Contains(last, "NAC-1") ||
+		!strings.Contains(last, "export PATH=") || !strings.Contains(last, sessionPATH) || !strings.Contains(last, "/claude") || strings.Contains(last, "'claude'") {
 		t.Fatalf("argv = %q", argv)
 	}
 	p, err := a.st.GetPrompt("retomar-card")
@@ -220,5 +243,43 @@ func TestPromptSlugNenhumReserved(t *testing.T) {
 	a := newTestAPI(t)
 	if rec := a.do(t, "POST", "/api/prompts", map[string]any{"name": "x", "slug": "nenhum", "body": "b"}, 0); rec.Code != 400 {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestContinueAgentBinaryNotFound(t *testing.T) {
+	g := &fakeGit{branch: "main", clean: true}
+	a, l := continueAPI(t, g, filepath.Join(t.TempDir(), "claude"))
+	got := errOf(t, a, http.StatusConflict, map[string]any{"agent": "claude"})
+	if got != "não encontrei o comando claude; rode nobre setup de um terminal onde `claude` funciona" {
+		t.Fatalf("erro = %q", got)
+	}
+	if len(g.checkouts) != 0 || len(l.calls) != 0 {
+		t.Fatalf("checkout %v / lançamentos %d sem o claude", g.checkouts, len(l.calls))
+	}
+}
+
+func TestContinueRendersPackageEmpty(t *testing.T) {
+	a, l := continueAPI(t, &fakeGit{branch: "feat/x", clean: true})
+	c, err := a.st.GetCard("NAC-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.st.AddDecision(domain.Decision{CardID: c.ID, What: "Usar PKCE", Why: "app público"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "pac", Slug: "pac", Body: "Card {{card.id}}.[{{card.pacote}}]"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"prompt_slug": "pac"}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	last := l.calls[0][len(l.calls[0])-1]
+	if !strings.Contains(last, "Card NAC-1.[]") || strings.Contains(last, "Usar PKCE") {
+		t.Fatalf("o pacote deveria ir só pelo SessionStart: %q", last)
+	}
+	// A prévia do prompt continua com o pacote.
+	rec := a.do(t, "POST", "/api/prompts/render", map[string]any{"card": "NAC-1", "body": "{{card.pacote}}"}, 0)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Usar PKCE") {
+		t.Fatalf("render = %d %s", rec.Code, rec.Body)
 	}
 }
