@@ -10,23 +10,37 @@ Antes de começar: use um repositório Git descartável ou de baixo risco, com a
 
 ## 1. Instalar
 
-1. Na raiz do projeto: `make build`. Isso gera `./nobre` e `./nobred`. Em
-   seguida coloque-os no PATH desta sessão do shell:
-   `export PATH="$PWD:$PATH"`. Os comandos abaixo usam `nobre` e `nobred`
-   sem caminho.
-2. Veja o que o setup faria, sem gravar nada: `nobre setup --dry-run`.
-   Confira os arquivos citados (`~/.claude/settings.json`, a skill
-   `nobre-cockpit` e a unidade `nobred.service`).
-3. Aplique: `nobre setup`. Ele grava um backup `settings.json.bak-<data>` ao
-   lado do `settings.json`, instala os hooks e a skill, e liga o `nobred` como
-   serviço de usuário.
-4. Confirme: `systemctl --user status nobred` (ativo) e `nobre ui` (abre a
+1. Na raiz do projeto: `make build`. Isso gera `./nobre` e `./nobred`.
+2. Instale os dois binários fora do repositório:
+   `install -m755 nobre nobred ~/.local/bin/`. Os hooks do Claude Code e a
+   unidade do systemd gravam o caminho do binário que rodou o setup; por isso
+   o setup roda a partir de `~/.local/bin`, nunca do repositório. Os comandos
+   abaixo usam `nobre` sem caminho (o `~/.local/bin` já está no PATH do seu
+   shell interativo; se não estiver, use `~/.local/bin/nobre`).
+3. Num terminal onde `claude` funciona, veja o que o setup faria, sem gravar
+   nada: `~/.local/bin/nobre setup --dry-run`. Confira os arquivos citados
+   (`~/.claude/settings.json`, a skill `nobre-cockpit` e a unidade
+   `nobred.service`).
+4. No mesmo terminal, aplique: `~/.local/bin/nobre setup`. Ele grava um backup
+   `settings.json.bak-<data>` ao lado do `settings.json`, instala os hooks e a
+   skill, e liga o `nobred` como serviço de usuário. A unidade grava o PATH
+   deste terminal (mais o diretório do `nobre`): é com ele que o daemon acha o
+   `claude` e abre o terminal do "Continuar".
+   Observação: o setup reescreve o `settings.json` com as chaves em ordem
+   alfabética e indentação de 2 espaços. Comparado ao backup, a diferença de
+   formatação é só cosmética; o conteúdo seu é preservado.
+5. Depois de um novo `make build`, reinstale os binários
+   (`install -m755 nobre nobred ~/.local/bin/`) e reinicie o daemon
+   (`systemctl --user restart nobred`): os hooks e o serviço continuam
+   apontando para `~/.local/bin`, não para o repositório.
+6. Confirme: `systemctl --user status nobred` (ativo) e `nobre ui` (abre a
    interface em http://127.0.0.1:7420). Em **Configuração**, na seção
    **Agentes detectados**, o Claude Code deve aparecer como detectado e com os
    hooks instalados (se faltar algo, use **Instalar o que falta**).
-5. Em **Configuração**, na seção **Preços e moeda**, cadastre o preço do modelo
-   que você usa (**Adicionar modelo**, preencha entrada, saída, escrita e
-   leitura de cache, em US$ por milhão de tokens, e clique em **Salvar**).
+7. Em **Configuração**, na seção **Preços e moeda**, cadastre o preço do modelo
+   que você usa: digite o nome no campo **Adicionar modelo** e clique em
+   **Adicionar à tabela**; na linha nova, preencha entrada, saída, escrita e
+   leitura de cache, em US$ por milhão de tokens, e clique em **Salvar**.
    Sem preço o custo aparece como "sem preço", nunca como zero.
 
 ## 2. Registrar um repositório
@@ -59,8 +73,9 @@ Antes de começar: use um repositório Git descartável ou de baixo risco, com a
    (padrão)") e "Abrir em" no padrão, e clique em **Iniciar Claude Code neste
    card**. A interface mostra "Terminal aberto.".
 2. Uma nova janela de terminal abre no diretório do projeto, já com o Claude.
-   (Se o repositório tiver mudanças não salvas ou estiver em outro branch, o
-   Cockpit recusa e explica; faça commit ou stash.)
+   Se o repositório estiver em outro branch e com a árvore limpa, o Cockpit
+   troca para o branch do card antes de abrir. Só recusa (e explica) quando
+   há mudanças não salvas; nesse caso faça commit ou stash.
 3. Sem digitar nada, observe o Claude partir do prompt "Você está continuando
 o card NAC-N ..." e do pacote de retomada.
 4. O card volta para **Em andamento** com 2 sessões.
@@ -83,8 +98,9 @@ explicável (tokens ainda não lidos do transcript).
 1. Com a sessão B viva, o card está em **Em andamento**.
 2. Encerre B normalmente: o card vai para **Pausado**.
 3. Continue de novo (seção 4) e agora mate o processo sem encerrar: em outro
-   terminal, `pkill -9 -f claude` (cuidado: isso derruba todas as suas sessões
-   do Claude) ou `kill -9 <pid>` do processo certo.
+   terminal, liste os processos com `pgrep -ax claude`, identifique o da
+   sessão B (o mais recente, com o prompt "Você está continuando o card...")
+   e rode `kill -9 <pid>` só nele.
 4. Em até cerca de 30 s o card deixa de contar como sessão viva, mas ainda
    fica em **Em andamento** dentro da carência, mostrando "processo encerrado
    há N min" no Board, na Sala de controle e na página do card. Espere a
@@ -113,6 +129,7 @@ explicável (tokens ainda não lidos do transcript).
 3. Remova a skill: `rm -r ~/.claude/skills/nobre-cockpit`.
 4. Os dados ficam em `~/.local/share/nobreai-cockpit/cockpit.db`; apague a
    pasta se quiser recomeçar do zero.
+5. Remova os binários instalados: `rm ~/.local/bin/nobre ~/.local/bin/nobred`.
 
 ## Limites conhecidos
 
