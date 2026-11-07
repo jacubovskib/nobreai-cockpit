@@ -21,6 +21,7 @@ func (s *server) promptRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/prompts/{slug}", s.patchPrompt)
 	mux.HandleFunc("DELETE /api/prompts/{slug}", s.deletePrompt)
 	mux.HandleFunc("POST /api/prompts/{slug}/render", s.renderPrompt)
+	mux.HandleFunc("POST /api/prompts/render", s.renderDraft)
 }
 
 func (s *server) listPrompts(w http.ResponseWriter, r *http.Request) {
@@ -128,33 +129,8 @@ func (s *server) renderPrompt(w http.ResponseWriter, r *http.Request) {
 	if in.Body != "" {
 		body = in.Body
 	}
-	vars := prompts.Vars{}
-	if in.Card != "" {
-		c, err := s.st.GetCard(in.Card)
-		if err != nil {
-			writeStoreError(w, err, msgCardNotFound)
-			return
-		}
-		d, err := s.cardDetail(c)
-		if err != nil {
-			writeStoreError(w, err, "")
-			return
-		}
-		pkg, err := s.resumeMarkdown(d)
-		if err != nil {
-			writeStoreError(w, err, "")
-			return
-		}
-		vars = resume.Vars(d.Card, d.Content, pkg, d.Readiness)
-	}
-	text, err := prompts.Render(body, vars)
-	var unknown *prompts.UnknownVarsError
-	if errors.As(err, &unknown) {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": unknown.Error(), "unknown": unknown.Names})
-		return
-	}
-	if err != nil {
-		writeStoreError(w, err, "")
+	text, ok := s.renderBody(w, body, in.Card)
+	if !ok {
 		return
 	}
 	if in.Use {
@@ -165,4 +141,56 @@ func (s *server) renderPrompt(w http.ResponseWriter, r *http.Request) {
 		s.publish("prompts")
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"text": text})
+}
+
+// renderDraft: POST /api/prompts/render {card, body} renderiza um texto
+// qualquer (prompt ainda não salvo) com as variáveis do card.
+func (s *server) renderDraft(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Card string `json:"card"`
+		Body string `json:"body"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	text, ok := s.renderBody(w, in.Body, in.Card)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"text": text})
+}
+
+// renderBody renderiza body com as variáveis do card (vazio = sem variáveis).
+// Em caso de erro já respondeu e devolve false.
+func (s *server) renderBody(w http.ResponseWriter, body, cardKey string) (string, bool) {
+	vars := prompts.Vars{}
+	if cardKey != "" {
+		c, err := s.st.GetCard(cardKey)
+		if err != nil {
+			writeStoreError(w, err, msgCardNotFound)
+			return "", false
+		}
+		d, err := s.cardDetail(c)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return "", false
+		}
+		pkg, err := s.resumeMarkdown(d)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return "", false
+		}
+		vars = resume.Vars(d.Card, d.Content, pkg, d.Readiness)
+	}
+	text, err := prompts.Render(body, vars)
+	var unknown *prompts.UnknownVarsError
+	if errors.As(err, &unknown) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": unknown.Error(), "unknown": unknown.Names})
+		return "", false
+	}
+	if err != nil {
+		writeStoreError(w, err, "")
+		return "", false
+	}
+	return text, true
 }

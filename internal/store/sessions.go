@@ -350,3 +350,43 @@ func (s *Store) LastSessionEvent(sessionID string) (*domain.Event, error) {
 	}
 	return &e, nil
 }
+
+// EventWithContext é um evento com o agente da sessão e a chave do card.
+type EventWithContext struct {
+	domain.Event
+	Agent   string `json:"agent"`
+	CardKey string `json:"card_key"`
+}
+
+// EventsByKind devolve os últimos eventos do tipo kind, do mais novo para o
+// mais antigo, com o agente da sessão e a chave do card ("" sem card).
+func (s *Store) EventsByKind(kind string, limit int) ([]EventWithContext, error) {
+	rows, err := s.DB.Query(`SELECT e.id, e.session_id, e.card_id, e.kind, e.data, e.at,
+			COALESCE(s.agent, ''), COALESCE(c.key, '')
+		FROM events e
+		LEFT JOIN sessions s ON s.id = e.session_id
+		LEFT JOIN cards c ON c.id = e.card_id
+		WHERE e.kind = ? ORDER BY e.id DESC LIMIT ?`, kind, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EventWithContext
+	for rows.Next() {
+		var e EventWithContext
+		var cardID sql.NullInt64
+		var data, at string
+		if err := rows.Scan(&e.ID, &e.SessionID, &cardID, &e.Kind, &data, &at, &e.Agent, &e.CardKey); err != nil {
+			return nil, err
+		}
+		if cardID.Valid {
+			e.CardID = &cardID.Int64
+		}
+		e.Data = json.RawMessage(data)
+		if e.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

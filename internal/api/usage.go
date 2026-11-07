@@ -20,6 +20,7 @@ type SessionWithUsage struct {
 func (s *server) usageRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/usage/totals", s.usageTotals)
 	mux.HandleFunc("GET /api/sessions", s.listSessions)
+	mux.HandleFunc("GET /api/events", s.listEvents)
 }
 
 // totalsBy agrega todo o uso pelo grupo e indexa por Key.
@@ -109,4 +110,30 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, withUsage(sessions, bySession))
+}
+
+// listEvents: GET /api/events?kind=&limit= (padrão limit 50, máximo 500),
+// mais recentes primeiro, com agente da sessão e chave do card. kind é
+// obrigatório (evita despejar heartbeats).
+func (s *server) listEvents(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("kind")
+	if kind == "" {
+		writeError(w, http.StatusBadRequest, "kind obrigatório")
+		return
+	}
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "limit inválido")
+			return
+		}
+		limit = min(n, 500)
+	}
+	evs, err := s.st.EventsByKind(kind, limit)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, nonNil(evs))
 }
