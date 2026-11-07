@@ -97,7 +97,7 @@ export function CardPage() {
           <Questions card={c} />
         </div>
         <aside aria-label="Handoff" style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <ContinuePanel cardKey={c.key} />
+          <ContinuePanel cardKey={c.key} enabled />
           <CliPanel cardKey={c.key} previewOpen={preview} onTogglePreview={() => setPreview(!preview)} />
           <ReadinessPanel readiness={c.readiness} />
           <LimitPanel card={c} limits={limits.data ?? []} currency={currency} rate={rate} />

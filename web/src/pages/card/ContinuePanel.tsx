@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { post } from '../../api/client'
+import { ApiError, post } from '../../api/client'
 import { usePrompts } from '../../api/queries'
 import { agentInfo } from '../../ui/agents'
 import { ErrorLine, btnPrimary, h2, input, muted, panel } from './shared'
@@ -12,8 +12,10 @@ const AGENT_OPTIONS = [
 ]
 const PLATFORM_MODE = 'platform'
 
-// `enabled` fica falso até a rota POST /api/cards/{key}/continue existir
-// (Task 12); a lógica de envio e de erro 409 em linha já está pronta.
+const NO_PROMPT = 'nenhum'
+
+// `enabled` liga o botão (Claude Code no piloto). Sessão viva no card volta
+// 409; a mensagem aparece em linha com "Forçar mesmo assim", que reenvia com force.
 export function ContinuePanel({ cardKey, enabled = false }: { cardKey: string; enabled?: boolean }) {
   const qc = useQueryClient()
   const prompts = usePrompts()
@@ -24,9 +26,11 @@ export function ContinuePanel({ cardKey, enabled = false }: { cardKey: string; e
   const effectiveSlug = slug ?? list.find((p) => p.is_default_handoff)?.slug ?? ''
   const name = agentInfo(agent).name
   const start = useMutation({
-    mutationFn: () => post(`/api/cards/${cardKey}/continue`, { agent, mode, prompt_slug: effectiveSlug }),
+    mutationFn: (force: boolean) =>
+      post(`/api/cards/${cardKey}/continue`, { agent, mode, prompt_slug: effectiveSlug, ...(force ? { force: true } : {}) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['card', cardKey] }),
   })
+  const liveConflict = start.error instanceof ApiError && start.error.status === 409 && start.error.message.includes('sessão viva')
   return (
     <section aria-labelledby="cont-t" style={panel}>
       <h2 id="cont-t" style={h2}>Continuar com outro agente</h2>
@@ -54,6 +58,7 @@ export function ContinuePanel({ cardKey, enabled = false }: { cardKey: string; e
         Prompt inicial
         <select style={input} value={effectiveSlug} onChange={(e) => setSlug(e.target.value)}>
           {list.map((p) => <option key={p.slug} value={p.slug}>{p.name}{p.is_default_handoff ? ' (padrão)' : ''}</option>)}
+          <option value={NO_PROMPT}>Nenhum: só o pacote de retomada</option>
         </select>
       </label>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...muted }}>
@@ -65,14 +70,22 @@ export function ContinuePanel({ cardKey, enabled = false }: { cardKey: string; e
         </select>
       </label>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button type="button" style={{ ...btnPrimary, opacity: enabled ? 1 : 0.5 }} disabled={!enabled || start.isPending} onClick={() => start.mutate()}>
+        <button type="button" style={{ ...btnPrimary, opacity: enabled ? 1 : 0.5 }} disabled={!enabled || start.isPending} onClick={() => start.mutate(false)}>
           Iniciar {name} neste card
         </button>
         {!enabled && <span style={muted}>disponível na próxima etapa</span>}
       </div>
       <ErrorLine error={start.error} />
+      {liveConflict && (
+        <div>
+          <button type="button" style={btnPrimary} disabled={start.isPending} onClick={() => start.mutate(true)}>
+            Forçar mesmo assim
+          </button>
+        </div>
+      )}
+      {start.isSuccess && <p role="status" style={{ ...muted, margin: 0 }}>Terminal aberto.</p>}
       <p style={{ ...muted, margin: 0 }}>
-        A sessão atual recebe um pedido para registrar “Onde parei” e encerrar. O novo agente abre no branch do card com o pacote de retomada como contexto.
+        Abre uma nova janela do terminal no diretório do projeto, no branch do card, com o pacote de retomada como contexto. A sessão atual, se houver, não é encerrada.
       </p>
     </section>
   )

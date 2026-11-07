@@ -54,7 +54,7 @@ function wrap(ui: React.ReactNode, path = '/cards/NAC-42') {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('CardPage', () => {
-  it('mostra o documento de handoff e o painel desabilitado', async () => {
+  it('mostra o documento de handoff e o painel Continuar habilitado', async () => {
     mock({ ...base, '/api/cards/NAC-42': detail })
     wrap(<CardPage />)
     expect(await screen.findByRole('heading', { name: 'Onde parei' })).toBeInTheDocument()
@@ -63,8 +63,7 @@ describe('CardPage', () => {
     expect(screen.getByText('Total do card')).toBeInTheDocument()
     expect(screen.getByText('ao vivo')).toBeInTheDocument()
     expect(screen.getByText('nobre resume NAC-42')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Iniciar Claude Code neste card' })).toBeDisabled()
-    expect(screen.getByText('disponível na próxima etapa')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Iniciar Claude Code neste card' })).toBeEnabled()
     expect(screen.getByText(/2 arquivos tocados/)).toBeInTheDocument()
     expect(screen.queryByText('a.go')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Ver arquivos tocados' }))
@@ -128,5 +127,25 @@ describe('ContinuePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Iniciar Claude Code neste card' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('NAC-42 já tem uma sessão viva.')
     expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')).toEqual([{ agent: 'claude', mode: 'platform', prompt_slug: 'retomar' }])
+  })
+
+  it('oferece Forçar mesmo assim após o 409 de sessão viva', async () => {
+    const fn = mock({ ...base, 'POST /api/cards/NAC-42/continue': { status: 409, body: { error: 'NAC-42 está com uma sessão viva de Claude Code. Encerre-a ou use forçar.' } } })
+    wrap(<ContinuePanel cardKey="NAC-42" enabled />)
+    await screen.findByRole('option', { name: 'Retomar card (padrão)' })
+    fireEvent.click(screen.getByRole('button', { name: 'Iniciar Claude Code neste card' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Forçar mesmo assim' }))
+    await waitFor(() => expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')).toHaveLength(2))
+    expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')[1]).toMatchObject({ force: true })
+  })
+
+  it('permite escolher nenhum prompt', async () => {
+    const fn = mock({ ...base, 'POST /api/cards/NAC-42/continue': { ok: true } })
+    wrap(<ContinuePanel cardKey="NAC-42" enabled />)
+    await screen.findByRole('option', { name: 'Retomar card (padrão)' })
+    fireEvent.change(screen.getByLabelText('Prompt inicial'), { target: { value: 'nenhum' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Iniciar Claude Code neste card' }))
+    await waitFor(() => expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')).toHaveLength(1))
+    expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')[0].prompt_slug).toBe('nenhum')
   })
 })
