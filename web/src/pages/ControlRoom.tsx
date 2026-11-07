@@ -125,7 +125,14 @@ function NoCardRow({ s }: { s: SessionWithUsage }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 8, background: '#0F1116' }}>
       <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 13 }}>
         <AgentSwatch agent={s.agent} /> · <span className="mono">{dir || s.cwd}</span> ·{' '}
-        {s.ended_at ? <span style={{ color: 'var(--text-2)' }}>encerrada</span> : `${minutesSince(s.started_at)} min`} ·{' '}
+        {s.ended_at ? (
+          <span style={{ color: 'var(--text-2)' }}>encerrada</span>
+        ) : s.pid_dead_at ? (
+          <span style={{ color: 'var(--text-2)' }}>processo encerrado</span>
+        ) : (
+          `${minutesSince(s.started_at)} min`
+        )}{' '}
+        ·{' '}
         <Money usd={s.usage.cost_usd} unpriced={s.usage.unpriced} />
       </span>
       {open ? (

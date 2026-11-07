@@ -11,12 +11,18 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
+// IdleNoPID é por quanto tempo uma sessão sem PID conhecido pode ficar sem
+// eventos antes de ser encerrada.
+const IdleNoPID = 2 * time.Hour
+
 // Reconcile confere as sessões vivas com /proc (procRoot). Sessão cujo PID não
 // existe mais recebe pid_dead_at na primeira passada; quando now passa de
 // pid_dead_at + GraceMin, a sessão é encerrada ("processo encerrado") e o card
-// sai de em_andamento. Sessões sem PID conhecido (pid <= 0) são ignoradas: não
-// há como saber se morreram. Erros por sessão não interrompem as demais (voltam juntos via errors.Join). PID que volta a existir limpa pid_dead_at. changed diz se algo foi gravado (para publicar
-// cards/sessions).
+// sai de em_andamento. Sessão sem PID conhecido (pid <= 0) não tem processo
+// para vigiar: é encerrada ("sem atividade") quando fica mais de IdleNoPID sem
+// eventos. PID que volta a existir limpa pid_dead_at. Erros por sessão não
+// interrompem as demais (voltam juntos via errors.Join). changed diz se algo
+// foi gravado (para publicar cards/sessions).
 func Reconcile(st *store.Store, procRoot string, now time.Time, s domain.Settings) (changed bool, err error) {
 	live, err := st.LiveSessions()
 	if err != nil {
@@ -26,6 +32,13 @@ func Reconcile(st *store.Store, procRoot string, now time.Time, s domain.Setting
 	var errs []error
 	for _, x := range live {
 		if x.PID <= 0 {
+			if now.Sub(x.LastEventAt) > IdleNoPID {
+				if err := st.EndSession(x.ID, "sem atividade", now); err != nil {
+					errs = append(errs, fmt.Errorf("sessão %s: %w", x.ID, err))
+					continue
+				}
+				changed = true
+			}
 			continue
 		}
 		if proc.Alive(procRoot, x.PID) {

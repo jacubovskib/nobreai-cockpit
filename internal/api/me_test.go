@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
@@ -63,11 +64,40 @@ func TestMeDoneMovesToRevisao(t *testing.T) {
 	a := newTestAPI(t)
 	c := a.card(t)
 	a.liveSession(t, "claude:s", 4242, c.Key)
+	if err := a.st.TouchSession("claude:s", testNow.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	if rec := a.do(t, "POST", "/api/me/done", nil, 4242); rec.Code != http.StatusOK {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
 	}
 	if got, _ := a.st.GetCard(c.Key); got.Column != domain.Revisao {
 		t.Fatalf("column = %s", got.Column)
+	}
+	evs, _ := a.st.RecentEvents(1)
+	if len(evs) != 1 || evs[0].Kind != domain.EvDone || evs[0].SessionID != "claude:s" {
+		t.Fatalf("evs = %+v", evs)
+	}
+	if x, _ := a.st.GetSession("claude:s"); !x.LastEventAt.Equal(testNow) {
+		t.Fatalf("sessão não foi tocada: %+v", x)
+	}
+}
+
+func TestMeTestRecordsEvent(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	if err := a.st.TouchSession("claude:s", testNow.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/me/test", map[string]string{"text": "go test ./..."}, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	evs, _ := a.st.RecentEvents(1)
+	if len(evs) != 1 || evs[0].Kind != domain.EvHowToTest || evs[0].CardID == nil || *evs[0].CardID != c.ID {
+		t.Fatalf("evs = %+v", evs)
+	}
+	if x, _ := a.st.GetSession("claude:s"); !x.LastEventAt.Equal(testNow) {
+		t.Fatalf("sessão não foi tocada: %+v", x)
 	}
 }
 

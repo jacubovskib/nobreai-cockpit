@@ -195,3 +195,30 @@ func TestReconcileContinuesPastSessionError(t *testing.T) {
 	}
 	_ = c
 }
+
+func TestReconcileEndsIdleSessionWithoutPID(t *testing.T) {
+	st := newStore(t)
+	c, x := liveCard(t, st, 0)
+	root := fakeProc(t)
+	set := domain.DefaultSettings()
+
+	// Sem PID não há processo para vigiar: até 2 h sem eventos, segue aberta.
+	changed, err := Reconcile(st, root, t0.Add(2*time.Hour), set)
+	if err != nil || changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if got, _ := st.GetSession(x.ID); got.EndedAt != nil || got.PIDDeadAt != nil {
+		t.Fatalf("sessão = %+v", got)
+	}
+	changed, err = Reconcile(st, root, t0.Add(2*time.Hour+time.Minute), set)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	got, _ := st.GetSession(x.ID)
+	if got.EndedAt == nil || got.EndReason != "sem atividade" {
+		t.Fatalf("sessão = %+v", got)
+	}
+	if column(t, st, c.Key) != domain.Pausado {
+		t.Fatalf("col = %s", column(t, st, c.Key))
+	}
+}

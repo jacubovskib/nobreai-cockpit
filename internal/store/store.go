@@ -47,7 +47,10 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("criar diretório do banco: %w", err)
 	}
-	dsn := "file:" + path + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	// _txlock=immediate: toda transação pega o lock de escrita no BEGIN. Hooks
+	// concorrentes não esbarram em SQLITE_BUSY ao promover leitura a escrita
+	// (o que o busy_timeout não cobre).
+	dsn := "file:" + path + "?_txlock=immediate&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("abrir banco: %w", err)

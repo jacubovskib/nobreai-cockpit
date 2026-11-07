@@ -140,6 +140,10 @@ func lastActivityText(e domain.Event) string {
 		t = "sessão iniciada"
 	case domain.EvSessionEnd:
 		t = "sessão encerrada"
+	case domain.EvDone:
+		t = "marcado como pronto para revisão"
+	case domain.EvHowToTest:
+		t = "“como testar” registrado"
 	default:
 		t = e.Kind
 	}

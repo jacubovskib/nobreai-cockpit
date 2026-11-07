@@ -118,6 +118,14 @@ describe('ControlRoom', () => {
     expect(screen.getByRole('button', { name: 'Criar card desta sessão' })).toBeInTheDocument()
   })
 
+  it('sessão sem card com processo morto aparece como "processo encerrado"', async () => {
+    const dead = { ...noCard, id: 's3', ended_at: null, pid_dead_at: new Date(Date.now() - 5 * 60_000).toISOString() }
+    mock({ '/api/overview': { ...overview, alerts: [], no_card: [dead] }, '/api/settings': {} })
+    wrap(<ControlRoom />)
+    expect(await screen.findByText('processo encerrado')).toBeInTheDocument()
+    expect(screen.queryByText(/\d+ min/)).not.toBeInTheDocument()
+  })
+
   it('Nova tarefa cria o card com o projeto escolhido', async () => {
     const fn = mock({
       '/api/overview': { ...overview, alerts: [] }, '/api/settings': {},

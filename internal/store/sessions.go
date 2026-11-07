@@ -215,10 +215,12 @@ func moveCardTx(tx *sql.Tx, cardID int64, ev domain.Transition) error {
 // para o card os eventos e o uso da sessão ainda sem card. Se a sessão já
 // terminou, o card vai para pausado (nunca em_andamento sem dono vivo). Se a
 // sessão viva estava em outro card e ele fica sem dono vivo, esse card também
-// pausa. Se outra sessão viva é dona do card devolve ErrCardBusy, a menos que
-// force (a outra é desligada). Sessão não encerrada cujo processo morreu não
-// é viva: não bloqueia e é desligada do card. Quem é desligado perde a posse,
-// mas seus eventos e uso continuam no card (histórico).
+// pausa. Sessão aberta cujo processo morreu (pid_dead_at) conta como
+// encerrada para o card. Se outra sessão viva é dona do card devolve
+// ErrCardBusy, a menos que force (a outra é desligada). Outra sessão não
+// encerrada cujo processo morreu não é viva: não bloqueia e é desligada do
+// card. Quem é desligado perde a posse, mas seus eventos e uso continuam no
+// card (histórico).
 func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -226,9 +228,9 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	}
 	defer tx.Rollback()
 
-	var ended sql.NullString
+	var ended, dead sql.NullString
 	var prevCard sql.NullInt64
-	if err := tx.QueryRow(`SELECT ended_at, card_id FROM sessions WHERE id=?`, sessionID).Scan(&ended, &prevCard); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRow(`SELECT ended_at, pid_dead_at, card_id FROM sessions WHERE id=?`, sessionID).Scan(&ended, &dead, &prevCard); errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
@@ -283,13 +285,93 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	if err := moveCardTx(tx, cardID, domain.SessionAttached); err != nil {
 		return err
 	}
-	if ended.Valid {
-		// Sessão já encerrada não é dona viva: o card fica pausado.
+	if ended.Valid || dead.Valid {
+		// Sessão encerrada (ou com o processo morto) não é dona viva: o card
+		// fica pausado.
 		if err := moveCardTx(tx, cardID, domain.SessionEnded); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// ReopenSession reabre a sessão que voltou a mandar eventos (retomada com o
+// mesmo ID do provedor, ou processo dado como morto que segue vivo): limpa
+// ended_at, end_reason e pid_dead_at e grava o PID e a última atividade. Se a
+// sessão tem card: com outra sessão viva dona dele, a reaberta é desligada;
+// senão, um card pausado volta para em_andamento (as demais colunas ficam).
+func (s *Store) ReopenSession(id string, pid int, at time.Time) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var cardID sql.NullInt64
+	if err := tx.QueryRow(`SELECT card_id FROM sessions WHERE id=?`, id).Scan(&cardID); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE sessions SET ended_at=NULL, end_reason='', pid_dead_at=NULL, pid=?, last_event_at=? WHERE id=?`,
+		pid, fmtTime(at), id); err != nil {
+		return err
+	}
+	if cardID.Valid {
+		var others int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE card_id=? AND `+liveCond+` AND id<>?`, cardID.Int64, id).Scan(&others); err != nil {
+			return err
+		}
+		if others > 0 {
+			if _, err := tx.Exec(`UPDATE sessions SET card_id=NULL WHERE id=?`, id); err != nil {
+				return err
+			}
+		} else {
+			var col domain.Column
+			if err := tx.QueryRow(`SELECT col FROM cards WHERE id=?`, cardID.Int64).Scan(&col); err != nil {
+				return err
+			}
+			if col == domain.Pausado {
+				if err := moveCardTx(tx, cardID.Int64, domain.SessionAttached); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// SessionReminded diz se a sessão já recebeu o lembrete de criar card.
+func (s *Store) SessionReminded(id string) (bool, error) {
+	var r bool
+	err := s.DB.QueryRow(`SELECT reminded FROM sessions WHERE id=?`, id).Scan(&r)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	return r, err
+}
+
+// SessionEditedAfter diz se a sessão registrou file_edit no card depois de
+// after (nil = qualquer file_edit).
+func (s *Store) SessionEditedAfter(sessionID string, cardID int64, after *time.Time) (bool, error) {
+	q := `SELECT EXISTS(SELECT 1 FROM events WHERE session_id=? AND card_id=? AND kind=?`
+	args := []any{sessionID, cardID, domain.EvFileEdit}
+	if after != nil {
+		q += ` AND julianday(at) > julianday(?)`
+		args = append(args, fmtTime(*after))
+	}
+	var has bool
+	err := s.DB.QueryRow(q+`)`, args...).Scan(&has)
+	return has, err
+}
+
+// DistinctEditedFiles conta os arquivos distintos editados pela sessão.
+func (s *Store) DistinctEditedFiles(sessionID string) (int, error) {
+	var n int
+	err := s.DB.QueryRow(`SELECT COUNT(DISTINCT json_extract(data, '$.path')) FROM events
+		WHERE session_id=? AND kind=? AND COALESCE(json_extract(data, '$.path'), '') <> ''`,
+		sessionID, domain.EvFileEdit).Scan(&n)
+	return n, err
 }
 
 // EndSession encerra a sessão e, se ela tem card, aplica a transição

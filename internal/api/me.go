@@ -282,11 +282,13 @@ func (s *server) meTest(w http.ResponseWriter, r *http.Request, sess domain.Sess
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
+	s.recordEvent(sess.ID, domain.EvHowToTest, map[string]any{"text": in.Text})
 	s.publish("cards")
 	s.writeCard(w, http.StatusOK, c.Key)
 }
 
-// meDone aplica a transição AgentDone (em_andamento → revisao).
+// meDone aplica a transição AgentDone (em_andamento → revisao) e registra o
+// evento done (mesmo se o card já não estava em andamento).
 func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
 	if next := domain.NextColumn(c.Column, domain.AgentDone); next != c.Column {
 		if err := s.st.MoveCard(c.Key, next); err != nil {
@@ -295,5 +297,6 @@ func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Sess
 		}
 		s.publish("cards")
 	}
+	s.recordEvent(sess.ID, domain.EvDone, map[string]any{})
 	s.writeCard(w, http.StatusOK, c.Key)
 }

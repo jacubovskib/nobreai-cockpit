@@ -28,6 +28,8 @@ const (
 	EvTodo          = "todo"
 	EvQuestion      = "question"
 	EvHeartbeat     = "heartbeat"
+	EvDone          = "done"        // nobre done: agente marcou o card como pronto para revisão
+	EvHowToTest     = "how_to_test" // nobre test: agente registrou "como testar"
 )
 
 // Transition é um evento que pode mover um card entre colunas.

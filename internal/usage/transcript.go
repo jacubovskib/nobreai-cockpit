@@ -29,13 +29,23 @@ type transcriptLine struct {
 }
 
 // ParseClaudeTranscript lê o transcript a partir de offset, só até a última
-// linha completa, e devolve uma linha por message.id (a última vence).
+// linha completa, e devolve uma linha por message.id (a última vence). Offset
+// maior que o arquivo (truncado ou trocado) recomeça do início: reler é seguro
+// porque o uso é gravado por message.id. Linha sem timestamp válido usa o mtime
+// do arquivo, para os tokens não se perderem.
 func ParseClaudeTranscript(path string, offset int64) ([]domain.UsageRow, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, offset, err
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, offset, err
+	}
+	if offset > info.Size() {
+		offset = 0
+	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return nil, offset, err
 	}
@@ -62,7 +72,7 @@ func ParseClaudeTranscript(path string, offset int64) ([]domain.UsageRow, int64,
 		}
 		at, err := time.Parse(time.RFC3339Nano, l.Timestamp)
 		if err != nil {
-			continue
+			at = info.ModTime()
 		}
 		u := l.Message.Usage
 		row := domain.UsageRow{SessionID: l.SessionID, MessageID: l.Message.ID, Model: l.Message.Model,

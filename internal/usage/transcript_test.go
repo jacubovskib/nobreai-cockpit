@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func copyFixture(t *testing.T) string {
@@ -73,5 +74,33 @@ func TestSubagentTranscripts(t *testing.T) {
 	got := SubagentTranscripts("testdata/main.jsonl")
 	if len(got) != 1 || filepath.Base(got[0]) != "agent-x.jsonl" {
 		t.Fatalf("%v", got)
+	}
+}
+
+func TestParseLineWithoutTimestampUsesMtime(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	line := `{"type":"assistant","sessionId":"s1","message":{"id":"msg_9","model":"m","usage":{"input_tokens":3,"output_tokens":4}}}` + "\n"
+	if err := os.WriteFile(p, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(p, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := ParseClaudeTranscript(p, 0)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("linha sem timestamp descartada: %+v %v", rows, err)
+	}
+	if rows[0].Output != 4 || !rows[0].At.Equal(mtime) {
+		t.Fatalf("row = %+v", rows[0])
+	}
+}
+
+func TestParseOffsetBeyondSizeRestarts(t *testing.T) {
+	p := copyFixture(t)
+	st, _ := os.Stat(p)
+	rows, off, err := ParseClaudeTranscript(p, st.Size()+1000)
+	if err != nil || len(rows) != 2 || off != st.Size() {
+		t.Fatalf("arquivo truncado/rotacionado deveria ser relido do início: rows=%d off=%d err=%v", len(rows), off, err)
 	}
 }

@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -34,6 +36,43 @@ func (s *Store) UpsertUsage(rows []domain.UsageRow) error {
 // SetTranscriptOffset guarda até onde o transcript da sessão já foi lido.
 func (s *Store) SetTranscriptOffset(sessionID string, off int64) error {
 	_, err := s.DB.Exec(`UPDATE sessions SET transcript_offset=? WHERE id=?`, off, sessionID)
+	return err
+}
+
+// TranscriptOffset devolve até onde o transcript principal da sessão já foi lido.
+func (s *Store) TranscriptOffset(sessionID string) (int64, error) {
+	var off int64
+	err := s.DB.QueryRow(`SELECT transcript_offset FROM sessions WHERE id=?`, sessionID).Scan(&off)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return off, err
+}
+
+// FileOffset devolve até onde o transcript path (de subagente) da sessão já
+// foi lido; 0 se nunca foi.
+func (s *Store) FileOffset(sessionID, path string) (int64, error) {
+	var off int64
+	err := s.DB.QueryRow(`SELECT offset FROM transcript_offsets WHERE session_id=? AND path=?`, sessionID, path).Scan(&off)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return off, err
+}
+
+// SetFileOffset guarda até onde o transcript path (de subagente) da sessão já foi lido.
+func (s *Store) SetFileOffset(sessionID, path string, off int64) error {
+	_, err := s.DB.Exec(`INSERT INTO transcript_offsets(session_id, path, offset) VALUES (?,?,?)
+		ON CONFLICT(session_id, path) DO UPDATE SET offset=excluded.offset`, sessionID, path, off)
+	return err
+}
+
+// SetSessionModel grava o modelo usado pela sessão (vazio não sobrescreve).
+func (s *Store) SetSessionModel(id, model string) error {
+	if model == "" {
+		return nil
+	}
+	_, err := s.DB.Exec(`UPDATE sessions SET model=? WHERE id=?`, model, id)
 	return err
 }
 
