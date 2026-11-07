@@ -4,6 +4,7 @@ import { Placeholder } from '../pages/Placeholder'
 import { ControlRoom } from '../pages/ControlRoom'
 import { Board } from '../pages/Board'
 import { CardsList } from '../pages/CardsList'
+import { CardPage } from '../pages/CardPage'
 
 // As telas reais entram nas Tasks 15 e 16; aqui são marcadores.
 export function AppRoutes() {
@@ -13,7 +14,7 @@ export function AppRoutes() {
         <Route index element={<ControlRoom />} />
         <Route path="board" element={<Board />} />
         <Route path="cards" element={<CardsList />} />
-        <Route path="cards/:key" element={<Placeholder title="Card" />} />
+        <Route path="cards/:key" element={<CardPage />} />
         <Route path="prompts" element={<Placeholder title="Prompts" />} />
         <Route path="analytics" element={<Placeholder title="Analytics" />} />
         <Route path="config" element={<Placeholder title="Configuração" />} />
