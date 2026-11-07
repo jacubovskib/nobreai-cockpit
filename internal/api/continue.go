@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -27,7 +29,7 @@ const (
 
 // continueCard: POST /api/cards/{key}/continue {agent, mode, prompt_slug, force}
 // abre o agente no diretório do projeto, no branch do card, numa nova janela
-// do terminal.
+// do terminal. Se o branch do card está aberto num worktree ligado, abre lá.
 func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Agent      string `json:"agent"`
@@ -142,16 +144,21 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = os.Getenv("PATH")
 	}
-	argv := launch.TerminalArgvWith(resolve, set.TerminalCmd, path, p.Path, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(bin, initial))
+	// Branch do card aberto num worktree ligado: o agente abre lá, sem
+	// checkout no principal (o git recusaria o branch já aberto).
+	dir, inWorktree := s.cardWorktreeDir(c, p.Path)
+	argv := launch.TerminalArgvWith(resolve, set.TerminalCmd, path, dir, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(bin, initial))
 	for _, a := range argv {
 		if len(a) >= maxArgBytes { // MAX_ARG_STRLEN do Linux é 131072
 			writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
 			return
 		}
 	}
-	if err := s.checkoutCardBranch(c, p.Path); err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
+	if !inWorktree {
+		if err := s.checkoutCardBranch(c, p.Path); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 	}
 	if err := s.deps.Launcher.Start(argv); err != nil {
 		writeError(w, http.StatusInternalServerError, "não consegui abrir o terminal: "+err.Error())
@@ -167,6 +174,31 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publish("cards")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// cardWorktreeDir devolve onde abrir o agente: o diretório do projeto dentro
+// do worktree ligado que tem o branch do card aberto (true), ou projectDir
+// (false) quando não há tal worktree ou o git não lê worktrees.
+func (s *server) cardWorktreeDir(c domain.Card, projectDir string) (string, bool) {
+	wr, ok := s.deps.Git.(gitinfo.WorktreeReader)
+	if !ok || c.Branch == "" {
+		return projectDir, false
+	}
+	list, err := wr.Worktrees(projectDir)
+	if err != nil || len(list) == 0 {
+		return projectDir, false
+	}
+	// O projeto pode ser um subdiretório do repositório.
+	rel, err := filepath.Rel(list[0].Path, projectDir)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		rel = "."
+	}
+	for _, wt := range list {
+		if !wt.Main && !wt.Prunable && !wt.Bare && wt.Branch == c.Branch {
+			return filepath.Join(wt.Path, rel), true
+		}
+	}
+	return projectDir, false
 }
 
 // checkoutCardBranch troca o repositório para o branch do card, se for outro

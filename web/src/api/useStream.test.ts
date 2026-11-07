@@ -31,7 +31,7 @@ describe('createInvalidator', () => {
     inv.push('prompts')
     inv.push('cards')
     vi.advanceTimersByTime(250)
-    expect(keysOf(spy)).toEqual(['prompts', 'cards', 'card', 'overview', 'events'])
+    expect(keysOf(spy)).toEqual(['prompts', 'cards', 'card', 'overview', 'events', 'worktrees'])
   })
 
   it('cancel descarta o que estava pendente', () => {

@@ -16,7 +16,7 @@ var ErrCardBusy = errors.New("card já tem uma sessão viva")
 // existindo (pid_dead_at marca o início da carência após o PID sumir).
 const liveCond = `ended_at IS NULL AND pid_dead_at IS NULL`
 
-const sessionCols = `id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, ended_at, end_reason, pid_dead_at`
+const sessionCols = `id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, ended_at, end_reason, pid_dead_at, worktree, worktree_linked`
 
 func scanSession(sc interface{ Scan(...any) error }) (domain.Session, error) {
 	var x domain.Session
@@ -24,7 +24,8 @@ func scanSession(sc interface{ Scan(...any) error }) (domain.Session, error) {
 	var started, last string
 	var ended, dead sql.NullString
 	err := sc.Scan(&x.ID, &x.Agent, &x.ProviderSessionID, &cardID, &projectID, &x.PID, &x.Cwd, &x.Branch,
-		&x.GitHead, &x.Model, &x.TranscriptPath, &x.FullCapture, &started, &last, &ended, &x.EndReason, &dead)
+		&x.GitHead, &x.Model, &x.TranscriptPath, &x.FullCapture, &started, &last, &ended, &x.EndReason, &dead,
+		&x.Worktree, &x.WorktreeLinked)
 	if err != nil {
 		return x, err
 	}
@@ -91,11 +92,29 @@ func (s *Store) StartSession(x domain.Session) error {
 	if x.LastEventAt.IsZero() {
 		x.LastEventAt = x.StartedAt
 	}
-	_, err := s.DB.Exec(`INSERT INTO sessions(id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+	_, err := s.DB.Exec(`INSERT INTO sessions(id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, worktree, worktree_linked)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
 		x.ID, x.Agent, x.ProviderSessionID, nullableInt(x.CardID), nullableInt(x.ProjectID), x.PID, x.Cwd, x.Branch,
-		x.GitHead, x.Model, x.TranscriptPath, x.FullCapture, fmtTime(x.StartedAt), fmtTime(x.LastEventAt))
+		x.GitHead, x.Model, x.TranscriptPath, x.FullCapture, fmtTime(x.StartedAt), fmtTime(x.LastEventAt),
+		x.Worktree, x.WorktreeLinked)
 	return err
+}
+
+// SessionLocation é onde a sessão roda: diretório, estado do git e worktree.
+type SessionLocation struct {
+	Cwd, Branch, GitHead, Worktree string
+	WorktreeLinked                 bool
+}
+
+// UpdateSessionLocation grava o novo local da sessão (o agente trocou de
+// diretório, por exemplo ao entrar num worktree). O projeto ligado não muda.
+func (s *Store) UpdateSessionLocation(id string, l SessionLocation) error {
+	res, err := s.DB.Exec(`UPDATE sessions SET cwd=?, branch=?, git_head=?, worktree=?, worktree_linked=? WHERE id=?`,
+		l.Cwd, l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked, id)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
 }
 
 // GetSession busca a sessão pelo ID (ErrNotFound se não existir).
@@ -163,6 +182,14 @@ func (s *Store) MarkReminded(id string) error {
 // "viva" use domain.Session.Live.
 func (s *Store) LiveSessions() ([]domain.Session, error) {
 	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions WHERE ended_at IS NULL ORDER BY julianday(started_at), id`)
+}
+
+// ProjectSessionsSince lista as sessões do projeto não encerradas e as
+// encerradas a partir de since, da atividade mais recente para a mais antiga.
+func (s *Store) ProjectSessionsSince(projectID int64, since time.Time) ([]domain.Session, error) {
+	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
+		WHERE project_id=? AND (ended_at IS NULL OR julianday(ended_at) >= julianday(?))
+		ORDER BY julianday(last_event_at) DESC, id`, projectID, fmtTime(since))
 }
 
 // SessionsForCard lista as sessões do card, da mais antiga para a mais nova:

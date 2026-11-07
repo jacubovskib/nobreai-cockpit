@@ -8,6 +8,7 @@ import { agentInfo } from '../ui/agents'
 import { Money } from '../ui/Money'
 import { StatusBadge } from '../ui/StatusBadge'
 import { formatTokens } from '../ui/Tokens'
+import { WorktreeTag } from '../ui/WorktreeTag'
 import { minutesSince, plural } from './board'
 import { CliPanel } from './card/CliPanel'
 import { ContinuePanel } from './card/ContinuePanel'
@@ -56,6 +57,8 @@ export function CardPage() {
   const tokens = t.input + t.output + t.cache_write + t.cache_read
   // Sessão dona cujo processo sumiu (carência antes de encerrar): não é viva.
   const stale = c.live ? undefined : c.sessions.find((s) => s.card_id === c.id && !s.ended_at && s.pid_dead_at)
+  // Worktree da sessão viva ou, sem ela, da sessão mais recente do card que tinha um.
+  const where = c.live?.worktree ? c.live : [...c.sessions].filter((s) => s.worktree).sort((a, b) => Date.parse(b.last_event_at) - Date.parse(a.last_event_at))[0]
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -73,6 +76,7 @@ export function CardPage() {
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', ...muted }}>
           {project && <span>Repositório <span className="mono">{project.name}</span></span>}
           {c.branch && <span>Branch <span className="mono">{c.branch}</span></span>}
+          {where && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>Worktree <WorktreeTag path={where.worktree} linked={where.worktree_linked} /></span>}
           <span>{plural(c.sessions.length, 'sessão', 'sessões')} · {plural(agents, 'agente', 'agentes')}</span>
           <span>{formatTokens(tokens)} tokens</span>
           <span><Money usd={t.cost_usd} unpriced={t.unpriced} currency={currency} rate={rate} /> no total</span>

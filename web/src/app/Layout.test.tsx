@@ -38,3 +38,12 @@ describe('Layout', () => {
     expect(screen.queryByText('Dados de demonstração')).not.toBeInTheDocument()
   })
 })
+
+describe('Navegação', () => {
+  it('tem a página de worktrees no menu', async () => {
+    mockApi({ '/api/health': { ok: true, version: '0.1.0' }, '/api/settings': { demo: false }, '/api/worktrees': [] })
+    renderApp('/worktrees')
+    expect(await screen.findByRole('heading', { name: 'Worktrees' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Worktrees/ })).toHaveAttribute('aria-current', 'page')
+  })
+})

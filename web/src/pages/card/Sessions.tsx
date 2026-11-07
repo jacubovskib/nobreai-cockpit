@@ -2,6 +2,7 @@ import type { CardDetail } from '../../api/types'
 import { AgentSwatch } from '../../ui/AgentSwatch'
 import { Money } from '../../ui/Money'
 import { Tokens } from '../../ui/Tokens'
+import { WorktreeTag } from '../../ui/WorktreeTag'
 import { minutesSince } from '../board'
 import { h2, muted, panel } from './shared'
 
@@ -28,6 +29,7 @@ export function Sessions({ card, currency, rate }: { card: CardDetail; currency?
               <tr style={{ color: 'var(--text-2)' }}>
                 <th scope="col" style={cell}>#</th>
                 <th scope="col" style={cell}>Agente</th>
+                <th scope="col" style={cell}>Worktree</th>
                 <th scope="col" style={cell}>Início</th>
                 <th scope="col" style={cell}>Duração</th>
                 <th scope="col" style={num}>Entrada</th>
@@ -48,6 +50,7 @@ export function Sessions({ card, currency, rate }: { card: CardDetail; currency?
                       {live && <span style={{ color: 'var(--ok)', marginLeft: 8 }}>ao vivo</span>}
                       {stale && <span style={{ color: 'var(--warn)', marginLeft: 8 }}>processo encerrado há {minutesSince(s.pid_dead_at)} min</span>}
                     </td>
+                    <td style={cell}>{s.worktree ? <WorktreeTag path={s.worktree} linked={s.worktree_linked} branch={s.branch} /> : <span style={muted}>—</span>}</td>
                     <td style={cell}>{new Date(s.started_at).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
                     <td style={cell}>{duration(s.started_at, s.ended_at ?? s.last_event_at)}</td>
                     <td style={num}><Tokens n={s.usage.input} /></td>
@@ -60,7 +63,7 @@ export function Sessions({ card, currency, rate }: { card: CardDetail; currency?
             </tbody>
             <tfoot>
               <tr style={{ borderTop: '1px solid var(--border)', fontWeight: 600 }}>
-                <th scope="row" colSpan={4} style={cell}>Total do card</th>
+                <th scope="row" colSpan={5} style={cell}>Total do card</th>
                 <td style={num}><Tokens n={t.input} /></td>
                 <td style={num}><Tokens n={t.output} /></td>
                 <td style={num}><Tokens n={t.cache_write + t.cache_read} /></td>

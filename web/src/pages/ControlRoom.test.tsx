@@ -222,3 +222,18 @@ describe('CardsList', () => {
     expect(screen.getByText('Cache Redis')).toBeInTheDocument()
   })
 })
+
+describe('ControlRoom · worktrees', () => {
+  it('mostra o worktree de cada agente ativo e liga à página de worktrees', async () => {
+    const active = {
+      id: 'claude:wt', agent: 'claude', model: 'claude-opus-5-5', started_at: new Date().toISOString(), pid_dead_at: null,
+      cwd: '/w/api-oauth/auth', worktree: '/w/api-oauth', worktree_linked: true, branch: 'feat/oauth',
+      card: null, last_activity: '', session_usage: total, card_totals: total, readiness: null,
+    }
+    mock({ '/api/overview': { ...overview, alerts: [], active: [active] }, '/api/settings': {} })
+    wrap(<ControlRoom />)
+    const tag = await screen.findByRole('link', { name: 'Worktree api-oauth, branch feat/oauth' })
+    expect(tag).toHaveAttribute('href', '/worktrees')
+    expect(tag).toHaveAttribute('title', '/w/api-oauth')
+  })
+})

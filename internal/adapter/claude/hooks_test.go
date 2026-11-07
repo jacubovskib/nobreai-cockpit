@@ -13,6 +13,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -769,5 +770,127 @@ func TestSessionStartCompactReinjectsResumePackage(t *testing.T) {
 	ctx = additionalContext(t, e.call(t, "session_start", with("source", "resume")))
 	if !strings.Contains(ctx, "Esta sessão está no card NAC-1") || strings.Contains(ctx, "## Onde parei") {
 		t.Fatalf("resume:\n%s", ctx)
+	}
+}
+
+// wtGit é o fakeGit que também conhece worktrees: locs mapeia o topo de cada
+// worktree para o repositório principal.
+type wtGit struct {
+	fakeGit
+	locs map[string]string
+}
+
+// Locate escolhe a raiz mais profunda que contém dir, como o git faz com
+// worktrees aninhados (.claude/worktrees dentro do checkout principal).
+func (g wtGit) Locate(dir string) gitinfo.Location {
+	best := ""
+	for root := range g.locs {
+		if (dir == root || strings.HasPrefix(dir, root+"/")) && len(root) > len(best) {
+			best = root
+		}
+	}
+	if best == "" {
+		return gitinfo.Location{}
+	}
+	return gitinfo.Location{Root: best, Main: g.locs[best], Linked: best != g.locs[best]}
+}
+
+func (g wtGit) Worktrees(string) ([]gitinfo.Worktree, error) { return nil, nil }
+
+func newWorktreeEnv(t *testing.T) *env {
+	t.Helper()
+	e := newEnv(t)
+	e.a.deps.Git = wtGit{fakeGit: fakeGit{branch: "feat/x"}, locs: map[string]string{
+		"/w/api":                     "/w/api",
+		"/w/api/.claude/worktrees/x": "/w/api",
+		"/w/api-feat":                "/w/api",
+	}}
+	return e
+}
+
+func TestSessionInExternalWorktreeJoinsProject(t *testing.T) {
+	e := newWorktreeEnv(t)
+	p := e.project(t)
+	wt := with("cwd", "/w/api-feat/auth")
+	e.call(t, "session_start", wt)
+	s, err := e.st.GetSession(sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ProjectID == nil || *s.ProjectID != p.ID || !s.FullCapture {
+		t.Fatalf("sessão em worktree fora do projeto não foi ligada: %+v", s)
+	}
+	if s.Worktree != "/w/api-feat" || !s.WorktreeLinked || s.Branch != "feat/x" {
+		t.Fatalf("worktree = %q linked=%v branch=%q", s.Worktree, s.WorktreeLinked, s.Branch)
+	}
+	// Caminhos do worktree ficam relativos à raiz do projeto dentro dele.
+	e.call(t, "post_tool_use_edit", wt, with("tool_input", map[string]any{"file_path": "/w/api-feat/auth/oauth.go"}))
+	e.call(t, "post_tool_use_edit", wt, with("tool_input", map[string]any{"file_path": "/w/api/auth/main.go"}))
+	var edits []string
+	for _, ev := range e.events(t, domain.EvFileEdit) {
+		edits = append(edits, eventPath(t, ev))
+	}
+	slices.Sort(edits)
+	if want := []string{"/w/api/auth/main.go", "auth/oauth.go"}; !slices.Equal(edits, want) {
+		t.Fatalf("file_edit = %v", edits)
+	}
+}
+
+func TestSessionInMainCheckoutIsNotLinked(t *testing.T) {
+	e := newWorktreeEnv(t)
+	e.project(t)
+	e.call(t, "session_start")
+	s, _ := e.st.GetSession(sessID)
+	if s.Worktree != "/w/api" || s.WorktreeLinked || s.ProjectID == nil {
+		t.Fatalf("sessão no checkout principal = %+v", s)
+	}
+}
+
+func TestSessionEnteringWorktreeUpdatesLocation(t *testing.T) {
+	e := newWorktreeEnv(t)
+	p := e.project(t)
+	e.call(t, "session_start")
+	e.mu.Lock()
+	e.pubs = nil
+	e.mu.Unlock()
+	// O agente entrou num worktree (EnterWorktree): o cwd dos hooks muda e a
+	// sessão acompanha no próximo evento só do agente principal.
+	wt := with("cwd", "/w/api/.claude/worktrees/x")
+	e.call(t, "user_prompt_submit", wt)
+	e.call(t, "post_tool_use_edit", wt, with("tool_input", map[string]any{"file_path": "/w/api/.claude/worktrees/x/auth/oauth.go"}))
+	s, _ := e.st.GetSession(sessID)
+	if s.Cwd != "/w/api/.claude/worktrees/x" || s.Worktree != "/w/api/.claude/worktrees/x" || !s.WorktreeLinked {
+		t.Fatalf("local não atualizado: %+v", s)
+	}
+	if s.ProjectID == nil || *s.ProjectID != p.ID {
+		t.Fatal("projeto deveria continuar o mesmo")
+	}
+	if !e.published("sessions") {
+		t.Fatal("troca de worktree deveria avisar o stream")
+	}
+	if got := eventPath(t, e.events(t, domain.EvFileEdit)[0]); got != "auth/oauth.go" {
+		t.Fatalf("file_edit no worktree = %q", got)
+	}
+}
+
+func TestSubagentWorktreeDoesNotMoveSession(t *testing.T) {
+	e := newWorktreeEnv(t)
+	e.project(t)
+	e.call(t, "session_start")
+	// Subagente com isolation: worktree manda hooks com o session_id do pai e
+	// o cwd do worktree dele, intercalados com os do agente principal.
+	sub := with("cwd", "/w/api/.claude/worktrees/x")
+	for range 3 {
+		e.call(t, "post_tool_use_edit", sub, with("agent_id", "a1"), with("agent_type", "general-purpose"))
+		e.call(t, "pre_tool_use_edit", sub)
+		if s, _ := e.st.GetSession(sessID); s.Cwd != "/w/api" || s.Worktree != "/w/api" || s.WorktreeLinked {
+			t.Fatalf("sessão principal mudou de local por causa do subagente: %+v", s)
+		}
+		e.call(t, "post_tool_use_edit")
+	}
+	// Mesmo um evento só do principal vindo de subagente (agent_id) não move.
+	e.call(t, "stop", sub, with("agent_id", "a1"))
+	if s, _ := e.st.GetSession(sessID); s.WorktreeLinked {
+		t.Fatalf("evento com agent_id moveu a sessão: %+v", s)
 	}
 }

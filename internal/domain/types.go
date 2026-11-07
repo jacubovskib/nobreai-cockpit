@@ -30,22 +30,26 @@ type Card struct {
 }
 
 type Session struct {
-	ID                string     `json:"id"`
-	Agent             string     `json:"agent"`
-	ProviderSessionID string     `json:"provider_session_id"`
-	CardID            *int64     `json:"card_id"`
-	ProjectID         *int64     `json:"project_id"`
-	PID               int        `json:"pid"`
-	Cwd               string     `json:"cwd"`
-	Branch            string     `json:"branch"`
-	GitHead           string     `json:"git_head"`
-	Model             string     `json:"model"`
-	TranscriptPath    string     `json:"transcript_path"`
-	FullCapture       bool       `json:"full_capture"`
-	StartedAt         time.Time  `json:"started_at"`
-	LastEventAt       time.Time  `json:"last_event_at"`
-	EndedAt           *time.Time `json:"ended_at"`
-	EndReason         string     `json:"end_reason"`
+	ID                string `json:"id"`
+	Agent             string `json:"agent"`
+	ProviderSessionID string `json:"provider_session_id"`
+	CardID            *int64 `json:"card_id"`
+	ProjectID         *int64 `json:"project_id"`
+	PID               int    `json:"pid"`
+	Cwd               string `json:"cwd"`
+	Branch            string `json:"branch"`
+	GitHead           string `json:"git_head"`
+	// Worktree é o topo do worktree git do cwd ("" fora de um repositório);
+	// WorktreeLinked marca um worktree ligado (git worktree add).
+	Worktree       string     `json:"worktree"`
+	WorktreeLinked bool       `json:"worktree_linked"`
+	Model          string     `json:"model"`
+	TranscriptPath string     `json:"transcript_path"`
+	FullCapture    bool       `json:"full_capture"`
+	StartedAt      time.Time  `json:"started_at"`
+	LastEventAt    time.Time  `json:"last_event_at"`
+	EndedAt        *time.Time `json:"ended_at"`
+	EndReason      string     `json:"end_reason"`
 	// PIDDeadAt é quando a reconciliação notou que o PID não existe mais
 	// (início da carência antes de encerrar a sessão); nil = nunca notado.
 	PIDDeadAt *time.Time `json:"pid_dead_at"`

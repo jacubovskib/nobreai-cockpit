@@ -382,3 +382,31 @@ func TestCreateCardAndAttachAtomic(t *testing.T) {
 		t.Fatalf("cards = %d, esperava 1 (sem órfão)", len(cards))
 	}
 }
+
+func TestSessionWorktree(t *testing.T) {
+	s := newTestStore(t)
+	x := newSession("claude:wt", 10)
+	x.Cwd, x.Worktree, x.WorktreeLinked = "/w/api-feat/pkg", "/w/api-feat", true
+	if err := s.StartSession(x); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetSession(x.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Worktree != "/w/api-feat" || !got.WorktreeLinked {
+		t.Fatalf("worktree = %q linked=%v", got.Worktree, got.WorktreeLinked)
+	}
+
+	// Mudar de diretório no meio da sessão (EnterWorktree) atualiza o local.
+	if err := s.UpdateSessionLocation(x.ID, SessionLocation{Cwd: "/w/api", Branch: "main", GitHead: "abc", Worktree: "/w/api"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetSession(x.ID)
+	if got.Cwd != "/w/api" || got.Branch != "main" || got.GitHead != "abc" || got.Worktree != "/w/api" || got.WorktreeLinked {
+		t.Fatalf("após UpdateSessionLocation = %+v", got)
+	}
+	if err := s.UpdateSessionLocation("claude:nao-existe", SessionLocation{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("sessão inexistente: %v", err)
+	}
+}
