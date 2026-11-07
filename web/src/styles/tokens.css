@@ -76,3 +76,6 @@ h1, h2, h3 { margin: 0; }
 .worktree-card { transition: background 120ms ease; }
 .worktree-card:hover { background: #181b22 !important; }
 .worktree-card:focus-visible { outline: 2px solid #6b8fd6; outline-offset: 2px; }
+
+.scroll-list { scrollbar-width: thin; scrollbar-color: #3a3f4b transparent; }
+.scroll-list:focus-visible { outline: 2px solid #6b8fd6; outline-offset: 2px; border-radius: 6px; }

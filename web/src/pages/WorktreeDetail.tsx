@@ -231,7 +231,13 @@ function Body({ d }: { d: WorktreeDetail }) {
             {d.events.length === 0 ? (
               <p style={{ ...muted, margin: 0 }}>Nenhum evento registrado aqui.</p>
             ) : (
-              <ol style={{ ...listReset, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              // Rolagem própria: a lista não estica a coluna; tabIndex deixa rolar pelo teclado.
+              <ol
+                aria-label="Eventos recentes"
+                tabIndex={0}
+                className="scroll-list"
+                style={{ ...listReset, display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 520, overflowY: 'auto', overscrollBehavior: 'contain', paddingRight: 6 }}
+              >
                 {d.events.map((e) => {
                   const at = new Date(e.at)
                   return (
