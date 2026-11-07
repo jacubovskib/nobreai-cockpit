@@ -52,6 +52,9 @@ export interface DomainEvent {
   at: string
 }
 
+// GET /api/events?kind=prompt
+export interface PromptEvent extends DomainEvent { agent: string; card_key: string }
+
 export interface Decision { id: number; card_id: number; what: string; why: string; session_id: string; at: string }
 export interface EssentialFile { id: number; card_id: number; path: string; lines: string; why: string }
 export interface Todo { id: number; card_id: number; text: string; done: boolean; session_id: string }

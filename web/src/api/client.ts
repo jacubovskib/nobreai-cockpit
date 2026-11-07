@@ -1,8 +1,10 @@
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  body: unknown
+  constructor(status: number, message: string, body?: unknown) {
     super(message)
     this.status = status
+    this.body = body
   }
 }
 
@@ -29,7 +31,7 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   }
   if (!res.ok) {
     const msg = (data as { error?: string } | null)?.error ?? `erro ${res.status}`
-    throw new ApiError(res.status, msg)
+    throw new ApiError(res.status, msg, data)
   }
   return data as T
 }

@@ -5,8 +5,10 @@ import { ControlRoom } from '../pages/ControlRoom'
 import { Board } from '../pages/Board'
 import { CardsList } from '../pages/CardsList'
 import { CardPage } from '../pages/CardPage'
+import { Analytics } from '../pages/Analytics'
+import { Config } from '../pages/Config'
+import { Prompts } from '../pages/Prompts'
 
-// As telas reais entram nas Tasks 15 e 16; aqui são marcadores.
 export function AppRoutes() {
   return (
     <Routes>
@@ -15,9 +17,9 @@ export function AppRoutes() {
         <Route path="board" element={<Board />} />
         <Route path="cards" element={<CardsList />} />
         <Route path="cards/:key" element={<CardPage />} />
-        <Route path="prompts" element={<Placeholder title="Prompts" />} />
-        <Route path="analytics" element={<Placeholder title="Analytics" />} />
-        <Route path="config" element={<Placeholder title="Configuração" />} />
+        <Route path="prompts" element={<Prompts />} />
+        <Route path="analytics" element={<Analytics />} />
+        <Route path="config" element={<Config />} />
         <Route path="*" element={<Placeholder title="Página não encontrada" />} />
       </Route>
     </Routes>
