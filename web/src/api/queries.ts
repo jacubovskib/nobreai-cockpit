@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { get } from './client'
-import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, Settings, SessionWithUsage, Total } from './types'
+import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total } from './types'
 
 export const useHealth = () =>
   useQuery({ queryKey: ['health'], queryFn: () => get<Health>('/api/health'), refetchInterval: 15000, retry: false })
@@ -51,4 +51,15 @@ export const useAgents = () =>
   useQuery({ queryKey: ['agents'], queryFn: () => get<AgentDetection[]>('/api/agents') })
 
 export const useWorktrees = () =>
-  useQuery({ queryKey: ['worktrees'], queryFn: () => get<ProjectWorktrees[]>('/api/worktrees') })
+  // CPU e memória mudam sem evento no stream: a página atualiza a cada 5 s
+  // (o react-query só repete enquanto alguém observa a consulta).
+  useQuery({ queryKey: ['worktrees'], queryFn: () => get<ProjectWorktrees[]>('/api/worktrees'), refetchInterval: 5000 })
+
+export const useWorktreeDetail = (project: string, path: string) =>
+  useQuery({
+    queryKey: ['worktrees', 'detail', project, path],
+    queryFn: () => get<WorktreeDetail>(`/api/worktrees/detail?${new URLSearchParams({ project, path })}`),
+    refetchInterval: 5000,
+    retry: false,
+    enabled: !!project && !!path,
+  })

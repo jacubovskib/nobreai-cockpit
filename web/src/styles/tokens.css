@@ -72,3 +72,7 @@ h1, h2, h3 { margin: 0; }
 }
 .badge-live { background: #1c2a20; border-color: #24502c; }
 .placeholder { color: var(--text-2); padding: 24px 0; }
+
+.worktree-card { transition: background 120ms ease; }
+.worktree-card:hover { background: #181b22 !important; }
+.worktree-card:focus-visible { outline: 2px solid #6b8fd6; outline-offset: 2px; }

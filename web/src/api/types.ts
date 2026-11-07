@@ -232,9 +232,31 @@ export interface Worktree {
   detached: boolean
   locked: boolean
   prunable: boolean
+  lock_reason: string
+  prune_reason: string
   sessions: WorktreeSession[]
   // cards: cards não concluídos cujo branch é o do worktree.
   cards: CardRef[]
+  // resources: null quando o daemon não mede recursos.
+  resources: WorktreeResources | null
+}
+
+// Processo que mais consome; cpu_pct em % de um núcleo (200 = dois núcleos).
+export interface ProcUsage { pid: number; comm: string; cpu_pct: number; rss_bytes: number }
+
+// measured_at null = nunca medido; pending = medição na fila (bytes é a anterior).
+export interface DiskInfo { bytes: number; measured_at: string | null; pending: boolean }
+
+// Consumo dos processos cujo cwd está no worktree (ou descendentes deles).
+// ready falso = a CPU ainda não pôde ser medida (uma amostra só).
+export interface WorktreeResources {
+  ready: boolean
+  cpu_pct: number
+  rss_bytes: number
+  procs: number
+  top: ProcUsage[]
+  cpu_cores: number
+  disk: DiskInfo | null
 }
 
 export interface ProjectWorktrees {
@@ -243,4 +265,35 @@ export interface ProjectWorktrees {
   worktrees: Worktree[]
   // orphans: sessões não encerradas cujo worktree não existe mais.
   orphans: WorktreeSession[]
+}
+
+// GET /api/worktrees/detail?project=&path=
+export interface ProcDetail extends ProcUsage { cwd: string }
+export interface FileChange { path: string; code: string }
+export interface GitCommit { hash: string; subject: string; author: string; at: string }
+export interface GitDetail {
+  staged: number
+  modified: number
+  untracked: number
+  conflicts: number
+  total_files: number
+  files: FileChange[]
+  commits: GitCommit[]
+  // base: branch do worktree principal; compared falso = sem comparação (principal ou HEAD destacado).
+  base: string
+  compared: boolean
+  ahead: number
+  behind: number
+  error: string
+}
+export interface WorktreeSessionDetail extends WorktreeSession { usage: Total; unpriced: boolean }
+export interface WorktreeEvent { id: number; session_id: string; agent: string; kind: string; text: string; at: string }
+export interface WorktreeDetail {
+  project: Project
+  worktree: Worktree
+  processes: ProcDetail[]
+  git: GitDetail | null
+  sessions: WorktreeSessionDetail[]
+  cards: CardRef[]
+  events: WorktreeEvent[]
 }
