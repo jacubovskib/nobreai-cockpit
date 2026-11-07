@@ -338,7 +338,10 @@ function PriceRow({ model, price, unpriced }: { model: string; price?: Price; un
   const submit = () => {
     const f = (s: string) => (s === '' ? 0 : parseDec(s))
     const p: Price = { model, input_per_m: f(d.input), output_per_m: f(d.output), cache_write_per_m: f(d.cw), cache_read_per_m: f(d.cr) }
-    if (![p.input_per_m, p.output_per_m, p.cache_write_per_m, p.cache_read_per_m].every((v) => v >= 0)) {
+    if (!(p.input_per_m > 0 && p.output_per_m > 0)) {
+      return setBad(new Error('Informe os preços de entrada e saída (maiores que zero)'))
+    }
+    if (!(p.cache_write_per_m >= 0 && p.cache_read_per_m >= 0)) {
       return setBad(new Error(`Preço inválido para ${model}.`))
     }
     setBad(null)

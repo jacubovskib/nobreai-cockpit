@@ -35,7 +35,13 @@ func TestLimitsPricesProjects(t *testing.T) {
 		t.Fatalf("limits = %+v", ls)
 	}
 
-	if rec := a.do(t, "PUT", "/api/prices", map[string]any{"model": "m", "input_per_m": 3}, 0); rec.Code != http.StatusOK {
+	for _, body := range []map[string]any{{"model": "m"}, {"model": "m", "input_per_m": 3}, {"model": "m", "output_per_m": 3}} {
+		rec := a.do(t, "PUT", "/api/prices", body, 0)
+		if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "Informe os preços de entrada e saída (maiores que zero)" {
+			t.Fatalf("preço sem entrada/saída = %d %s", rec.Code, rec.Body)
+		}
+	}
+	if rec := a.do(t, "PUT", "/api/prices", map[string]any{"model": "m", "input_per_m": 3, "output_per_m": 15}, 0); rec.Code != http.StatusOK {
 		t.Fatalf("preço = %d %s", rec.Code, rec.Body)
 	}
 	if rec := a.do(t, "DELETE", "/api/prices?model=m", nil, 0); rec.Code != http.StatusOK {

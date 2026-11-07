@@ -8,6 +8,8 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
 
+const msgPriceRequired = "Informe os preços de entrada e saída (maiores que zero)"
+
 func (s *server) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
@@ -113,6 +115,10 @@ func (s *server) putPrice(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(p.Model) == "" {
 		writeError(w, http.StatusBadRequest, "modelo obrigatório")
+		return
+	}
+	if p.InputPerM <= 0 || p.OutputPerM <= 0 {
+		writeError(w, http.StatusBadRequest, msgPriceRequired)
 		return
 	}
 	if p.InputPerM < 0 || p.OutputPerM < 0 || p.CacheWritePerM < 0 || p.CacheReadPerM < 0 {

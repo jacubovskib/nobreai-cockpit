@@ -73,6 +73,18 @@ describe('Config', () => {
     expect(screen.getByRole('button', { name: 'Instalar o que falta' })).toBeDisabled()
   })
 
+  it('preço vazio mostra erro e não envia; preço válido envia o PUT', async () => {
+    const fn = mock({ ...routes, 'PUT /api/prices': {} })
+    wrap(<Config />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Salvar preço de gpt-x' }))
+    expect(await screen.findByText('Informe os preços de entrada e saída (maiores que zero)')).toBeInTheDocument()
+    expect(calls(fn, 'PUT', '/api/prices')).toHaveLength(0)
+    fireEvent.change(screen.getByLabelText('Preço de entrada de gpt-x'), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText('Preço de saída de gpt-x'), { target: { value: '15,5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar preço de gpt-x' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/prices')).toEqual([{ model: 'gpt-x', input_per_m: 3, output_per_m: 15.5, cache_write_per_m: 0, cache_read_per_m: 0 }]))
+  })
+
   it('adiciona projeto com caminho', async () => {
     const fn = mock(routes)
     wrap(<Config />)
