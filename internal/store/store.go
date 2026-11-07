@@ -24,7 +24,13 @@ type Store struct {
 
 // DefaultPath retorna $XDG_DATA_HOME/nobreai-cockpit/cockpit.db
 // (padrão ~/.local/share/nobreai-cockpit/cockpit.db).
-func DefaultPath() string {
+func DefaultPath() string { return dataDir("cockpit.db") }
+
+// DefaultDemoPath retorna $XDG_DATA_HOME/nobreai-cockpit/cockpit-demo.db: o
+// banco de demonstração, que nunca se mistura com o real.
+func DefaultDemoPath() string { return dataDir("cockpit-demo.db") }
+
+func dataDir(file string) string {
 	base := os.Getenv("XDG_DATA_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
@@ -33,7 +39,7 @@ func DefaultPath() string {
 		}
 		base = filepath.Join(home, ".local", "share")
 	}
-	return filepath.Join(base, "nobreai-cockpit", "cockpit.db")
+	return filepath.Join(base, "nobreai-cockpit", file)
 }
 
 // Open cria o diretório, abre o banco e aplica as migrações pendentes.

@@ -30,3 +30,13 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("user_version = %d, err = %v", v, err)
 	}
 }
+
+func TestDefaultDemoPath(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/xdg")
+	if got := DefaultDemoPath(); got != "/xdg/nobreai-cockpit/cockpit-demo.db" {
+		t.Fatalf("DefaultDemoPath = %q", got)
+	}
+	if got := DefaultPath(); got != "/xdg/nobreai-cockpit/cockpit.db" {
+		t.Fatalf("DefaultPath = %q", got)
+	}
+}

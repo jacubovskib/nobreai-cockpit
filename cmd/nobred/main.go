@@ -14,6 +14,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/api"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
+	"github.com/nobretech/nobreai-cockpit/internal/demo"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -21,14 +22,22 @@ import (
 const defaultAddr = "127.0.0.1:7420"
 
 func main() {
-	dbPath := flag.String("db", store.DefaultPath(), "caminho do banco SQLite")
+	dbPath := flag.String("db", "", "caminho do banco SQLite (padrão: "+store.DefaultPath()+")")
+	seedDemo := flag.Bool("seed-demo", false, "carrega os dados de demonstração (sem --db usa "+store.DefaultDemoPath()+", nunca o banco real)")
 	flag.Parse()
-	if err := run(*dbPath); err != nil {
+	path := *dbPath
+	if path == "" {
+		path = store.DefaultPath()
+		if *seedDemo {
+			path = store.DefaultDemoPath()
+		}
+	}
+	if err := run(path, *seedDemo); err != nil {
 		log.Fatalf("nobred: %v", err)
 	}
 }
 
-func run(dbPath string) error {
+func run(dbPath string, seedDemo bool) error {
 	addr := os.Getenv("NOBRE_ADDR")
 	if addr == "" {
 		addr = defaultAddr
@@ -38,6 +47,11 @@ func run(dbPath string) error {
 		return err
 	}
 	defer st.Close()
+	if seedDemo {
+		if err := loadDemo(st); err != nil {
+			return err
+		}
+	}
 
 	hub := api.NewHub()
 	handler := api.New(st, api.Deps{
@@ -85,4 +99,24 @@ func run(dbPath string) error {
 		return err
 	}
 	return nil
+}
+
+// loadDemo carrega os dados de demonstração; num banco que já tem cards só
+// registra o fato (e, se for o banco de demonstração, aponta as sessões vivas
+// para este processo, para a reconciliação não as encerrar).
+func loadDemo(st *store.Store) error {
+	err := demo.Seed(st, time.Now(), os.Getpid())
+	if !errors.Is(err, demo.ErrNotEmpty) {
+		return err
+	}
+	set, err := st.GetSettings()
+	if err != nil {
+		return err
+	}
+	if !set.Demo {
+		log.Print("nobred: o banco já tem cards e não é de demonstração; dados de demonstração não carregados")
+		return nil
+	}
+	log.Print("nobred: banco de demonstração já carregado; mantendo os dados")
+	return demo.RefreshLivePID(st, os.Getpid())
 }
