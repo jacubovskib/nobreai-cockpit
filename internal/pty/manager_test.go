@@ -89,7 +89,7 @@ func TestInputReachesProcess(t *testing.T) {
 }
 
 func TestSlowSubscriberDropped(t *testing.T) {
-	m := NewManager(Options{RingSize: 1024})
+	m := NewManager(Options{RingSize: 1024, SubLimit: 64 << 10})
 	defer m.Close()
 	// escreve 2 MiB de uma vez, sem esperar ninguém ler
 	tm, err := m.Start(sh("head -c 2097152 /dev/zero | tr '\\0' x"))
@@ -99,16 +99,73 @@ func TestSlowSubscriberDropped(t *testing.T) {
 	_, slow, cancel := tm.Subscribe() // nunca lê
 	defer cancel()
 	waitDone(t, tm) // o processo não travou
-	closed := false
-	for i := 0; i < subBuffer+1 && !closed; i++ {
-		_, ok := <-slow
-		closed = !ok
+	got := 0
+	for b := range slow { // fecha depois de no máximo um bloco já entregue
+		got += len(b)
 	}
-	if !closed {
-		t.Fatal("assinante lento não foi desconectado")
+	if got > 64<<10 {
+		t.Fatalf("assinante lento recebeu %d bytes além do limite", got)
 	}
 	if n := tm.Info().Clients; n != 0 {
 		t.Fatalf("clients = %d", n)
+	}
+}
+
+func TestSubscriberLimitIsBytesNotChunks(t *testing.T) {
+	// Muitos pedaços pequenos abaixo do limite em bytes não desconectam.
+	m := NewManager(Options{SubLimit: 4 << 20})
+	defer m.Close()
+	tm, err := m.Start(sh("sleep 0.3; i=0; while [ $i -lt 600 ]; do printf 'linha %d\\n' $i; i=$((i+1)); sleep 0.001; done"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ch, cancel := tm.Subscribe()
+	defer cancel()
+	waitDone(t, tm) // ninguém leu enquanto o processo escrevia
+	var out bytes.Buffer
+	for b := range ch {
+		out.Write(b)
+	}
+	if !strings.Contains(out.String(), "linha 599") {
+		t.Fatalf("assinante foi desconectado: %d bytes", out.Len())
+	}
+}
+
+func TestEndReason(t *testing.T) {
+	m := NewManager(Options{})
+	own, _ := m.Start(sh("exit 0"))
+	waitDone(t, own)
+	killed, _ := m.Start(StartSpec{Argv: []string{"cat"}})
+	_ = m.Kill(killed.Info().ID)
+	waitDone(t, killed)
+	daemon, _ := m.Start(StartSpec{Argv: []string{"cat"}})
+	m.Close()
+	waitDone(t, daemon)
+	for tm, want := range map[*Terminal]string{own: "agent", killed: "killed", daemon: "daemon"} {
+		if got := tm.Info().EndReason; got != want {
+			t.Fatalf("motivo = %q, quero %q", got, want)
+		}
+	}
+	m.Close() // idempotente
+}
+
+func TestCloseWaitsForHolders(t *testing.T) {
+	m := NewManager(Options{})
+	tm, _ := m.Start(StartSpec{Argv: []string{"cat"}})
+	release, ok := m.Hold()
+	if !ok {
+		t.Fatal("Hold recusado antes de Close")
+	}
+	released := make(chan struct{})
+	go func() { <-tm.Done(); time.Sleep(200 * time.Millisecond); close(released); release() }()
+	m.Close()
+	select {
+	case <-released:
+	default:
+		t.Fatal("Close voltou antes de o cliente entregar a mensagem de fim")
+	}
+	if _, ok := m.Hold(); ok {
+		t.Fatal("Hold depois de Close deveria falhar")
 	}
 }
 
@@ -271,7 +328,7 @@ func TestGrandchildHoldingSlaveDoesNotKeepTerminalLive(t *testing.T) {
 }
 
 func TestWriteToProcessNotReadingStdinTimesOut(t *testing.T) {
-	m := NewManager(Options{})
+	m := NewManager(Options{WriteTimeout: 500 * time.Millisecond})
 	defer m.Close()
 	tm, err := m.Start(sh("stty raw -echo; echo pronto; sleep 30"))
 	if err != nil {
