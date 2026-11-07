@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useOverview, useSettings } from '../api/queries'
-import { forCard, isLive, useTerminals } from '../api/terminals'
+import { forCard, isLive, useTerminals, type TerminalInfo } from '../api/terminals'
 import { patch, post } from '../api/client'
 import type { ActiveSession, AgentSpend, Alert, Card, DomainEvent, SessionWithUsage, Total } from '../api/types'
 import { agentInfo } from '../ui/agents'
@@ -211,6 +211,16 @@ function eventText(e: DomainEvent): string {
   return d.path ?? d.command ?? d.text ?? ''
 }
 
+// terminalFor: o terminal vivo da sessão (mesmo pid: o PTY roda o próprio
+// agente); sem pid igual, um terminal vivo do card que não seja de outra sessão.
+function terminalFor(s: ActiveSession, terminals: TerminalInfo[] | undefined, sessionPids: Set<number>): string | undefined {
+  const live = (terminals ?? []).filter(isLive)
+  const own = s.pid ? live.find((t) => t.pid === s.pid) : undefined
+  if (own) return own.id
+  if (!s.card) return undefined
+  return forCard(live, s.card.key).find((t) => !sessionPids.has(t.pid))?.id
+}
+
 export function ControlRoom() {
   const { data, isPending, isError } = useOverview()
   const settings = useSettings().data
@@ -233,6 +243,7 @@ export function ControlRoom() {
   const cardsActive = new Set(alive.filter((a) => a.card).map((a) => a.card!.key)).size
   const sessionAgent = new Map<string, string>([...active, ...no_card].map((s) => [s.id, s.agent]))
   const sessionCard = new Map<string, string>(active.filter((a) => a.card).map((a) => [a.id, a.card!.key]))
+  const sessionPids = new Set(active.map((a) => a.pid).filter(Boolean))
   const cur = { currency: settings?.currency, rate: settings?.brl_rate }
   const dateText = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
 
@@ -283,7 +294,7 @@ export function ControlRoom() {
         <section aria-labelledby="ativos-t" style={{ flex: '3 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <h2 id="ativos-t" style={h2}>Agentes rodando agora</h2>
           {active.length === 0 && <p style={{ margin: 0, color: 'var(--text-2)' }}>Nenhum agente rodando agora.</p>}
-          {active.map((s) => <ActiveCard key={s.id} s={s} terminalId={s.card && !s.pid_dead_at ? forCard(terminals, s.card.key).find(isLive)?.id : undefined} />)}
+          {active.map((s) => <ActiveCard key={s.id} s={s} terminalId={s.pid_dead_at ? undefined : terminalFor(s, terminals, sessionPids)} />)}
         </section>
 
         <div style={{ flex: '2 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>

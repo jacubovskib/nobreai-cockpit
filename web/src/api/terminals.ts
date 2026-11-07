@@ -15,6 +15,8 @@ export interface TerminalInfo {
   cols: number
   rows: number
   clients: number
+  // end_reason: 'agent' | 'killed' | 'daemon' depois do fim.
+  end_reason?: string
 }
 
 export const isLive = (t: TerminalInfo) => !t.ended_at

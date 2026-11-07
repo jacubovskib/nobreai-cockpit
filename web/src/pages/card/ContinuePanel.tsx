@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ApiError, post } from '../../api/client'
-import { usePrompts } from '../../api/queries'
+import { usePrompts, useSettings } from '../../api/queries'
 import { agentInfo } from '../../ui/agents'
 import { ErrorLine, btnPrimary, h2, input, muted, panel } from './shared'
 
@@ -15,11 +15,21 @@ const BACKGROUND_MODE = 'background'
 
 const NO_PROMPT = 'nenhum'
 
+// Nomes dos modos como aparecem na Configuração.
+const LAUNCH_MODE_NAMES: Record<string, string> = {
+  terminal: 'Nova janela do terminal',
+  tmux: 'Sessão tmux',
+  background: 'Segundo plano, com saída na interface',
+}
+
 // `enabled` liga o botão (Claude Code no piloto). Sessão viva no card volta
 // 409; a mensagem aparece em linha com "Forçar mesmo assim", que reenvia com force.
 export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKey: string; enabled?: boolean; onTerminal?: (id: string) => void }) {
   const qc = useQueryClient()
   const prompts = usePrompts()
+  const settings = useSettings().data
+  const modeName = settings ? LAUNCH_MODE_NAMES[settings.launch_mode || 'terminal'] : undefined
+  const platformLabel = `Padrão da plataforma (${modeName ?? 'definido em Configuração'})`
   const [agent, setAgent] = useState('claude')
   const [mode, setMode] = useState(PLATFORM_MODE)
   const [slug, setSlug] = useState<string | null>(null)
@@ -71,7 +81,7 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...muted }}>
         Abrir em
         <select style={input} value={mode} onChange={(e) => setMode(e.target.value)}>
-          <option value={PLATFORM_MODE}>Padrão da plataforma (definido em Configuração)</option>
+          <option value={PLATFORM_MODE}>{platformLabel}</option>
           <option value="tmux" disabled>Sessão tmux (em breve)</option>
           <option value={BACKGROUND_MODE}>Em segundo plano, com saída aqui na interface</option>
         </select>

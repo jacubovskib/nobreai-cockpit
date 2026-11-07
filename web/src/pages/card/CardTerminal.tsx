@@ -29,7 +29,8 @@ export function CardTerminal({ cardKey, focusId }: { cardKey: string; focusId?: 
         </span>
       </div>
       <div style={{ height: 460 }}>
-        <LazyTerminalView key={current.id} id={current.id} readonly={!isLive(current)} />
+        {/* O painel do card abre sempre só assistindo; "Interagir" assume o PTY. */}
+        <LazyTerminalView key={current.id} id={current.id} readonly />
       </div>
     </section>
   )

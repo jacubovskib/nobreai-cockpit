@@ -11,7 +11,10 @@ export interface TermLike {
   cols: number
   rows: number
   open(el: HTMLElement): void
-  write(data: Uint8Array | string): void
+  // cb roda depois que o xterm processou os dados (inclusive as respostas a
+  // consultas que eles contêm, emitidas por onData).
+  write(data: Uint8Array | string, cb?: () => void): void
+  resize(cols: number, rows: number): void
   reset(): void
   fit(): void
   focus(): void
@@ -50,7 +53,8 @@ export const xtermFactory: TermFactory = () => {
     get cols() { return t.cols },
     get rows() { return t.rows },
     open: (el) => t.open(el),
-    write: (d) => t.write(d),
+    write: (d, cb) => t.write(d, cb),
+    resize: (c, r) => t.resize(c, r),
     reset: () => t.reset(),
     fit: () => { try { fit.fit() } catch { /* contêiner sem tamanho ainda */ } },
     focus: () => t.focus(),
@@ -72,6 +76,13 @@ const btnDanger: React.CSSProperties = { ...btn, borderColor: '#6b2c2c', color: 
 
 type Status = 'conectando' | 'conectado' | 'reconectando' | 'desconectado'
 
+// Quem só assiste nunca muda o PTY: o xterm segue o tamanho dele (mensagem
+// info) e nenhum resize é enviado até o usuário interagir (clicar em
+// "Interagir" ou digitar no modo interativo). Assim abrir a aba não encolhe o
+// terminal de quem está no `nobre run`. A entrada só vale depois que o
+// snapshot foi escrito: as respostas do xterm a consultas antigas (DA, CPR,
+// OSC) no histórico não viram teclas para o agente.
+
 export function TerminalView({
   id, readonly = false, autoFocus = false, termFactory = xtermFactory, wsFactory: makeWs = wsFactory, onEnded,
 }: {
@@ -91,9 +102,11 @@ export function TerminalView({
   const [killing, setKilling] = useState(false)
   const endedCb = useRef(onEnded)
   endedCb.current = onEnded
+  // engaged: o usuário interagiu; só então o PTY segue o tamanho desta view.
+  const engaged = useRef(false)
 
   useEffect(() => { setRo(readonly) }, [readonly, id])
-  useEffect(() => { setExitCode(null); setConfirming(false); setKillError('') }, [id])
+  useEffect(() => { setExitCode(null); setConfirming(false); setKillError(''); engaged.current = false }, [id])
 
   useEffect(() => {
     const el = host.current
@@ -106,19 +119,38 @@ export function TerminalView({
     let attempt = 0
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
+    let ready = false // snapshot desta conexão já escrito
+    let gotSnapshot = false
 
+    const followPty = () => ro || !engaged.current
     const sendResize = () => {
-      if (ro || !ws || ws.readyState !== OPEN) return
+      if (followPty() || !ws || ws.readyState !== OPEN) return
       ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
     }
+    // Captura: roda antes do xterm transformar a tecla em onData, então o
+    // resize chega ao PTY antes da primeira tecla.
+    const engage = () => {
+      if (ro || engaged.current) return
+      engaged.current = true
+      term.fit()
+      sendResize()
+    }
+    el.addEventListener('keydown', engage, true)
+    el.addEventListener('paste', engage, true)
     term.onData((d) => {
-      if (ro || !ws || ws.readyState !== OPEN) return
+      if (ro || !ready || !ws || ws.readyState !== OPEN) return
       ws.send(new TextEncoder().encode(d))
     })
     term.onResize(() => {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(sendResize, RESIZE_DEBOUNCE_MS)
     })
+    const writeOut = (bytes: Uint8Array, sock: WsLike) => {
+      if (gotSnapshot) { term.write(bytes); return }
+      gotSnapshot = true // a primeira mensagem binária é o snapshot (pode ser vazio)
+      if (bytes.byteLength === 0) { ready = true; return }
+      term.write(bytes, () => { if (ws === sock) ready = true })
+    }
 
     const connect = () => {
       const sock = makeWs(wsUrl(id, ro))
@@ -126,17 +158,22 @@ export function TerminalView({
       sock.binaryType = 'arraybuffer'
       sock.onopen = () => {
         attempt = 0
+        ready = false
+        gotSnapshot = false
         setStatus('conectado')
         term.reset() // o servidor reenvia o snapshot a cada conexão
-        term.fit()
-        sendResize()
+        if (!followPty()) {
+          term.fit()
+          sendResize()
+        }
         if (!ro && autoFocus) term.focus()
       }
       sock.onmessage = (e) => {
         const d = e.data
         if (typeof d === 'string') {
           try {
-            const m = JSON.parse(d) as { type?: string; code?: number }
+            const m = JSON.parse(d) as { type?: string; code?: number; cols?: number; rows?: number }
+            if (m.type === 'info' && followPty() && m.cols && m.rows) term.resize(m.cols, m.rows)
             if (m.type === 'exit') {
               exited = true
               setExitCode(typeof m.code === 'number' ? m.code : 0)
@@ -145,8 +182,8 @@ export function TerminalView({
           } catch { /* texto desconhecido */ }
           return
         }
-        if (Object.prototype.toString.call(d) === '[object ArrayBuffer]') term.write(new Uint8Array(d as ArrayBuffer))
-        else if (ArrayBuffer.isView(d)) term.write(new Uint8Array(d.buffer, d.byteOffset, d.byteLength))
+        if (Object.prototype.toString.call(d) === '[object ArrayBuffer]') writeOut(new Uint8Array(d as ArrayBuffer), sock)
+        else if (ArrayBuffer.isView(d)) writeOut(new Uint8Array(d.buffer, d.byteOffset, d.byteLength), sock)
       }
       sock.onclose = () => {
         if (disposed || ws !== sock) return
@@ -160,7 +197,7 @@ export function TerminalView({
     setStatus('conectando')
     connect()
 
-    const onWinResize = () => term.fit()
+    const onWinResize = () => { if (!followPty()) term.fit() }
     window.addEventListener('resize', onWinResize)
     const RO = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onWinResize)
     RO?.observe(el)
@@ -170,6 +207,8 @@ export function TerminalView({
       clearTimeout(retryTimer)
       clearTimeout(resizeTimer)
       window.removeEventListener('resize', onWinResize)
+      el.removeEventListener('keydown', engage, true)
+      el.removeEventListener('paste', engage, true)
       RO?.disconnect()
       if (ws) { ws.onclose = null; ws.onmessage = null; ws.onopen = null; ws.close() }
       term.dispose()
@@ -196,7 +235,7 @@ export function TerminalView({
           {ended ? `encerrado (código ${exitCode})` : status}
         </span>
         {!ended && (
-          <button type="button" style={btn} aria-pressed={ro} onClick={() => setRo(!ro)}>
+          <button type="button" style={btn} aria-pressed={ro} onClick={() => { engaged.current = ro; setRo(!ro) }}>
             {ro ? 'Interagir' : 'Somente assistir'}
           </button>
         )}

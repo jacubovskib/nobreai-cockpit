@@ -31,6 +31,12 @@ describe('Terminals', () => {
     expect(await screen.findByTestId('tv')).toHaveTextContent('a:false')
   })
 
+  it('terminal do nobre run abre em somente assistir', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([info({ id: 'r', origin: 'nobre run' })]), { status: 200 })))
+    renderAt('/terminals?id=r')
+    expect(await screen.findByTestId('tv')).toHaveTextContent('r:true')
+  })
+
   it('mostra estado vazio', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', { status: 200 })))
     renderAt()

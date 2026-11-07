@@ -70,7 +70,8 @@ export function Terminals() {
       )}
       {current && (
         <div style={{ height: 'max(420px, calc(100vh - 360px))' }}>
-          <LazyTerminalView key={current.id} id={current.id} readonly={!isLive(current)} autoFocus />
+          {/* Sessão do `nobre run` é de alguém num terminal local: abre só assistindo. */}
+          <LazyTerminalView key={current.id} id={current.id} readonly={!isLive(current) || current.origin === 'nobre run'} autoFocus />
         </div>
       )}
     </div>
