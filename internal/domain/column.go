@@ -29,3 +29,34 @@ const (
 	EvQuestion      = "question"
 	EvHeartbeat     = "heartbeat"
 )
+
+// Transition é um evento que pode mover um card entre colunas.
+type Transition int
+
+const (
+	SessionAttached Transition = iota
+	SessionEnded
+	AgentDone
+	HumanApproved
+)
+
+// NextColumn aplica a regra automática de movimentação do board.
+func NextColumn(cur Column, ev Transition) Column {
+	switch ev {
+	case SessionAttached:
+		return EmAndamento
+	case SessionEnded:
+		if cur == EmAndamento {
+			return Pausado
+		}
+	case AgentDone:
+		if cur == EmAndamento {
+			return Revisao
+		}
+	case HumanApproved:
+		if cur == Revisao {
+			return Concluido
+		}
+	}
+	return cur
+}
