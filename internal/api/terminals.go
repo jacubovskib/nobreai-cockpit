@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +27,8 @@ const (
 	termOriginPlatform = "plataforma"
 	termOriginRun      = "nobre run"
 )
+
+var resumeKeyRe = regexp.MustCompile(`^NAC-[0-9]+$`)
 
 func (s *server) terminalRoutes(mux *http.ServeMux) {
 	guard := func(h http.HandlerFunc) http.HandlerFunc {
@@ -57,6 +60,8 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		Rows    uint16   `json:"rows"`
 		CardKey string   `json:"card_key"`
 		Origin  string   `json:"origin"`
+		// ResumeKey liga o agente ao card (vira NOBRE_RESUME); `nobre run` o repassa.
+		ResumeKey string `json:"resume_key"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -85,6 +90,10 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "dir não existe: "+in.Dir)
 		return
 	}
+	if in.ResumeKey != "" && !resumeKeyRe.MatchString(in.ResumeKey) {
+		writeError(w, http.StatusBadRequest, "resume_key inválida (use NAC-<número>)")
+		return
+	}
 	if in.Cols > maxTermDim || in.Rows > maxTermDim {
 		writeError(w, http.StatusBadRequest, "tamanho de terminal inválido")
 		return
@@ -94,8 +103,12 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, msgNoAgentBin)
 		return
 	}
+	env := s.terminalEnv()
+	if in.ResumeKey != "" {
+		env = append(env, "NOBRE_RESUME="+in.ResumeKey)
+	}
 	tm, err := s.startTerminal(pty.StartSpec{
-		Argv: append([]string{bin}, in.Args...), Dir: in.Dir, Env: s.terminalEnv(),
+		Argv: append([]string{bin}, in.Args...), Dir: in.Dir, Env: env,
 		Cols: in.Cols, Rows: in.Rows, CardKey: in.CardKey, Agent: in.Agent, Origin: in.Origin,
 	})
 	switch {

@@ -38,6 +38,7 @@ Administração:
   nobre prompt list                                       lista os prompts
   nobre prompt use <slug> [--card KEY]                    imprime o prompt preenchido e marca o uso
   nobre prompt save --name <n> --tag <t>                  salva um prompt (corpo pelo stdin)
+  nobre run <agente> [args...]                            roda o agente com o terminal visível na plataforma (Ctrl+] solta)
   nobre ui                                                abre o Cockpit no navegador
   nobre setup [--dry-run]                                 instala hooks e skill do Claude Code e ativa o daemon
 
@@ -57,6 +58,8 @@ type cli struct {
 	opener func(url string) error
 	// sd são os caminhos e comandos do setup; nil = padrões do usuário.
 	sd *setupDeps
+	// rd são os pontos do terminal local do `nobre run`; nil = padrões.
+	rd *runDeps
 }
 
 func newCLI() *cli {
@@ -81,6 +84,9 @@ func (c *cli) run(args []string) int {
 	cmd, rest := args[0], args[1:]
 	if cmd == "hook" {
 		return c.hook(rest)
+	}
+	if cmd == "run" && (len(rest) == 0 || rest[0] != "-h" && rest[0] != "--help") {
+		return c.runAgent(rest) // os argumentos depois do agente são do agente, inclusive --help
 	}
 	if wantsHelp(rest) {
 		fmt.Fprint(c.out, helpFor(cmd))

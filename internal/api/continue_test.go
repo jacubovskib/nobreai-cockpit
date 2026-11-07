@@ -12,6 +12,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -52,6 +53,12 @@ func fakeClaude(t *testing.T) string {
 // claudeBin; devolve o card NAC-1 (branch "feat/x") num projeto em /w/api.
 func continueAPI(t *testing.T, g *fakeGit, claudeBin ...string) (*testAPI, *fakeLauncher) {
 	t.Helper()
+	return continueAPIWith(t, g, nil, claudeBin...)
+}
+
+// continueAPIWith é continueAPI com um gerenciador de terminais (nil = sem).
+func continueAPIWith(t *testing.T, g *fakeGit, mgr *pty.Manager, claudeBin ...string) (*testAPI, *fakeLauncher) {
+	t.Helper()
 	st, err := store.Open(t.TempDir() + "/cockpit.db")
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +76,7 @@ func continueAPI(t *testing.T, g *fakeGit, claudeBin ...string) (*testAPI, *fake
 	ad.SetPaths(claude.Paths{ClaudeBin: bin})
 	l := &fakeLauncher{}
 	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub,
-		Adapters: map[string]adapter.Adapter{"claude": ad}, Launcher: l, Git: g, SessionPATH: sessionPATH,
+		Adapters: map[string]adapter.Adapter{"claude": ad}, Launcher: l, Git: g, Terminals: mgr, SessionPATH: sessionPATH,
 		ResolveTerminal: func(n string) (string, error) {
 			if n == "x-terminal-emulator" {
 				return "/usr/bin/terminator", nil
@@ -282,4 +289,78 @@ func TestContinueRendersPackageEmpty(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Usar PKCE") {
 		t.Fatalf("render = %d %s", rec.Code, rec.Body)
 	}
+}
+
+// bgClaude é um "claude" falso que imprime o NOBRE_RESUME, o diretório e o argumento.
+func bgClaude(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\necho \"RESUME=$NOBRE_RESUME PWD=$(pwd)\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestContinueBackgroundStartsTerminal(t *testing.T) {
+	proj := t.TempDir()
+	g := &fakeGit{branch: "main", clean: true}
+	mgr := pty.NewManager(pty.Options{})
+	t.Cleanup(mgr.Close)
+	a, l := continueAPIWith(t, g, mgr, bgClaude(t))
+	p, _ := a.st.CreateProject("real", proj)
+	if _, err := a.st.CreateCard(domain.Card{Title: "bg", ProjectID: p.ID, Branch: "feat/y"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/cards/NAC-2/continue", map[string]any{"agent": "claude", "mode": "background", "prompt_slug": "nenhum"}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	resp := decode[map[string]any](t, rec)
+	id, _ := resp["terminal_id"].(string)
+	if id == "" {
+		t.Fatalf("faltou terminal_id: %v", resp)
+	}
+	if len(l.calls) != 0 {
+		t.Fatal("modo background não deve abrir terminal externo")
+	}
+	if len(g.checkouts) != 1 || g.checkouts[0] != "feat/y" {
+		t.Fatalf("checkouts = %v", g.checkouts)
+	}
+	tm, ok := mgr.Get(id)
+	if !ok {
+		t.Fatal("terminal não registrado")
+	}
+	select {
+	case <-tm.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("agente não terminou")
+	}
+	snap, _, cancel := tm.Subscribe()
+	cancel()
+	info := tm.Info()
+	if !strings.Contains(string(snap), "RESUME=NAC-2") || !strings.Contains(string(snap), "PWD="+proj) {
+		t.Fatalf("saída = %q", snap)
+	}
+	if info.CardKey != "NAC-2" || info.Origin != "plataforma" || info.Agent != "claude" {
+		t.Fatalf("info = %+v", info)
+	}
+}
+
+func TestContinueBackgroundFromSettingsDefault(t *testing.T) {
+	mgr := pty.NewManager(pty.Options{})
+	t.Cleanup(mgr.Close)
+	a, l := continueAPIWith(t, &fakeGit{branch: "feat/x", clean: true}, mgr, bgClaude(t))
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"launch_mode": "background"}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("settings = %d %s", rec.Code, rec.Body)
+	}
+	// o projeto de teste é /w/api (inexistente): o início falha no PTY, mas o modo foi aceito.
+	rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"mode": "platform", "prompt_slug": "nenhum"}, 0)
+	if rec.Code == http.StatusBadRequest || len(l.calls) != 0 {
+		t.Fatalf("code = %d %s calls=%d", rec.Code, rec.Body, len(l.calls))
+	}
+}
+
+func TestContinueBackgroundWithoutManager(t *testing.T) {
+	a, _ := continueAPI(t, &fakeGit{branch: "feat/x", clean: true})
+	errOf(t, a, http.StatusServiceUnavailable, map[string]any{"mode": "background"})
 }

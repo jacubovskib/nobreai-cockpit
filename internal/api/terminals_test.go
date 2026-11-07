@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -441,4 +443,34 @@ func TestTerminalNilManagerUnavailable(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
+}
+
+func TestCreateTerminalResumeKey(t *testing.T) {
+	sh := writeScript(t, "#!/bin/sh\necho \"R=$NOBRE_RESUME\"\n")
+	e := newTermEnv(t, sh)
+	resp, info := e.create(t, map[string]any{"resume_key": "NAC-12"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("code = %d", resp.StatusCode)
+	}
+	tm := mustTerm(t, e, info.ID)
+	<-tm.Done()
+	snap, _, cancel := tm.Subscribe()
+	cancel()
+	if !strings.Contains(string(snap), "R=NAC-12") {
+		t.Fatalf("saída = %q", snap)
+	}
+	for _, bad := range []string{"NAC-", "nac-1", "NAC-1; rm", "X=1"} {
+		if resp, _ := e.create(t, map[string]any{"resume_key": bad}); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("resume_key %q = %d", bad, resp.StatusCode)
+		}
+	}
+}
+
+func writeScript(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
