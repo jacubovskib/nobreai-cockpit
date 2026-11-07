@@ -24,7 +24,7 @@ const session = (o: Partial<WorktreeSession>): WorktreeSession => ({
   full_capture: true, started_at: ago(12), last_event_at: ago(1), ended_at: null, end_reason: '', pid_dead_at: null,
   live: true, last_activity: '', card: null, ...o,
 })
-const wt = { head: 'a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0', bare: false, detached: false, locked: false, prunable: false }
+const wt = { head: 'a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0', bare: false, detached: false, locked: false, prunable: false, resources: null }
 
 const data: ProjectWorktrees[] = [
   {
@@ -84,5 +84,56 @@ describe('Worktrees', () => {
     mockApi({ '/api/worktrees': [] })
     wrap()
     expect(await screen.findByText(/Nenhum projeto cadastrado/)).toBeInTheDocument()
+  })
+})
+
+describe('Worktrees · recursos', () => {
+  const res = (o: object) => ({ ready: true, cpu_pct: 0, rss_bytes: 0, procs: 0, top: [], cpu_cores: 12, disk: null, ...o })
+  const withRes: ProjectWorktrees[] = [{
+    project: { id: 1, name: 'api', path: '/w/api', capture: true }, error: '', orphans: [],
+    worktrees: [
+      { ...wt, path: '/w/api-oauth', branch: 'feat/oauth', main: false, cards: [], sessions: [],
+        resources: res({ cpu_pct: 180, rss_bytes: 1288490188, procs: 7,
+          top: [{ pid: 20, comm: 'node', cpu_pct: 120, rss_bytes: 943718400 }, { pid: 21, comm: 'esbuild', cpu_pct: 60, rss_bytes: 104857600 }],
+          disk: { bytes: 3650722201, measured_at: ago(4), pending: false } }) },
+      { ...wt, path: '/w/api', branch: 'main', main: true, cards: [], sessions: [],
+        resources: res({ ready: false, disk: { bytes: 0, measured_at: null, pending: true } }) },
+    ],
+  }]
+
+  it('mostra CPU, memória, processos e disco de cada worktree', async () => {
+    mockApi({ '/api/worktrees': withRes })
+    wrap()
+    const oauth = await screen.findByRole('article', { name: /api-oauth/ })
+    const stats = within(oauth).getByRole('list', { name: 'Recursos de api-oauth' })
+    // 180% de um núcleo em 12 núcleos = 15% da máquina.
+    expect(within(stats).getByText('15%')).toBeInTheDocument()
+    expect(within(stats).getByText('1,8 núcleo')).toBeInTheDocument()
+    expect(within(stats).getByText('1,2 GB')).toBeInTheDocument()
+    expect(within(stats).getByText('7')).toBeInTheDocument()
+    expect(within(stats).getByText('3,4 GB')).toBeInTheDocument()
+    expect(within(stats).getByText('há 4 min')).toBeInTheDocument()
+    const top = within(oauth).getByRole('list', { name: 'Processos que mais consomem' })
+    expect(within(top).getAllByRole('listitem')).toHaveLength(2)
+    expect(within(top).getByText('node')).toBeInTheDocument()
+    expect(within(top).getByText(/120%/)).toBeInTheDocument()
+    // Total do projeto no cabeçalho.
+    expect(screen.getByText(/15% da CPU · 1,2 GB de memória/)).toBeInTheDocument()
+  })
+
+  it('antes da segunda amostra e do primeiro du mostra que está medindo', async () => {
+    mockApi({ '/api/worktrees': withRes })
+    wrap()
+    const main = await screen.findByRole('article', { name: /^api main/ })
+    const stats = within(main).getByRole('list', { name: 'Recursos de api' })
+    expect(within(stats).getAllByText('medindo…')).toHaveLength(2)
+    expect(within(main).queryByRole('list', { name: 'Processos que mais consomem' })).not.toBeInTheDocument()
+  })
+
+  it('sem medição de recursos não mostra a faixa', async () => {
+    mockApi({ '/api/worktrees': data })
+    wrap()
+    const oauth = await screen.findByRole('article', { name: /api-oauth/ })
+    expect(within(oauth).queryByRole('list', { name: /Recursos de/ })).not.toBeInTheDocument()
   })
 })

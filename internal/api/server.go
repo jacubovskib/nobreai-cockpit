@@ -33,6 +33,9 @@ type Deps struct {
 	// SessionPATH é o PATH exportado no script do terminal aberto pelo
 	// "Continuar" (vazio = o PATH do daemon).
 	SessionPATH string
+	// Resources mede CPU, memória e disco dos worktrees (nil = sem medição;
+	// /api/worktrees devolve resources null).
+	Resources ResourceReader
 	// Hub é compartilhado com quem mais publica mudanças (adaptadores,
 	// reconciliação); o dono deve chamar Hub.Close no desligamento.
 	Hub *Hub

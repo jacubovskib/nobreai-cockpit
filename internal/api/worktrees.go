@@ -2,12 +2,14 @@ package api
 
 import (
 	"net/http"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/resources"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -28,11 +30,32 @@ type ProjectWorktrees struct {
 }
 
 // WorktreeView é um worktree com as sessões que rodam (ou rodaram nas
-// últimas 24 h) nele e os cards abertos do seu branch.
+// últimas 24 h) nele, os cards abertos do seu branch e o que consome da
+// máquina (nil sem Deps.Resources).
 type WorktreeView struct {
 	gitinfo.Worktree
-	Sessions []WorktreeSession `json:"sessions"`
-	Cards    []CardRef         `json:"cards"`
+	Sessions  []WorktreeSession  `json:"sessions"`
+	Cards     []CardRef          `json:"cards"`
+	Resources *WorktreeResources `json:"resources"`
+}
+
+// ResourceReader é o que a API precisa do medidor de recursos.
+type ResourceReader interface {
+	// Snapshot devolve os processos da última amostra; ready falso enquanto
+	// a CPU ainda não pôde ser medida.
+	Snapshot() ([]resources.Proc, bool)
+	// Disk devolve a medida de espaço de path (pedindo uma nova se preciso).
+	Disk(path string, exclude []string) resources.DiskInfo
+}
+
+// WorktreeResources é o consumo dos processos cujo cwd está no worktree (ou
+// descendentes deles) e o espaço em disco. CPU em % de um núcleo; CPUCores
+// para converter em % da máquina. Disk é nil em worktree sem diretório.
+type WorktreeResources struct {
+	Ready bool `json:"ready"`
+	resources.Usage
+	CPUCores int                 `json:"cpu_cores"`
+	Disk     *resources.DiskInfo `json:"disk"`
 }
 
 // WorktreeSession é uma sessão como aparece na lista de worktrees. Live segue
@@ -135,6 +158,7 @@ func (s *server) projectWorktrees(p domain.Project) (ProjectWorktrees, error) {
 			pw.Orphans = append(pw.Orphans, ws)
 		}
 	}
+	s.attachResources(pw.Worktrees)
 	for i := range pw.Worktrees {
 		ss := pw.Worktrees[i].Sessions
 		// Vivas primeiro; dentro de cada grupo, a ordem do store (mais recente antes).
@@ -163,4 +187,43 @@ func worktreeOf(list []WorktreeView, x domain.Session) int {
 		}
 	}
 	return best
+}
+
+// attachResources preenche o consumo de cada worktree do projeto.
+func (s *server) attachResources(list []WorktreeView) {
+	if s.deps.Resources == nil {
+		return
+	}
+	procs, ready := s.deps.Resources.Snapshot()
+	paths := make([]string, len(list))
+	for i, v := range list {
+		paths[i] = v.Path
+	}
+	usage := resources.Attribute(procs, paths)
+	cores := runtime.NumCPU()
+	for i := range list {
+		v := &list[i]
+		u := usage[strings.TrimRight(v.Path, "/")]
+		if u.Top == nil {
+			u.Top = []resources.Proc{}
+		}
+		r := &WorktreeResources{Ready: ready, Usage: u, CPUCores: cores}
+		if !v.Prunable && !v.Bare {
+			d := s.deps.Resources.Disk(v.Path, nestedPaths(v.Path, paths))
+			r.Disk = &d
+		}
+		v.Resources = r
+	}
+}
+
+// nestedPaths são os caminhos de paths dentro de root (worktrees aninhados).
+func nestedPaths(root string, paths []string) []string {
+	var out []string
+	prefix := strings.TrimRight(root, "/") + "/"
+	for _, p := range paths {
+		if strings.HasPrefix(p, prefix) {
+			out = append(out, p)
+		}
+	}
+	return out
 }

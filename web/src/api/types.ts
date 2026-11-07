@@ -235,6 +235,26 @@ export interface Worktree {
   sessions: WorktreeSession[]
   // cards: cards não concluídos cujo branch é o do worktree.
   cards: CardRef[]
+  // resources: null quando o daemon não mede recursos.
+  resources: WorktreeResources | null
+}
+
+// Processo que mais consome; cpu_pct em % de um núcleo (200 = dois núcleos).
+export interface ProcUsage { pid: number; comm: string; cpu_pct: number; rss_bytes: number }
+
+// measured_at null = nunca medido; pending = medição na fila (bytes é a anterior).
+export interface DiskInfo { bytes: number; measured_at: string | null; pending: boolean }
+
+// Consumo dos processos cujo cwd está no worktree (ou descendentes deles).
+// ready falso = a CPU ainda não pôde ser medida (uma amostra só).
+export interface WorktreeResources {
+  ready: boolean
+  cpu_pct: number
+  rss_bytes: number
+  procs: number
+  top: ProcUsage[]
+  cpu_cores: number
+  disk: DiskInfo | null
 }
 
 export interface ProjectWorktrees {

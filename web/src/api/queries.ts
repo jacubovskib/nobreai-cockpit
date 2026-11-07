@@ -51,4 +51,6 @@ export const useAgents = () =>
   useQuery({ queryKey: ['agents'], queryFn: () => get<AgentDetection[]>('/api/agents') })
 
 export const useWorktrees = () =>
-  useQuery({ queryKey: ['worktrees'], queryFn: () => get<ProjectWorktrees[]>('/api/worktrees') })
+  // CPU e memória mudam sem evento no stream: a página atualiza a cada 5 s
+  // (o react-query só repete enquanto alguém observa a consulta).
+  useQuery({ queryKey: ['worktrees'], queryFn: () => get<ProjectWorktrees[]>('/api/worktrees'), refetchInterval: 5000 })

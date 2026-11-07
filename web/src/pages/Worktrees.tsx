@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom'
 import { useWorktrees } from '../api/queries'
-import type { CardRef, ProjectWorktrees, Worktree, WorktreeSession } from '../api/types'
+import type { CardRef, ProjectWorktrees, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { StatusBadge } from '../ui/StatusBadge'
+import { formatBytes, formatPct } from '../ui/bytes'
 import { minutesSince, plural } from './board'
 import { h2, muted, panel } from './card/shared'
 
@@ -74,6 +75,57 @@ function SessionRow({ s, showWorktree }: { s: WorktreeSession; showWorktree?: bo
   )
 }
 
+const oneDec = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 })
+
+// machinePct converte % de um núcleo em % da máquina.
+const machinePct = (r: WorktreeResources) => r.cpu_pct / Math.max(1, r.cpu_cores)
+
+function Stat({ label, value, sub, title }: { label: string; value: string; sub?: string; title?: string }) {
+  return (
+    <li title={title} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <span style={{ fontSize: 11.5, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+      <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.01em' }}>{value}</span>
+      {sub && <span style={{ fontSize: 12, color: 'var(--text-2)' }}>{sub}</span>}
+    </li>
+  )
+}
+
+function ResourceStrip({ name, r }: { name: string; r: WorktreeResources }) {
+  const cores = r.cpu_pct / 100
+  const disk = r.disk
+  const diskValue = disk?.measured_at ? formatBytes(disk.bytes) : 'medindo…'
+  const diskSub = disk?.measured_at ? (disk.pending ? 'atualizando…' : `há ${agoText(disk.measured_at)}`) : undefined
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12, borderRadius: 8, background: '#0F1116' }}>
+      <ul aria-label={`Recursos de ${name}`} style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(70px, 1fr))', gap: 10 }}>
+        <Stat
+          label="CPU"
+          value={r.ready ? formatPct(machinePct(r)) : 'medindo…'}
+          sub={r.ready ? `${oneDec.format(cores)} núcleo${cores >= 2 ? 's' : ''}` : undefined}
+          title={`Processos neste diretório: ${oneDec.format(cores)} de ${r.cpu_cores} núcleos`}
+        />
+        <Stat label="Memória" value={formatBytes(r.rss_bytes)} title="Soma da memória residente (RSS); páginas compartilhadas contam mais de uma vez" />
+        <Stat label="Processos" value={String(r.procs)} title="Processos com o diretório de trabalho neste worktree, e os que eles abriram" />
+        {disk && <Stat label="Disco" value={diskValue} sub={diskSub} title="Espaço ocupado pelo worktree, sem os worktrees aninhados" />}
+      </ul>
+      {r.ready && r.top.length > 0 && (
+        <details>
+          <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--text-2)' }}>Processos que mais consomem (CPU: 100% = 1 núcleo)</summary>
+          <ul aria-label="Processos que mais consomem" style={{ margin: '8px 0 0', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {r.top.map((p) => (
+              <li key={p.pid} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 12, fontSize: 12.5 }}>
+                <span style={{ ...mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`PID ${p.pid}`}>{p.comm}</span>
+                <span style={{ ...mono, color: 'var(--text-2)' }}>{formatPct(p.cpu_pct)}</span>
+                <span style={{ ...mono, color: 'var(--text-2)' }}>{formatBytes(p.rss_bytes)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  )
+}
+
 function WorktreeCard({ w }: { w: Worktree }) {
   const name = baseName(w.path)
   const label = `${name} ${w.branch || 'HEAD destacado'}`
@@ -98,6 +150,7 @@ function WorktreeCard({ w }: { w: Worktree }) {
         </div>
         <span style={{ ...mono, fontSize: 12, color: 'var(--text-2)', overflowWrap: 'anywhere' }}>{w.path}</span>
       </header>
+      {w.resources && <ResourceStrip name={name} r={w.resources} />}
       {w.sessions.length === 0 ? (
         <p style={{ ...muted, margin: 0 }}>Nenhum agente aqui nas últimas 24 h.</p>
       ) : (
@@ -126,6 +179,9 @@ function WorktreeCard({ w }: { w: Worktree }) {
 
 function ProjectSection({ p }: { p: ProjectWorktrees }) {
   const live = p.worktrees.reduce((n, w) => n + w.sessions.filter((s) => s.live).length, 0)
+  const measured = p.worktrees.flatMap((w) => (w.resources?.ready ? [w.resources] : []))
+  const cpu = measured.reduce((n, r) => n + machinePct(r), 0)
+  const mem = p.worktrees.reduce((n, w) => n + (w.resources?.rss_bytes ?? 0), 0)
   const id = `proj-${p.project.id}`
   return (
     <section aria-labelledby={id} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -135,6 +191,7 @@ function ProjectSection({ p }: { p: ProjectWorktrees }) {
         {!p.error && (
           <span style={muted}>
             {plural(p.worktrees.length, 'worktree', 'worktrees')} · {live} {live === 1 ? 'agente ao vivo' : 'agentes ao vivo'}
+            {measured.length > 0 && ` · ${formatPct(cpu)} da CPU · ${formatBytes(mem)} de memória`}
           </span>
         )}
       </div>

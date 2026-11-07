@@ -10,6 +10,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/resources"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -199,5 +200,104 @@ func TestWorktreesWithoutGitReader(t *testing.T) {
 	got := decode[worktreesResp](t, a.do(t, "GET", "/api/worktrees", nil, 0))
 	if len(got) != 1 || got[0].Error == "" || got[0].Worktrees == nil || got[0].Orphans == nil {
 		t.Fatalf("sem git = %+v", got)
+	}
+}
+
+type fakeResources struct {
+	procs []resources.Proc
+	ready bool
+	disk  map[string][]string // caminho medido → exclusões recebidas
+}
+
+func (f *fakeResources) Snapshot() ([]resources.Proc, bool) { return f.procs, f.ready }
+func (f *fakeResources) Disk(path string, exclude []string) resources.DiskInfo {
+	f.disk[path] = exclude
+	at := testNow.Add(-4 * time.Minute)
+	return resources.DiskInfo{Bytes: 3 << 30, MeasuredAt: &at}
+}
+
+type resourcesResp []struct {
+	Worktrees []struct {
+		Path      string `json:"path"`
+		Resources *struct {
+			Ready    bool    `json:"ready"`
+			CPU      float64 `json:"cpu_pct"`
+			RSS      int64   `json:"rss_bytes"`
+			Procs    int     `json:"procs"`
+			CPUCores int     `json:"cpu_cores"`
+			Top      []struct {
+				PID  int     `json:"pid"`
+				Comm string  `json:"comm"`
+				CPU  float64 `json:"cpu_pct"`
+			} `json:"top"`
+			Disk *struct {
+				Bytes   int64 `json:"bytes"`
+				Pending bool  `json:"pending"`
+			} `json:"disk"`
+		} `json:"resources"`
+	} `json:"worktrees"`
+}
+
+func TestWorktreesResources(t *testing.T) {
+	main, wt := gitRepoWithWorktree(t)
+	nested := filepath.Join(main, ".claude", "worktrees", "x")
+	gitRun(t, main, "worktree", "add", "-q", "-b", "exp/x", nested)
+	fr := &fakeResources{ready: true, disk: map[string][]string{}, procs: []resources.Proc{
+		{PID: 10, PPID: 1, Comm: "claude", Cwd: main, CPU: 4, RSS: 300 << 20},
+		{PID: 20, PPID: 1, Comm: "node", Cwd: filepath.Join(wt, "web"), CPU: 120, RSS: 900 << 20},
+		{PID: 21, PPID: 20, Comm: "esbuild", Cwd: "/tmp", CPU: 60, RSS: 100 << 20},
+		{PID: 30, PPID: 1, Comm: "chrome", Cwd: "/home/u", CPU: 99, RSS: 5 << 30},
+	}}
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	a := &testAPI{st: st, h: New(st, Deps{Now: func() time.Time { return testNow }, Git: gitinfo.Exec{}, Resources: fr})}
+	if _, err := st.CreateProject("api", main); err != nil {
+		t.Fatal(err)
+	}
+	got := decode[resourcesResp](t, a.do(t, "GET", "/api/worktrees", nil, 0))
+	if len(got) != 1 || len(got[0].Worktrees) != 3 {
+		t.Fatalf("resp = %+v", got)
+	}
+	byPath := map[string]int{}
+	for i, w := range got[0].Worktrees {
+		byPath[w.Path] = i
+		if w.Resources == nil || !w.Resources.Ready || w.Resources.CPUCores < 1 || w.Resources.Disk == nil || w.Resources.Disk.Bytes != 3<<30 {
+			t.Fatalf("recursos de %s = %+v", w.Path, w.Resources)
+		}
+	}
+	m := got[0].Worktrees[byPath[main]].Resources
+	if m.CPU != 4 || m.RSS != 300<<20 || m.Procs != 1 {
+		t.Fatalf("principal = %+v", m)
+	}
+	f := got[0].Worktrees[byPath[wt]].Resources
+	if f.CPU != 180 || f.Procs != 2 || len(f.Top) != 2 || f.Top[0].Comm != "node" || f.Top[1].PID != 21 {
+		t.Fatalf("ligado = %+v", f)
+	}
+	if n := got[0].Worktrees[byPath[nested]].Resources; n.Procs != 0 || n.Top == nil {
+		t.Fatalf("aninhado sem processos = %+v", n)
+	}
+	// O principal não conta o worktree aninhado dentro dele.
+	if ex := fr.disk[main]; len(ex) != 1 || ex[0] != nested {
+		t.Fatalf("exclusões do principal = %v", ex)
+	}
+	if ex := fr.disk[wt]; len(ex) != 0 {
+		t.Fatalf("exclusões do ligado = %v", ex)
+	}
+}
+
+func TestWorktreesResourcesNullWithoutReader(t *testing.T) {
+	a := worktreesAPI(t)
+	main, _ := gitRepoWithWorktree(t)
+	if _, err := a.st.CreateProject("api", main); err != nil {
+		t.Fatal(err)
+	}
+	got := decode[resourcesResp](t, a.do(t, "GET", "/api/worktrees", nil, 0))
+	for _, w := range got[0].Worktrees {
+		if w.Resources != nil {
+			t.Fatalf("sem leitor, resources deveria ser null: %+v", w.Resources)
+		}
 	}
 }

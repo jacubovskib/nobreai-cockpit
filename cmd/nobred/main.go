@@ -22,6 +22,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/demo"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
+	"github.com/nobretech/nobreai-cockpit/internal/resources"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -111,6 +112,9 @@ func run(dbPath string, seedDemo bool) error {
 	// As leituras de transcript em segundo plano terminam antes de st.Close
 	// (defers rodam em ordem inversa).
 	defer claudeAdapter.Wait()
+	// Recursos dos worktrees: processos a cada 5 s (só em memória) e disco
+	// medido em segundo plano, com cache de 10 min.
+	monitor := resources.Monitor{Sampler: resources.NewSampler("/proc", time.Now), Meter: resources.NewDiskMeter(10*time.Minute, time.Now)}
 	handler := api.New(st, api.Deps{
 		Now:         time.Now,
 		ProcRoot:    "/proc",
@@ -119,6 +123,7 @@ func run(dbPath string, seedDemo bool) error {
 		Hub:         hub,
 		Adapters:    map[string]adapter.Adapter{"claude": claudeAdapter},
 		SessionPATH: sessionPATH,
+		Resources:   monitor,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.
@@ -137,6 +142,8 @@ func run(dbPath string, seedDemo bool) error {
 	// Em qualquer retorno (inclusive falha precoce do servidor) o reconciliador
 	// para e termina antes de st.Close (defers rodam em ordem inversa).
 	defer func() { stop(); <-recDone }()
+	go monitor.Sampler.Run(ctx, 5*time.Second)
+	go monitor.Meter.Run(ctx)
 
 	errc := make(chan error, 1)
 	go func() {
