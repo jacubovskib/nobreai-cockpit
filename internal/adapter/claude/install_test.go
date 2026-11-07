@@ -126,13 +126,71 @@ func TestInstallFromNewPathReplacesOld(t *testing.T) {
 }
 
 func TestInstallInvalidJSONAborts(t *testing.T) {
-	p := writeSettings(t, `{`)
-	_, err := InstallHooks(p, bin)
-	if err == nil || err.Error() != "~/.claude/settings.json não é um JSON válido; nada foi alterado" {
+	for _, bad := range []string{`{`, `{"a":1}}`, `{"a":1}]`, `[1]`, `null`} {
+		p := writeSettings(t, bad)
+		_, err := InstallHooks(p, bin)
+		if err == nil || err.Error() != "~/.claude/settings.json não é um JSON válido; nada foi alterado" {
+			t.Fatalf("%q: err = %v", bad, err)
+		}
+		if string(mustRead(t, p)) != bad || len(backups(t, p)) != 0 {
+			t.Fatalf("%q: alterou o arquivo ou criou backup", bad)
+		}
+	}
+}
+
+func TestInstallKeepsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dotfiles", "settings.json")
+	os.MkdirAll(filepath.Dir(target), 0o755)
+	os.WriteFile(target, []byte(`{"model":"opus"}`), 0o600)
+	link := filepath.Join(dir, "settings.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallHooks(link, bin); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Lstat(link); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("o link simbólico foi substituído")
+	}
+	if len(readHooks(t, target)) != len(hookEvents) {
+		t.Fatal("o destino não recebeu os hooks")
+	}
+}
+
+func TestInstallKeepsShellOperatorsReadable(t *testing.T) {
+	cmd := `a && b 2>/dev/null <in | c`
+	p := writeSettings(t, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"a && b 2>/dev/null <in | c"}]}]}}`)
+	if _, err := InstallHooks(p, bin); err != nil {
+		t.Fatal(err)
+	}
+	b := string(mustRead(t, p))
+	if !strings.Contains(b, `"command": "`+cmd+`"`) || strings.Contains(b, `\u00`) {
+		t.Fatalf("comando alterado: %s", b)
+	}
+}
+
+func TestBackupNameCollisionGetsSuffix(t *testing.T) {
+	p := writeSettings(t, `{"model":"opus"}`)
+	now := time.Date(2026, 11, 7, 13, 4, 5, 0, time.UTC)
+	os.WriteFile(p+".bak-20261107130405", []byte("antigo"), 0o600)
+	rep, err := installHooks(p, bin, now, true)
+	if err != nil || rep.Backup != p+".bak-20261107130405-1" {
+		t.Fatalf("%v %q", err, rep.Backup)
+	}
+	if string(mustRead(t, p+".bak-20261107130405")) != "antigo" {
+		t.Fatal("sobrescreveu backup existente")
+	}
+}
+
+func TestEmptyPathsAreNotConfigured(t *testing.T) {
+	e := newEnv(t)
+	if _, err := e.a.Install(); err == nil || err.Error() != "caminhos não configurados" {
 		t.Fatalf("err = %v", err)
 	}
-	if string(mustRead(t, p)) != "{" || len(backups(t, p)) != 0 {
-		t.Fatal("alterou o arquivo ou criou backup")
+	d := e.a.Detect()
+	if d.Found || len(d.Checks) != 1 || d.Checks[0].Detail != "caminhos não configurados" {
+		t.Fatalf("%+v", d)
 	}
 }
 

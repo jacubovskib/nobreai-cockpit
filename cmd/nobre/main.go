@@ -82,6 +82,10 @@ func (c *cli) run(args []string) int {
 	if cmd == "hook" {
 		return c.hook(rest)
 	}
+	if wantsHelp(rest) {
+		fmt.Fprint(c.out, helpFor(cmd))
+		return 0
+	}
 	var err error
 	switch cmd {
 	case "start":
@@ -144,11 +148,17 @@ func ctx() context.Context { return context.Background() }
 // argumento que não é uma flag declarada é texto: "- item" e "-x" ficam como
 // posicionais; só "--nome" desconhecido é erro (provável erro de digitação,
 // use "--" para um texto que comece assim). Sem flags declaradas, tudo é
-// texto (nobre note "--x"), salvo um "--" inicial, que é descartado.
+// texto (nobre note "--x"), salvo um "--" inicial (só o inicial), que é descartado.
 func (c *cli) parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	fs.SetOutput(io.Discard)
 	known := map[string]*flag.Flag{}
 	fs.VisitAll(func(f *flag.Flag) { known[f.Name] = f })
+	if len(known) == 0 {
+		if len(args) > 0 && args[0] == "--" {
+			args = args[1:]
+		}
+		return append([]string(nil), args...), nil
+	}
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -156,7 +166,7 @@ func (c *cli) parse(fs *flag.FlagSet, args []string) ([]string, error) {
 			pos = append(pos, args[i+1:]...)
 			break
 		}
-		if len(known) == 0 || len(a) < 2 || a[0] != '-' {
+		if len(a) < 2 || a[0] != '-' {
 			pos = append(pos, a)
 			continue
 		}
@@ -195,3 +205,30 @@ func (c *cli) parse(fs *flag.FlagSet, args []string) ([]string, error) {
 var flagName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
 
 func joinText(pos []string) string { return strings.TrimSpace(strings.Join(pos, " ")) }
+
+// wantsHelp diz se há -h/--help antes de um "--" (depois dele é texto).
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--":
+			return false
+		case "-h", "--help", "-help":
+			return true
+		}
+	}
+	return false
+}
+
+// helpFor devolve as linhas de uso do comando, tiradas do texto de usage.
+func helpFor(cmd string) string {
+	var b strings.Builder
+	for _, l := range strings.Split(usage, "\n") {
+		if t := strings.TrimSpace(l); t == "nobre "+cmd || strings.HasPrefix(t, "nobre "+cmd+" ") {
+			b.WriteString("  " + t + "\n")
+		}
+	}
+	if b.Len() == 0 {
+		return usage
+	}
+	return "Uso:\n" + b.String()
+}

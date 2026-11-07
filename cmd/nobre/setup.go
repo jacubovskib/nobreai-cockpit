@@ -163,7 +163,8 @@ func (c *cli) setupService(d *setupDeps, dry bool, l *checklist) {
 		l.ok("[dry-run] Rodaria: systemctl --user enable --now nobred")
 		return
 	}
-	if string(cur) == want {
+	changed := string(cur) != want
+	if !changed {
 		l.ok("Unidade %s já está atualizada", unit)
 	} else if err := os.MkdirAll(d.UnitDir, 0o755); err != nil {
 		l.bad("Unidade do systemd: %v", err)
@@ -179,6 +180,15 @@ func (c *cli) setupService(d *setupDeps, dry bool, l *checklist) {
 			l.bad("systemctl %s: %v", strings.Join(args, " "), err)
 			return
 		}
+	}
+	// Unidade alterada com o daemon já rodando: enable --now não o reinicia.
+	if changed && len(cur) > 0 {
+		if err := d.Run("systemctl", "--user", "restart", "nobred"); err != nil {
+			l.bad("systemctl --user restart nobred: %v", err)
+			return
+		}
+		l.ok("Daemon nobred reiniciado para usar a unidade nova")
+		return
 	}
 	l.ok("Daemon nobred ativo (systemctl --user enable --now nobred)")
 }

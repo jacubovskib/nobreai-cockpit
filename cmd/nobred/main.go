@@ -99,6 +99,7 @@ func run(dbPath string, seedDemo bool) error {
 	hub := api.NewHub()
 	git := gitinfo.Exec{}
 	claudeAdapter := claude.New(st, adapter.Deps{Now: time.Now, Git: git, Publish: hub.Publish})
+	claudeAdapter.SetPaths(claude.DefaultPaths())
 	// As leituras de transcript em segundo plano terminam antes de st.Close
 	// (defers rodam em ordem inversa).
 	defer claudeAdapter.Wait()

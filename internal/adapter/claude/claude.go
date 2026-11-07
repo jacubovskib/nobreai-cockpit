@@ -26,12 +26,13 @@ type Adapter struct {
 
 var _ adapter.Adapter = (*Adapter)(nil)
 
-// New cria o adaptador. deps.Now nil vira time.Now; Git e Publish podem ser nil.
+// New cria o adaptador sem caminhos de instalação (use SetPaths; o nobred usa
+// DefaultPaths). New. deps.Now nil vira time.Now; Git e Publish podem ser nil.
 func New(st *store.Store, deps adapter.Deps) *Adapter {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &Adapter{st: st, deps: deps, paths: DefaultPaths()}
+	return &Adapter{st: st, deps: deps}
 }
 
 func (a *Adapter) Name() string { return "claude" }

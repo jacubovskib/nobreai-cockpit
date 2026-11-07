@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,21 +37,30 @@ func DefaultPaths() Paths {
 		}
 		sib := filepath.Join(filepath.Dir(exe), "nobre")
 		if st, err := os.Stat(sib); err == nil && !st.IsDir() {
-			p.NobreBin = sib
+			p.NobreBin = resolveLinks(sib)
 		}
 	}
 	if p.NobreBin == "" {
 		if lp, err := exec.LookPath("nobre"); err == nil {
 			if abs, err := filepath.Abs(lp); err == nil {
-				p.NobreBin = abs
+				p.NobreBin = resolveLinks(abs)
 			}
 		}
 	}
 	return p
 }
 
+func resolveLinks(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
 func cliVersion(bin string) string {
-	out, err := exec.Command(bin, "--version").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "--version").Output()
 	if err != nil {
 		return ""
 	}
@@ -76,7 +86,11 @@ func (a *Adapter) cliPath() string {
 // Detect monta o checklist de saúde do Claude Code: CLI, hooks, skill e
 // eventos recebidos.
 func (a *Adapter) Detect() adapter.Detection {
-	d := adapter.Detection{}
+	d := adapter.Detection{Checks: []adapter.Check{}}
+	if a.paths.SettingsPath == "" && a.paths.SkillsDir == "" {
+		d.Checks = append(d.Checks, adapter.Check{Key: "paths", Label: "Caminhos", Detail: msgNoPaths})
+		return d
+	}
 	cli := a.cliPath()
 	d.Found = cli != ""
 	d.Path = cli

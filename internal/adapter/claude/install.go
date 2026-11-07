@@ -27,6 +27,8 @@ var hookEvents = []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "Pos
 
 const hookTimeout = 10
 
+const msgNoPaths = "caminhos não configurados"
+
 // ErrInvalidSettings é devolvido quando settings.json existe mas não é JSON
 // válido: nada é escrito.
 var ErrInvalidSettings = errors.New("~/.claude/settings.json não é um JSON válido; nada foi alterado")
@@ -52,6 +54,9 @@ func loadSettings(path string) (root map[string]any, raw []byte, exists bool, er
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return map[string]any{}, raw, true, nil
+	}
+	if !json.Valid(raw) {
+		return nil, raw, true, ErrInvalidSettings
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -230,17 +235,20 @@ func installHooks(settingsPath, nobreBin string, now time.Time, write bool) (ada
 		return rep, nil
 	}
 	if exists && len(bytes.TrimSpace(raw)) > 0 {
-		bak := settingsPath + ".bak-" + now.Format("20060102150405")
-		if err := os.WriteFile(bak, raw, 0o600); err != nil {
+		bak, err := writeBackup(settingsPath+".bak-"+now.Format("20060102150405"), raw)
+		if err != nil {
 			return rep, err
 		}
 		rep.Backup = bak
 	}
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(root); err != nil {
 		return rep, err
 	}
-	if err := writeFileAtomic(settingsPath, append(out, '\n')); err != nil {
+	if err := writeFileAtomic(settingsPath, buf.Bytes()); err != nil {
 		return rep, err
 	}
 	rep.Messages = append(rep.Messages, "Hooks instalados em "+strings.Join(changed, ", ")+".")
@@ -250,7 +258,34 @@ func installHooks(settingsPath, nobreBin string, now time.Time, write bool) (ada
 	return rep, nil
 }
 
+// writeBackup cria o backup com O_EXCL; se o nome existe, acrescenta -1, -2...
+func writeBackup(name string, data []byte) (string, error) {
+	for i := 0; ; i++ {
+		n := name
+		if i > 0 {
+			n = fmt.Sprintf("%s-%d", name, i)
+		}
+		f, err := os.OpenFile(n, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, werr := f.Write(data)
+		if cerr := f.Close(); werr == nil {
+			werr = cerr
+		}
+		return n, werr
+	}
+}
+
+// writeFileAtomic escreve em path; se for um link simbólico, escreve no
+// destino e o link sobrevive.
 func writeFileAtomic(path string, data []byte) error {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -303,6 +338,9 @@ func InstallSkill(dir string) error {
 // Install instala hooks e skill com os caminhos do adaptador.
 func (a *Adapter) Install() (adapter.InstallReport, error) {
 	p := a.paths
+	if p.SettingsPath == "" || p.SkillsDir == "" {
+		return adapter.InstallReport{}, errors.New(msgNoPaths)
+	}
 	if p.NobreBin == "" {
 		return adapter.InstallReport{}, errors.New("não achei o binário nobre (coloque-o ao lado do nobred ou no PATH)")
 	}

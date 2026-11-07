@@ -121,3 +121,45 @@ func TestDashLeadingTextIsNotAFlag(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestHelpFlagPrintsCommandUsage(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { t.Errorf("API não deveria ser chamada") })
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"start", "-h"}, "nobre start"},
+		{[]string{"note", "--help"}, "nobre note"},
+		{[]string{"decide", "x", "-h"}, "nobre decide"},
+		{[]string{"todo", "--help"}, "nobre todo add"},
+		{[]string{"setup", "-h"}, "nobre setup"},
+	} {
+		r := runCLI(t, addr, "", nil, c.args...)
+		if r.code != 0 || !strings.Contains(r.stdout, "Uso:") || !strings.Contains(r.stdout, c.want) || strings.Contains(r.stdout, "nobre ui") {
+			t.Fatalf("%v: %+v", c.args, r)
+		}
+	}
+}
+
+func TestOnlyLeadingDoubleDashConsumedInSimple(t *testing.T) {
+	var last string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bs, _ := json.Marshal(b)
+		last = string(bs)
+		w.Write([]byte(`{}`))
+	})
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"note", "--", "-- x"}, `{"text":"-- x"}`},
+		{[]string{"note", "antes", "--", "depois"}, `{"text":"antes -- depois"}`},
+		{[]string{"note", "--", "-h"}, `{"text":"-h"}`},
+	} {
+		if r := runCLI(t, addr, "", nil, c.args...); r.code != 0 || last != c.want {
+			t.Fatalf("%v: %+v last=%q", c.args, r, last)
+		}
+	}
+}

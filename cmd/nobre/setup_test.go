@@ -171,3 +171,26 @@ func TestSetupNobredMissing(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestSetupRestartsDaemonWhenUnitChanged(t *testing.T) {
+	e := newSetupEnv(t)
+	cwd := t.TempDir()
+	e.run(t, "127.0.0.1:1", "", cwd)
+	for _, r := range e.ran {
+		if r[2] == "restart" {
+			t.Fatalf("primeira instalação não reinicia: %v", e.ran)
+		}
+	}
+	e.ran = nil
+	e.run(t, "127.0.0.1:1", "", cwd)
+	if len(e.ran) != 2 {
+		t.Fatalf("unidade igual: %v", e.ran)
+	}
+	e.ran = nil
+	e.d.NobredBin = "/opt/y/bin/nobred"
+	r := e.run(t, "127.0.0.1:1", "", cwd)
+	last := e.ran[len(e.ran)-1]
+	if r.code != 0 || strings.Join(last, " ") != "systemctl --user restart nobred" {
+		t.Fatalf("%+v ran=%v", r, e.ran)
+	}
+}
