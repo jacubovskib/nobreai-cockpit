@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -25,9 +26,26 @@ import (
 const (
 	detachKey      = 0x1d // Ctrl+]
 	msgNoPlatform  = "NobreAI Cockpit fora do ar: rodando sem a plataforma"
-	msgRunStopped  = "NobreAI Cockpit parou: a sessão do agente foi encerrada."
+	msgDaemonEnded = "O NobreAI Cockpit parou e encerrou a sessão; retome com `claude --continue` no mesmo diretório."
+	msgKilled      = "O agente foi encerrado pela plataforma."
 	runCreateLimit = 5 * time.Second
+	runKillLimit   = 2 * time.Second
 )
+
+// kittyDetach é Ctrl+] no protocolo de teclado do kitty (CSI u), que o agente
+// pode ter ligado no terminal local.
+var kittyDetach = []byte("\x1b[93;5u")
+
+// detachIndex devolve a posição da primeira tecla de soltar (Ctrl+] cru ou
+// CSI u) no bloco lido, ou -1. Uma sequência partida entre duas leituras não
+// é reconhecida.
+func detachIndex(b []byte) int {
+	i := bytes.IndexByte(b, detachKey)
+	if j := bytes.Index(b, kittyDetach); j >= 0 && (i < 0 || j < i) {
+		i = j
+	}
+	return i
+}
 
 var resumeKeyRe = regexp.MustCompile(`^NAC-[0-9]+$`)
 
@@ -120,7 +138,7 @@ func (c *cli) runAgent(args []string) (code int) {
 	agent, rest := args[0], args[1:]
 	rd := c.runDeps()
 	if !rd.isTTY() { // pipes: transparente, sem plataforma e sem aviso
-		return c.runDirect(rd, agent, rest, nil, false)
+		return c.runDirect(rd, agent, rest, "")
 	}
 	dir, err := c.cwd()
 	if err != nil {
@@ -145,20 +163,24 @@ func (c *cli) runAgent(args []string) (code int) {
 	err = cl.Do(cctx, "POST", "/api/terminals", body, &info)
 	cancel()
 	if err != nil {
-		return c.runDirect(rd, agent, rest, err, true)
+		return c.runDirect(rd, agent, rest, platformWarning(err))
+	}
+	termPath := "/api/terminals/" + url.PathEscape(info.ID)
+	killAgent := func(limit time.Duration) error {
+		dctx, dcancel := context.WithTimeout(context.Background(), limit)
+		defer dcancel()
+		return cl.Do(dctx, "DELETE", termPath, nil, nil)
 	}
 
 	wctx, wcancel := context.WithCancel(context.Background())
 	defer wcancel()
-	conn, _, err := websocket.Dial(wctx, "ws://"+c.addr()+"/api/terminals/"+url.PathEscape(info.ID)+"/ws", nil)
+	conn, _, err := websocket.Dial(wctx, "ws://"+c.addr()+termPath+"/ws", nil)
 	if err != nil {
 		// Terminal criado mas sem conexão: desfaz para não deixar um agente órfão.
-		dctx, dcancel := context.WithTimeout(context.Background(), runCreateLimit)
-		if derr := cl.Do(dctx, "DELETE", "/api/terminals/"+url.PathEscape(info.ID), nil, nil); derr != nil {
+		if derr := killAgent(runCreateLimit); derr != nil {
 			fmt.Fprintf(c.err, "não consegui desfazer o terminal %s: %v\n", info.ID, derr)
 		}
-		dcancel()
-		return c.runDirect(rd, agent, rest, err, true)
+		return c.runDirect(rd, agent, rest, refusedWarning(err.Error()))
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(1 << 20)
@@ -197,7 +219,11 @@ func (c *cli) runAgent(args []string) (code int) {
 			fatal <- r
 		}
 	}
-	exitCode := make(chan int, 1)
+	type exitMsg struct {
+		Code   int    `json:"code"`
+		Reason string `json:"reason"`
+	}
+	exited := make(chan exitMsg, 1)
 	readDone := make(chan struct{})
 	go func() { // saída do agente -> stdout
 		defer close(readDone)
@@ -213,10 +239,13 @@ func (c *cli) runAgent(args []string) (code int) {
 			}
 			var m struct {
 				Type string `json:"type"`
-				Code int    `json:"code"`
+				exitMsg
 			}
 			if json.Unmarshal(data, &m) == nil && m.Type == "exit" {
-				exitCode <- m.Code
+				select {
+				case exited <- m.exitMsg:
+				default:
+				}
 			}
 		}
 	}()
@@ -229,7 +258,7 @@ func (c *cli) runAgent(args []string) (code int) {
 			n, err := c.in.Read(buf)
 			if n > 0 {
 				data := buf[:n]
-				if i := bytes.IndexByte(data, detachKey); i >= 0 {
+				if i := detachIndex(data); i >= 0 {
 					if i > 0 {
 						conn.Write(wctx, websocket.MessageBinary, data[:i])
 					}
@@ -251,21 +280,13 @@ func (c *cli) runAgent(args []string) (code int) {
 	sigs, stopSigs := rd.signals()
 	defer stopSigs()
 
-	// release solta só a conexão: o agente segue vivo na plataforma. O termios
-	// é restaurado antes do handshake de fechamento, que tem prazo curto.
-	release := func(code int) int {
-		leave(true)
-		fmt.Fprintf(c.err, "\ndesconectado; o agente segue na plataforma: http://%s/terminais\n", c.addr())
-		closed := make(chan struct{})
-		go func() { conn.Close(websocket.StatusNormalClosure, ""); close(closed) }()
-		select {
-		case <-closed:
-		case <-time.After(500 * time.Millisecond):
-			conn.CloseNow()
-		}
+	detachedMsg := fmt.Sprintf("desconectado; o agente segue na plataforma: http://%s/terminals?id=%s", c.addr(), url.QueryEscape(info.ID))
+	// hangUp corta a conexão e espera o leitor parar: depois dela nenhum byte
+	// do agente chega ao stdout, então o reset de leave fica por último.
+	hangUp := func() {
+		conn.CloseNow()
 		wcancel()
 		<-readDone
-		return code
 	}
 
 	for {
@@ -275,14 +296,25 @@ func (c *cli) runAgent(args []string) (code int) {
 				m, _ := json.Marshal(map[string]any{"type": "resize", "cols": w, "rows": h})
 				conn.Write(wctx, websocket.MessageText, m)
 			}
-		case <-detach:
-			return release(0)
+		case <-detach: // Ctrl+]: solta só o terminal local; o agente segue
+			hangUp()
+			leave(true)
+			fmt.Fprintf(c.err, "\n%s\n", detachedMsg)
+			return 0
 		case sig := <-sigs:
+			// Janela fechada (SIGHUP), kill (SIGTERM) ou SIGINT/SIGQUIT de fora
+			// (no modo raw o Ctrl+C vai como tecla): o agente morre junto.
 			n := 1
 			if ss, ok := sig.(syscall.Signal); ok {
 				n = int(ss)
 			}
-			return release(128 + n)
+			kerr := killAgent(runKillLimit)
+			hangUp()
+			leave(true)
+			if kerr != nil {
+				fmt.Fprintf(c.err, "\nnão consegui encerrar o agente (%v); ele segue na plataforma: http://%s/terminals?id=%s\n", kerr, c.addr(), url.QueryEscape(info.ID))
+			}
+			return 128 + n
 		case r := <-fatal:
 			fmt.Fprintf(c.err, "\nerro inesperado no nobre run: %v\n", r)
 			conn.CloseNow()
@@ -296,25 +328,47 @@ func (c *cli) runAgent(args []string) (code int) {
 			default:
 			}
 			select {
-			case n := <-exitCode:
-				leave(false)
-				return n
+			case m := <-exited:
+				// O agente pode ter deixado modos de TUI ligados se não saiu
+				// sozinho e limpo.
+				leave(m.Code >= 128 || m.Reason != pty.EndAgent)
+				switch m.Reason {
+				case pty.EndDaemon:
+					fmt.Fprintf(c.err, "\n%s\n", msgDaemonEnded)
+				case pty.EndKilled:
+					fmt.Fprintf(c.err, "\n%s\n", msgKilled)
+				}
+				return m.Code
 			default:
 			}
+			// Fechou sem mensagem de fim (cliente lento, queda da conexão): o
+			// agente segue no daemon.
 			leave(true)
-			fmt.Fprintf(c.err, "\n%s\n", msgRunStopped)
+			fmt.Fprintf(c.err, "\n%s\n", detachedMsg)
 			return 1
 		}
 	}
 }
 
-// runDirect roda o agente localmente (exec), sem a plataforma.
-func (c *cli) runDirect(rd *runDeps, agent string, args []string, cause error, warn bool) int {
-	if warn {
-		fmt.Fprintln(c.err, msgNoPlatform)
-		if ae, ok := cause.(*client.APIError); ok {
-			fmt.Fprintf(c.err, "(%s)\n", ae.Message)
-		}
+// platformWarning: "fora do ar" só quando não houve resposta do daemon; se
+// ele respondeu e recusou (409, 400…), mostra o motivo.
+func platformWarning(err error) string {
+	var ae *client.APIError
+	if errors.As(err, &ae) {
+		return refusedWarning(ae.Message)
+	}
+	return msgNoPlatform
+}
+
+func refusedWarning(reason string) string {
+	return "Não consegui abrir na plataforma (" + reason + "): rodando sem ela"
+}
+
+// runDirect roda o agente localmente (exec), sem a plataforma; warn (se não
+// vazio) vai para o stderr antes.
+func (c *cli) runDirect(rd *runDeps, agent string, args []string, warn string) int {
+	if warn != "" {
+		fmt.Fprintln(c.err, warn)
 	}
 	path, err := rd.lookPath(agent)
 	if err != nil {

@@ -37,6 +37,11 @@ type runEnv struct {
 
 func newRunEnv(t *testing.T, script string) *runEnv {
 	t.Helper()
+	return newRunEnvOpts(t, script, pty.Options{})
+}
+
+func newRunEnvOpts(t *testing.T, script string, opts pty.Options) *runEnv {
+	t.Helper()
 	bin := filepath.Join(t.TempDir(), "agent")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -48,7 +53,7 @@ func newRunEnv(t *testing.T, script string) *runEnv {
 	t.Cleanup(func() { st.Close() })
 	hub := api.NewHub()
 	t.Cleanup(hub.Close)
-	mgr := pty.NewManager(pty.Options{})
+	mgr := pty.NewManager(opts)
 	t.Cleanup(mgr.Close)
 	srv := httptest.NewServer(api.New(st, api.Deps{Hub: hub, Terminals: mgr,
 		Adapters: map[string]adapter.Adapter{"claude": binAdapter{bin: bin}}}))
@@ -190,7 +195,8 @@ func TestRunFallsBackOnCreateError(t *testing.T) {
 	})
 	h := newHarness(t, addr, strings.NewReader(""), true, nil)
 	h.c.run([]string{"run", "claude"})
-	if h.execPath == "" || !strings.Contains(h.err.String(), "fora do ar") || !strings.Contains(h.err.String(), "limite de terminais atingido") {
+	if h.execPath == "" || strings.Contains(h.err.String(), "fora do ar") ||
+		!strings.Contains(h.err.String(), "Não consegui abrir na plataforma (limite de terminais atingido): rodando sem ela") {
 		t.Fatalf("exec=%q stderr=%q", h.execPath, h.err.String())
 	}
 }
@@ -212,7 +218,7 @@ func TestRunDetachKey(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("não soltou")
 	}
-	if !strings.Contains(h.err.String(), "desconectado; o agente segue na plataforma: http://"+e.addr+"/terminais") {
+	if !strings.Contains(h.err.String(), "desconectado; o agente segue na plataforma: http://"+e.addr+"/terminals?id="+e.mgr.List()[0].ID) {
 		t.Fatalf("stderr = %q", h.err.String())
 	}
 	if h.restoredCount() != 1 || !strings.HasSuffix(h.out.String(), terminalReset) {
@@ -264,7 +270,8 @@ func TestRunDaemonStopsMidSession(t *testing.T) {
 	})
 	h := newHarness(t, addr, strings.NewReader(""), true, nil)
 	code := h.c.run([]string{"run", "claude"})
-	if code != 1 || !strings.Contains(h.err.String(), "NobreAI Cockpit parou") || !strings.Contains(h.out.String(), "meio") ||
+	if code != 1 || !strings.Contains(h.err.String(), "desconectado; o agente segue na plataforma: http://"+addr+"/terminals?id=t-1") ||
+		strings.Contains(h.err.String(), "parou") || !strings.Contains(h.out.String(), "meio") ||
 		!strings.HasSuffix(h.out.String(), terminalReset) || h.restoredCount() != 1 {
 		t.Fatalf("code=%d stderr=%q out=%q", code, h.err.String(), h.out.String())
 	}
@@ -279,7 +286,9 @@ func TestRunSkipsPlatformWithoutTTY(t *testing.T) {
 	}
 }
 
-func TestRunRestoresOnSignals(t *testing.T) {
+func TestRunSignalsKillAgentAndRestore(t *testing.T) {
+	// Fechar a janela (SIGHUP), kill (SIGTERM) ou SIGINT/SIGQUIT externos
+	// encerram o agente: só Ctrl+] solta sem matar.
 	for sig, want := range map[syscall.Signal]int{syscall.SIGINT: 130, syscall.SIGQUIT: 131, syscall.SIGHUP: 129, syscall.SIGTERM: 143} {
 		e := newRunEnv(t, `echo ready; exec cat`)
 		pr, pw := io.Pipe()
@@ -294,10 +303,111 @@ func TestRunRestoresOnSignals(t *testing.T) {
 		if h.restoredCount() != 1 || !strings.HasSuffix(h.out.String(), terminalReset) {
 			t.Fatalf("%v: restaurado=%d out=%q", sig, h.restoredCount(), h.out.String())
 		}
-		if l := e.mgr.List(); len(l) != 1 || l[0].ExitCode != nil {
-			t.Fatalf("%v: agente deveria seguir vivo", sig)
+		waitFor(t, "agente encerrado", func() bool {
+			l := e.mgr.List()
+			return len(l) == 1 && l[0].ExitCode != nil && l[0].EndReason == "killed"
+		})
+		pw.Close()
+	}
+}
+
+// chatty é um agente que escreve sem parar.
+const chatty = `echo ready; while :; do echo tique; done`
+
+func TestRunDetachNoAgentBytesAfterReset(t *testing.T) {
+	for i := 0; i < 3; i++ {
+		e := newRunEnv(t, chatty)
+		pr, pw := io.Pipe()
+		h := newHarness(t, e.addr, pr, true, nil)
+		done := make(chan int, 1)
+		go func() { done <- h.c.run([]string{"run", "claude"}) }()
+		waitFor(t, "agente pronto", func() bool { return strings.Count(h.out.String(), "tique") > 5 })
+		pw.Write([]byte{0x1d})
+		if code := <-done; code != 0 {
+			t.Fatalf("code = %d", code)
+		}
+		out := h.out.String()
+		time.Sleep(50 * time.Millisecond)
+		if !strings.HasSuffix(out, terminalReset) || h.out.String() != out {
+			t.Fatalf("bytes do agente depois do reset: %q", out[max(0, len(out)-80):])
 		}
 		pw.Close()
+	}
+}
+
+func TestRunDetachKittyKey(t *testing.T) {
+	e := newRunEnv(t, `echo ready; exec cat`)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	h := newHarness(t, e.addr, pr, true, nil)
+	done := make(chan int, 1)
+	go func() { done <- h.c.run([]string{"run", "claude"}) }()
+	waitFor(t, "agente pronto", func() bool { return strings.Contains(h.out.String(), "ready") })
+	pw.Write([]byte("\x1b[93;5u")) // Ctrl+] no protocolo de teclado do kitty
+	select {
+	case code := <-done:
+		if code != 0 || !strings.Contains(h.err.String(), "desconectado; o agente segue na plataforma") {
+			t.Fatalf("code=%d stderr=%q", code, h.err.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("não soltou")
+	}
+	if l := e.mgr.List(); len(l) != 1 || l[0].ExitCode != nil {
+		t.Fatalf("o agente deveria seguir vivo: %+v", l)
+	}
+}
+
+func TestRunDaemonShutdownEndsSession(t *testing.T) {
+	e := newRunEnv(t, `echo ready; exec cat`)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	h := newHarness(t, e.addr, pr, true, nil)
+	done := make(chan int, 1)
+	go func() { done <- h.c.run([]string{"run", "claude"}) }()
+	waitFor(t, "agente pronto", func() bool { return strings.Contains(h.out.String(), "ready") })
+	go e.mgr.Close() // o nobred parando
+	code := <-done
+	if code != 143 || !strings.Contains(h.err.String(), "O NobreAI Cockpit parou e encerrou a sessão; retome com `claude --continue` no mesmo diretório.") ||
+		!strings.HasSuffix(h.out.String(), terminalReset) || h.restoredCount() != 1 {
+		t.Fatalf("code=%d stderr=%q out=%q", code, h.err.String(), h.out.String())
+	}
+}
+
+func TestRunKilledFromPlatform(t *testing.T) {
+	e := newRunEnv(t, `echo ready; exec cat`)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	h := newHarness(t, e.addr, pr, true, nil)
+	done := make(chan int, 1)
+	go func() { done <- h.c.run([]string{"run", "claude"}) }()
+	waitFor(t, "agente pronto", func() bool { return strings.Contains(h.out.String(), "ready") })
+	_ = e.mgr.Kill(e.mgr.List()[0].ID)
+	if code := <-done; code != 143 || !strings.Contains(h.err.String(), "encerrado pela plataforma") || !strings.HasSuffix(h.out.String(), terminalReset) {
+		t.Fatalf("code=%d stderr=%q", code, h.err.String())
+	}
+}
+
+func TestRunAgentSignalExitResets(t *testing.T) {
+	e := newRunEnv(t, `kill -9 $$`)
+	h := newHarness(t, e.addr, strings.NewReader(""), true, nil)
+	if code := h.c.run([]string{"run", "claude"}); code != 137 || !strings.HasSuffix(h.out.String(), terminalReset) {
+		t.Fatalf("code=%d out=%q", code, h.out.String())
+	}
+}
+
+func TestRunSlowClientDisconnectsWithoutKilling(t *testing.T) {
+	e := newRunEnvOpts(t, `sleep 0.5; printf '%080d' 0; sleep 30`, pty.Options{SubLimit: 16})
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	h := newHarness(t, e.addr, pr, true, nil)
+	code := h.c.run([]string{"run", "claude"})
+	id := e.mgr.List()[0].ID
+	if code != 1 || !strings.Contains(h.err.String(), "desconectado; o agente segue na plataforma: http://"+e.addr+"/terminals?id="+id) ||
+		!strings.HasSuffix(h.out.String(), terminalReset) {
+		t.Fatalf("code=%d stderr=%q", code, h.err.String())
+	}
+	if l := e.mgr.List(); l[0].ExitCode != nil {
+		t.Fatalf("não deveria matar o agente: %+v", l)
 	}
 }
 
