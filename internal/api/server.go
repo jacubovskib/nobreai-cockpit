@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -56,7 +58,47 @@ func New(st *store.Store, deps Deps) http.Handler {
 	s.configRoutes(mux)
 	s.promptRoutes(mux)
 	s.usageRoutes(mux)
-	return mux
+	return localOnly(mux)
+}
+
+// localOnly protege a API local contra DNS rebinding e CSRF:
+//   - Host precisa ser 127.0.0.1:<porta> ou localhost:<porta>, onde <porta> é
+//     a porta em que o servidor escuta (lida de http.LocalAddrContextKey).
+//     Sem endereço local no contexto (handler chamado direto, como nos
+//     testes com httptest.NewRecorder) qualquer porta é aceita.
+//   - Requisição com corpo, fora GET/HEAD, precisa de Content-Type
+//     application/json: formulários e text/plain de outro site não passam
+//     sem preflight de CORS, que a API não responde.
+//
+// O proxy do Vite em desenvolvimento precisa de changeOrigin para que o Host
+// chegue como 127.0.0.1:7420.
+func localOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !allowedHost(r) {
+			writeError(w, http.StatusForbidden, "host não permitido")
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.ContentLength != 0 {
+			mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || mt != "application/json" {
+				writeError(w, http.StatusUnsupportedMediaType, "use Content-Type: application/json")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func allowedHost(r *http.Request) bool {
+	host, port, err := net.SplitHostPort(r.Host)
+	if err != nil || (host != "127.0.0.1" && host != "localhost") {
+		return false
+	}
+	if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+		_, localPort, err := net.SplitHostPort(addr.String())
+		return err == nil && port == localPort
+	}
+	return port != ""
 }
 
 func (s *server) now() time.Time { return s.deps.Now() }

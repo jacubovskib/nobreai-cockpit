@@ -157,7 +157,7 @@ func moveCardTx(tx *sql.Tx, cardID int64, ev domain.Transition) error {
 }
 
 // AttachSession liga a sessão ao card, move o card para em_andamento e copia
-// para o card os eventos já capturados da sessão. Se a sessão já terminou, o
+// para o card os eventos da sessão ainda sem card. Se a sessão já terminou, o
 // card vai para pausado (nunca em_andamento sem dono vivo). Se a sessão viva
 // estava em outro card e ele fica sem dono vivo, esse card também pausa. Se
 // outra sessão viva é dona do card devolve ErrCardBusy, a menos que force (a
@@ -210,7 +210,9 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 			}
 		}
 	}
-	if _, err := tx.Exec(`UPDATE events SET card_id=? WHERE session_id=?`, cardID, sessionID); err != nil {
+	// Só os eventos ainda sem card vêm junto: o que a sessão fez num card
+	// anterior continua no histórico dele.
+	if _, err := tx.Exec(`UPDATE events SET card_id=? WHERE session_id=? AND card_id IS NULL`, cardID, sessionID); err != nil {
 		return err
 	}
 	if err := moveCardTx(tx, cardID, domain.SessionAttached); err != nil {

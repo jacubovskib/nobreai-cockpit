@@ -304,8 +304,28 @@ func TestReattachMovesPreviousCardToPaused(t *testing.T) {
 	if got, _ := s.GetCard(c1.Key); got.Column != domain.EmAndamento {
 		t.Fatalf("c1 = %s", got.Column)
 	}
+	edit := func(path string) {
+		t.Helper()
+		data, _ := json.Marshal(map[string]string{"path": path})
+		if err := s.AddEvent(domain.Event{SessionID: "claude:a", Kind: domain.EvFileEdit, Data: data, At: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	edit("antes.go")
+	before, err := s.TouchedFiles(c1.ID)
+	if err != nil || len(before) != 1 {
+		t.Fatalf("before = %+v, %v", before, err)
+	}
 	if err := s.AttachSession("claude:a", c2.Key, false); err != nil {
 		t.Fatal(err)
+	}
+	edit("depois.go")
+	// eventos de antes da troca ficam no card anterior; os novos vão para o novo
+	if after, _ := s.TouchedFiles(c1.ID); len(after) != 1 || after[0] != before[0] {
+		t.Fatalf("c1 touched = %+v, want %+v", after, before)
+	}
+	if b, _ := s.TouchedFiles(c2.ID); len(b) != 1 || b[0].Path != "depois.go" {
+		t.Fatalf("c2 touched = %+v", b)
 	}
 	if got, _ := s.GetCard(c1.Key); got.Column != domain.Pausado {
 		t.Fatalf("c1 = %s, want pausado", got.Column)

@@ -44,6 +44,10 @@ func (a *testAPI) do(t *testing.T, method, path string, body any, pid int) *http
 		}
 	}
 	req := httptest.NewRequest(method, path, &buf)
+	req.Host = "127.0.0.1:7420"
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if pid > 0 {
 		req.Header.Set("X-Nobre-Agent-PID", strconv.Itoa(pid))
 	}
