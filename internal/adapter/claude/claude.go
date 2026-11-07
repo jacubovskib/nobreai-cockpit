@@ -4,7 +4,6 @@
 package claude
 
 import (
-	"errors"
 	"sync"
 	"time"
 
@@ -43,13 +42,6 @@ func (a *Adapter) LaunchCommand(initialPrompt string) []string {
 
 // Wait espera as leituras de transcript em andamento (desligamento e testes).
 func (a *Adapter) Wait() { a.wg.Wait() }
-
-// Detect e Install ficam para a Task 10 (setup automático do Claude Code).
-func (a *Adapter) Detect() adapter.Detection { return adapter.Detection{} }
-
-func (a *Adapter) Install() (adapter.InstallReport, error) {
-	return adapter.InstallReport{}, errors.New("instalação automática do Claude Code ainda não disponível")
-}
 
 func (a *Adapter) publish(kinds ...string) {
 	if a.deps.Publish == nil {
