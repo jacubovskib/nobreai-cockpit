@@ -232,6 +232,8 @@ export interface Worktree {
   detached: boolean
   locked: boolean
   prunable: boolean
+  lock_reason: string
+  prune_reason: string
   sessions: WorktreeSession[]
   // cards: cards não concluídos cujo branch é o do worktree.
   cards: CardRef[]
@@ -263,4 +265,35 @@ export interface ProjectWorktrees {
   worktrees: Worktree[]
   // orphans: sessões não encerradas cujo worktree não existe mais.
   orphans: WorktreeSession[]
+}
+
+// GET /api/worktrees/detail?project=&path=
+export interface ProcDetail extends ProcUsage { cwd: string }
+export interface FileChange { path: string; code: string }
+export interface GitCommit { hash: string; subject: string; author: string; at: string }
+export interface GitDetail {
+  staged: number
+  modified: number
+  untracked: number
+  conflicts: number
+  total_files: number
+  files: FileChange[]
+  commits: GitCommit[]
+  // base: branch do worktree principal; compared falso = sem comparação (principal ou HEAD destacado).
+  base: string
+  compared: boolean
+  ahead: number
+  behind: number
+  error: string
+}
+export interface WorktreeSessionDetail extends WorktreeSession { usage: Total; unpriced: boolean }
+export interface WorktreeEvent { id: number; session_id: string; agent: string; kind: string; text: string; at: string }
+export interface WorktreeDetail {
+  project: Project
+  worktree: Worktree
+  processes: ProcDetail[]
+  git: GitDetail | null
+  sessions: WorktreeSessionDetail[]
+  cards: CardRef[]
+  events: WorktreeEvent[]
 }

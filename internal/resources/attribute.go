@@ -32,6 +32,9 @@ type Usage struct {
 	RSS   int64   `json:"rss_bytes"`
 	Procs int     `json:"procs"`
 	Top   []Proc  `json:"top"`
+	// All são todos os processos do worktree, do que mais consome para o
+	// que menos (fora do JSON da lista; o detalhe expõe).
+	All []Proc `json:"-"`
 }
 
 // Attribute soma o consumo por worktree. Cada processo conta para o worktree
@@ -85,6 +88,7 @@ func Attribute(procs []Proc, paths []string) map[string]Usage {
 			return ps[i].RSS > ps[j].RSS
 		})
 		u := out[w]
+		u.All = ps
 		u.Top = ps[:min(len(ps), MaxTop)]
 		out[w] = u
 	}

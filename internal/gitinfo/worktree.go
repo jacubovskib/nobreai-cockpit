@@ -27,6 +27,9 @@ type Worktree struct {
 	Detached bool   `json:"detached"`
 	Locked   bool   `json:"locked"`
 	Prunable bool   `json:"prunable"`
+	// LockReason e PruneReason são os motivos que o git informa (podem ser vazios).
+	LockReason  string `json:"lock_reason"`
+	PruneReason string `json:"prune_reason"`
 }
 
 // WorktreeReader consulta worktrees. Fica fora de GitInfo para que quem não
@@ -90,9 +93,9 @@ func parseWorktrees(out string) []Worktree {
 			case "detached":
 				w.Detached = true
 			case "locked":
-				w.Locked = true
+				w.Locked, w.LockReason = true, val
 			case "prunable":
-				w.Prunable = true
+				w.Prunable, w.PruneReason = true, val
 			}
 		}
 		if w.Path == "" {

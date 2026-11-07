@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -459,13 +460,37 @@ func (s *Store) RecentEvents(limit int) ([]domain.Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	return scanEvents(rows)
+}
+
+// SessionEvents devolve os eventos mais recentes das sessões dadas, do mais
+// novo para o mais antigo.
+func (s *Store) SessionEvents(ids []string, limit int) ([]domain.Event, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(ids)+1)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	args = append(args, limit)
+	rows, err := s.DB.Query(`SELECT id, session_id, card_id, kind, data, at FROM events
+		WHERE session_id IN (?`+strings.Repeat(",?", len(ids)-1)+`) ORDER BY id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return scanEvents(rows)
+}
+
+func scanEvents(rows *sql.Rows) ([]domain.Event, error) {
 	defer rows.Close()
 	var out []domain.Event
 	for rows.Next() {
 		var e domain.Event
 		var cardID sql.NullInt64
 		var data, at string
-		if err := rows.Scan(&e.ID, &e.SessionID, &cardID, &e.Kind, &data, &at); err != nil {
+		var err error
+		if err = rows.Scan(&e.ID, &e.SessionID, &cardID, &e.Kind, &data, &at); err != nil {
 			return nil, err
 		}
 		if cardID.Valid {

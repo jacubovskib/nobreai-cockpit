@@ -78,6 +78,7 @@ func cardRef(c domain.Card) *CardRef { return &CardRef{Key: c.Key, Title: c.Titl
 
 func (s *server) worktreeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/worktrees", s.listWorktrees)
+	mux.HandleFunc("GET /api/worktrees/detail", s.worktreeDetail)
 }
 
 func (s *server) listWorktrees(w http.ResponseWriter, r *http.Request) {
