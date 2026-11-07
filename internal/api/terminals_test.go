@@ -474,3 +474,24 @@ func writeScript(t *testing.T, body string) string {
 	}
 	return p
 }
+
+func TestCreateTerminalEnvAllowlist(t *testing.T) {
+	sh := writeScript(t, "#!/bin/sh\necho \"K=$ANTHROPIC_API_KEY T=$TZ\"\n")
+	e := newTermEnv(t, sh)
+	resp, info := e.create(t, map[string]any{"env": map[string]string{"ANTHROPIC_API_KEY": "abc", "TZ": "UTC"}})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("code = %d", resp.StatusCode)
+	}
+	tm := mustTerm(t, e, info.ID)
+	<-tm.Done()
+	snap, _, cancel := tm.Subscribe()
+	cancel()
+	if !strings.Contains(string(snap), "K=abc T=UTC") {
+		t.Fatalf("saída = %q", snap)
+	}
+	for _, k := range []string{"PATH", "LD_PRELOAD", "NOBRE_RESUME", "HOME", "anthropic_x", "LD_LIBRARY_PATH"} {
+		if resp, _ := e.create(t, map[string]any{"env": map[string]string{k: "x"}}); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("env %s = %d", k, resp.StatusCode)
+		}
+	}
+}

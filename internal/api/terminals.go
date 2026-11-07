@@ -24,6 +24,7 @@ const (
 	wsWriteTimeout     = 10 * time.Second
 	wsReadLimit        = 1 << 20
 	maxTermDim         = 1000
+	maxEnvValue        = 32 << 10
 	termOriginPlatform = "plataforma"
 	termOriginRun      = "nobre run"
 )
@@ -62,6 +63,8 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		Origin  string   `json:"origin"`
 		// ResumeKey liga o agente ao card (vira NOBRE_RESUME); `nobre run` o repassa.
 		ResumeKey string `json:"resume_key"`
+		// Env é a lista permitida de variáveis do CLI (pty.AllowedEnv).
+		Env map[string]string `json:"env"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -94,6 +97,12 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "resume_key inválida (use NAC-<número>)")
 		return
 	}
+	for k, v := range in.Env {
+		if !pty.AllowedEnv(k) || strings.ContainsRune(v, 0) || len(v) > maxEnvValue {
+			writeError(w, http.StatusBadRequest, "variável de ambiente não permitida: "+k)
+			return
+		}
+	}
 	if in.Cols > maxTermDim || in.Rows > maxTermDim {
 		writeError(w, http.StatusBadRequest, "tamanho de terminal inválido")
 		return
@@ -104,6 +113,9 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	env := s.terminalEnv()
+	for k, v := range in.Env {
+		env = append(env, k+"="+v)
+	}
 	if in.ResumeKey != "" {
 		env = append(env, "NOBRE_RESUME="+in.ResumeKey)
 	}

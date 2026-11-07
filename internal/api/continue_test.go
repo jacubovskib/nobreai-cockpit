@@ -349,14 +349,20 @@ func TestContinueBackgroundStartsTerminal(t *testing.T) {
 func TestContinueBackgroundFromSettingsDefault(t *testing.T) {
 	mgr := pty.NewManager(pty.Options{})
 	t.Cleanup(mgr.Close)
-	a, l := continueAPIWith(t, &fakeGit{branch: "feat/x", clean: true}, mgr, bgClaude(t))
+	a, l := continueAPIWith(t, &fakeGit{branch: "main", clean: true}, mgr, bgClaude(t))
+	p, _ := a.st.CreateProject("real", t.TempDir())
+	if _, err := a.st.CreateCard(domain.Card{Title: "bg", ProjectID: p.ID}); err != nil {
+		t.Fatal(err)
+	}
 	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"launch_mode": "background"}, 0); rec.Code != http.StatusOK {
 		t.Fatalf("settings = %d %s", rec.Code, rec.Body)
 	}
-	// o projeto de teste é /w/api (inexistente): o início falha no PTY, mas o modo foi aceito.
-	rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"mode": "platform", "prompt_slug": "nenhum"}, 0)
-	if rec.Code == http.StatusBadRequest || len(l.calls) != 0 {
+	rec := a.do(t, "POST", "/api/cards/NAC-2/continue", map[string]any{"mode": "platform", "prompt_slug": "nenhum"}, 0)
+	if rec.Code != http.StatusOK || len(l.calls) != 0 {
 		t.Fatalf("code = %d %s calls=%d", rec.Code, rec.Body, len(l.calls))
+	}
+	if id, _ := decode[map[string]any](t, rec)["terminal_id"].(string); id == "" {
+		t.Fatalf("faltou terminal_id: %s", rec.Body)
 	}
 }
 

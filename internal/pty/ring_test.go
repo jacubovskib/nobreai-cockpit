@@ -37,3 +37,16 @@ func TestRingPartialAndOversizedWrite(t *testing.T) {
 		t.Fatalf("maior que o buffer = %q", got)
 	}
 }
+
+func TestAllowedEnv(t *testing.T) {
+	for _, k := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_X", "AWS_REGION", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEX_X", "OTEL_X", "HTTPS_PROXY", "no_proxy", "LANG", "TZ", "LC_ALL"} {
+		if !AllowedEnv(k) {
+			t.Errorf("%s deveria ser permitida", k)
+		}
+	}
+	for _, k := range []string{"PATH", "LD_PRELOAD", "NOBRE_RESUME", "HOME", "ANTHROPIC", "LANGUAGE", "claude_x", "TZ=x", ""} {
+		if AllowedEnv(k) {
+			t.Errorf("%s não deveria ser permitida", k)
+		}
+	}
+}

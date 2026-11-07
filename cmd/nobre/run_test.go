@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -72,13 +73,15 @@ type runHarness struct {
 	restored int
 	raw      bool
 	winch    chan os.Signal
+	sigs     chan os.Signal
+	environ  []string
 	size     [2]int
 	mu       sync.Mutex
 }
 
 func newHarness(t *testing.T, addr string, in io.Reader, tty bool, env map[string]string) *runHarness {
 	t.Helper()
-	h := &runHarness{out: &syncBuf{}, err: &syncBuf{}, winch: make(chan os.Signal, 1), size: [2]int{100, 40}}
+	h := &runHarness{out: &syncBuf{}, err: &syncBuf{}, winch: make(chan os.Signal, 1), sigs: make(chan os.Signal, 1), size: [2]int{100, 40}}
 	h.c = &cli{in: in, out: h.out, err: h.err,
 		getenv: func(k string) string {
 			if k == "NOBRE_ADDR" {
@@ -97,6 +100,8 @@ func newHarness(t *testing.T, addr string, in io.Reader, tty bool, env map[strin
 				return func() { h.mu.Lock(); h.restored++; h.mu.Unlock() }, nil
 			},
 			winch:    func() (<-chan os.Signal, func()) { return h.winch, func() {} },
+			signals:  func() (<-chan os.Signal, func()) { return h.sigs, func() {} },
+			environ:  func() []string { return h.environ },
 			lookPath: func(n string) (string, error) { return "/fake/bin/" + n, nil },
 			exec: func(p string, a []string) error {
 				h.execPath, h.execArgv = p, a
@@ -122,7 +127,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 func TestRunAttachesAndExitsWithCode(t *testing.T) {
 	e := newRunEnv(t, `echo "oi $1 $2"; exit 3`)
-	h := newHarness(t, e.addr, strings.NewReader(""), false, nil)
+	h := newHarness(t, e.addr, strings.NewReader(""), true, nil)
 	if code := h.c.run([]string{"run", "claude", "--flag", "x"}); code != 3 {
 		t.Fatalf("code = %d err=%q", code, h.err.String())
 	}
@@ -131,6 +136,9 @@ func TestRunAttachesAndExitsWithCode(t *testing.T) {
 	}
 	if h.execPath != "" {
 		t.Fatal("não deveria cair no exec direto")
+	}
+	if strings.Contains(h.out.String(), terminalReset) {
+		t.Fatal("saída normal não deve resetar o terminal")
 	}
 	list := e.mgr.List()
 	if len(list) != 1 || list[0].Origin != "nobre run" || list[0].Agent != "claude" {
@@ -155,14 +163,14 @@ func TestRunPassesResumeKeyAndSize(t *testing.T) {
 
 func TestRunIgnoresInvalidResumeKey(t *testing.T) {
 	e := newRunEnv(t, `echo "R=[$NOBRE_RESUME]"`)
-	h := newHarness(t, e.addr, strings.NewReader(""), false, map[string]string{"NOBRE_RESUME": "lixo; rm"})
+	h := newHarness(t, e.addr, strings.NewReader(""), true, map[string]string{"NOBRE_RESUME": "lixo; rm"})
 	if code := h.c.run([]string{"run", "claude"}); code != 0 || !strings.Contains(h.out.String(), "R=[]") {
 		t.Fatalf("code=%d out=%q err=%q", code, h.out.String(), h.err.String())
 	}
 }
 
 func TestRunFallsBackWhenDaemonDown(t *testing.T) {
-	h := newHarness(t, "127.0.0.1:1", strings.NewReader(""), false, nil)
+	h := newHarness(t, "127.0.0.1:1", strings.NewReader(""), true, nil)
 	code := h.c.run([]string{"run", "claude", "--resume", "abc"})
 	if code != 1 { // o exec falso retorna: sinaliza falha
 		t.Fatalf("code = %d", code)
@@ -180,7 +188,7 @@ func TestRunFallsBackOnCreateError(t *testing.T) {
 		w.WriteHeader(http.StatusConflict)
 		w.Write([]byte(`{"error":"limite de terminais atingido"}`))
 	})
-	h := newHarness(t, addr, strings.NewReader(""), false, nil)
+	h := newHarness(t, addr, strings.NewReader(""), true, nil)
 	h.c.run([]string{"run", "claude"})
 	if h.execPath == "" || !strings.Contains(h.err.String(), "fora do ar") || !strings.Contains(h.err.String(), "limite de terminais atingido") {
 		t.Fatalf("exec=%q stderr=%q", h.execPath, h.err.String())
@@ -207,8 +215,8 @@ func TestRunDetachKey(t *testing.T) {
 	if !strings.Contains(h.err.String(), "desconectado; o agente segue na plataforma: http://"+e.addr+"/terminais") {
 		t.Fatalf("stderr = %q", h.err.String())
 	}
-	if h.restoredCount() != 1 {
-		t.Fatalf("restaurado = %d", h.restoredCount())
+	if h.restoredCount() != 1 || !strings.HasSuffix(h.out.String(), terminalReset) {
+		t.Fatalf("restaurado = %d out=%q", h.restoredCount(), h.out.String())
 	}
 	list := e.mgr.List()
 	if len(list) != 1 || list[0].ExitCode != nil {
@@ -254,15 +262,95 @@ func TestRunDaemonStopsMidSession(t *testing.T) {
 		c.Write(r.Context(), websocket.MessageBinary, []byte("meio"))
 		c.CloseNow()
 	})
-	h := newHarness(t, addr, strings.NewReader(""), false, nil)
+	h := newHarness(t, addr, strings.NewReader(""), true, nil)
 	code := h.c.run([]string{"run", "claude"})
-	if code != 1 || !strings.Contains(h.err.String(), "NobreAI Cockpit parou") || !strings.Contains(h.out.String(), "meio") {
+	if code != 1 || !strings.Contains(h.err.String(), "NobreAI Cockpit parou") || !strings.Contains(h.out.String(), "meio") ||
+		!strings.HasSuffix(h.out.String(), terminalReset) || h.restoredCount() != 1 {
 		t.Fatalf("code=%d stderr=%q out=%q", code, h.err.String(), h.out.String())
 	}
 }
 
+func TestRunSkipsPlatformWithoutTTY(t *testing.T) {
+	e := newRunEnv(t, `echo nao-deveria`)
+	h := newHarness(t, e.addr, strings.NewReader(""), false, nil)
+	h.c.run([]string{"run", "claude", "-p", "oi"})
+	if strings.Join(h.execArgv, " ") != "claude -p oi" || strings.Contains(h.err.String(), "fora do ar") || len(e.mgr.List()) != 0 || h.raw {
+		t.Fatalf("argv=%q stderr=%q terminais=%d raw=%v", h.execArgv, h.err.String(), len(e.mgr.List()), h.raw)
+	}
+}
+
+func TestRunRestoresOnSignals(t *testing.T) {
+	for sig, want := range map[syscall.Signal]int{syscall.SIGINT: 130, syscall.SIGQUIT: 131, syscall.SIGHUP: 129, syscall.SIGTERM: 143} {
+		e := newRunEnv(t, `echo ready; exec cat`)
+		pr, pw := io.Pipe()
+		h := newHarness(t, e.addr, pr, true, nil)
+		done := make(chan int, 1)
+		go func() { done <- h.c.run([]string{"run", "claude"}) }()
+		waitFor(t, "agente pronto", func() bool { return strings.Contains(h.out.String(), "ready") })
+		h.sigs <- sig
+		if code := <-done; code != want {
+			t.Fatalf("%v: code = %d (quero %d)", sig, code, want)
+		}
+		if h.restoredCount() != 1 || !strings.HasSuffix(h.out.String(), terminalReset) {
+			t.Fatalf("%v: restaurado=%d out=%q", sig, h.restoredCount(), h.out.String())
+		}
+		if l := e.mgr.List(); len(l) != 1 || l[0].ExitCode != nil {
+			t.Fatalf("%v: agente deveria seguir vivo", sig)
+		}
+		pw.Close()
+	}
+}
+
+type panicWriter struct{}
+
+func (panicWriter) Write([]byte) (int, error) { panic("saída quebrou") }
+
+func TestRunRestoresOnGoroutinePanic(t *testing.T) {
+	e := newRunEnv(t, `echo ready; exec cat`)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	h := newHarness(t, e.addr, pr, true, nil)
+	h.c.out = panicWriter{}
+	done := make(chan int, 1)
+	go func() { done <- h.c.run([]string{"run", "claude"}) }()
+	select {
+	case code := <-done:
+		if code != 1 || !strings.Contains(h.err.String(), "saída quebrou") || h.restoredCount() != 1 {
+			t.Fatalf("code=%d stderr=%q restaurado=%d", code, h.err.String(), h.restoredCount())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("não terminou")
+	}
+}
+
+func TestRunForwardsAllowedEnvOnly(t *testing.T) {
+	e := newRunEnv(t, `echo "A=$ANTHROPIC_API_KEY L=$LC_ALL P=[$MY_SECRET] B=$HTTPS_PROXY"`)
+	h := newHarness(t, e.addr, strings.NewReader(""), true, nil)
+	h.environ = []string{"ANTHROPIC_API_KEY=k1", "LC_ALL=C", "MY_SECRET=x", "HTTPS_PROXY=http://p:1", "PATH=/evil", "LD_PRELOAD=/x", "NOBRE_FOO=1"}
+	if code := h.c.run([]string{"run", "claude"}); code != 0 {
+		t.Fatalf("code = %d %q", code, h.err.String())
+	}
+	if !strings.Contains(h.out.String(), "A=k1 L=C P=[] B=http://p:1") {
+		t.Fatalf("saída = %q", h.out.String())
+	}
+	rd := &runDeps{environ: func() []string { return h.environ }}
+	m := rd.allowedEnv()
+	if len(m) != 3 || m["PATH"] != "" || m["LD_PRELOAD"] != "" || m["NOBRE_FOO"] != "" {
+		t.Fatalf("allowedEnv = %v", m)
+	}
+}
+
+func TestRunWarnsOnInvalidResumeKey(t *testing.T) {
+	e := newRunEnv(t, `true`)
+	h := newHarness(t, e.addr, strings.NewReader(""), true, map[string]string{"NOBRE_RESUME": "lixo"})
+	h.c.run([]string{"run", "claude"})
+	if !strings.Contains(h.err.String(), "NOBRE_RESUME inválido") {
+		t.Fatalf("stderr = %q", h.err.String())
+	}
+}
+
 func TestRunPassesHelpToAgent(t *testing.T) {
-	h := newHarness(t, "127.0.0.1:1", strings.NewReader(""), false, nil)
+	h := newHarness(t, "127.0.0.1:1", strings.NewReader(""), true, nil)
 	h.c.run([]string{"run", "claude", "--help"})
 	if strings.Join(h.execArgv, " ") != "claude --help" {
 		t.Fatalf("argv = %q", h.execArgv)
