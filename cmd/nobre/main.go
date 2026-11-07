@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/client"
@@ -38,6 +39,7 @@ Administração:
   nobre prompt use <slug> [--card KEY]                    imprime o prompt preenchido e marca o uso
   nobre prompt save --name <n> --tag <t>                  salva um prompt (corpo pelo stdin)
   nobre ui                                                abre o Cockpit no navegador
+  nobre setup [--dry-run]                                 instala hooks e skill do Claude Code e ativa o daemon
 
 Hooks (chamados pelo agente, nunca falham):
   nobre hook <agente> <Evento>
@@ -53,6 +55,8 @@ type cli struct {
 	getenv func(string) string
 	cwd    func() (string, error)
 	opener func(url string) error
+	// sd são os caminhos e comandos do setup; nil = padrões do usuário.
+	sd *setupDeps
 }
 
 func newCLI() *cli {
@@ -106,6 +110,8 @@ func (c *cli) run(args []string) int {
 		err = c.prompt(rest)
 	case "ui":
 		err = c.ui()
+	case "setup":
+		err = c.setup(rest)
 	default:
 		fmt.Fprintf(c.err, "comando desconhecido: %s\n\n%s", cmd, usage)
 		return 2
@@ -133,20 +139,59 @@ func (c *cli) client() *client.Client { return client.New(c.addr()) }
 
 func ctx() context.Context { return context.Background() }
 
-// parse aceita flags antes, depois e entre os argumentos posicionais.
+// parse separa flags e argumentos posicionais. Flags conhecidas valem em
+// qualquer posição (antes ou depois do texto); "--" encerra as flags. Um
+// argumento que não é uma flag declarada é texto: "- item" e "-x" ficam como
+// posicionais; só "--nome" desconhecido é erro (provável erro de digitação,
+// use "--" para um texto que comece assim). Sem flags declaradas, tudo é
+// texto (nobre note "--x"), salvo um "--" inicial, que é descartado.
 func (c *cli) parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	fs.SetOutput(io.Discard)
+	known := map[string]*flag.Flag{}
+	fs.VisitAll(func(f *flag.Flag) { known[f.Name] = f })
 	var pos []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, usagef("%s: %v", fs.Name(), err)
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			pos = append(pos, args[i+1:]...)
+			break
 		}
-		if fs.NArg() == 0 {
-			return pos, nil
+		if len(known) == 0 || len(a) < 2 || a[0] != '-' {
+			pos = append(pos, a)
+			continue
 		}
-		pos = append(pos, fs.Arg(0))
-		args = fs.Args()[1:]
+		name := strings.TrimLeft(a, "-")
+		dashes := len(a) - len(name)
+		val, hasVal := "", false
+		if k := strings.IndexByte(name, '='); k >= 0 {
+			name, val, hasVal = name[:k], name[k+1:], true
+		}
+		f, ok := known[name]
+		if !ok || dashes > 2 {
+			if dashes == 2 && flagName.MatchString(name) {
+				return nil, usagef("%s: flag desconhecida: --%s", fs.Name(), name)
+			}
+			pos = append(pos, a)
+			continue
+		}
+		if bf, isBool := f.Value.(interface{ IsBoolFlag() bool }); isBool && bf.IsBoolFlag() {
+			if !hasVal {
+				val = "true"
+			}
+		} else if !hasVal {
+			if i+1 >= len(args) {
+				return nil, usagef("%s: a flag --%s precisa de um valor", fs.Name(), name)
+			}
+			i++
+			val = args[i]
+		}
+		if err := fs.Set(name, val); err != nil {
+			return nil, usagef("%s: valor inválido para --%s: %v", fs.Name(), name, err)
+		}
 	}
+	return pos, nil
 }
+
+var flagName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
 
 func joinText(pos []string) string { return strings.TrimSpace(strings.Join(pos, " ")) }

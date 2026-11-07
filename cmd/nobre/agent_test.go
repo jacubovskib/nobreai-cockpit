@@ -82,3 +82,42 @@ func TestUsageErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestDashLeadingTextIsNotAFlag(t *testing.T) {
+	var last string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bs, _ := json.Marshal(b)
+		last = r.URL.Path + " " + string(bs)
+		w.Write([]byte(`{"key":"NAC-1"}`))
+	})
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"note", "- falta testar"}, `/api/me/note {"text":"- falta testar"}`},
+		{[]string{"note", "--", "--x e -y"}, `/api/me/note {"text":"--x e -y"}`},
+		{[]string{"note", "--", "-a"}, `/api/me/note {"text":"-a"}`},
+		{[]string{"decide", "-x", "--why", "y"}, `/api/me/decide {"what":"-x","why":"y"}`},
+		{[]string{"decide", "--why", "y", "--", "-x"}, `/api/me/decide {"what":"-x","why":"y"}`},
+		{[]string{"decide", "-x", "--why=y"}, `/api/me/decide {"what":"-x","why":"y"}`},
+		{[]string{"start", "-t", "--goal", "g"}, `/api/me/start {"done_when":"","goal":"g","title":"-t"}`},
+		{[]string{"start", "--goal", "g", "-t"}, `/api/me/start {"done_when":"","goal":"g","title":"-t"}`},
+		{[]string{"file", "-weird.go", "--why", "w"}, `/api/me/file {"lines":"","path":"-weird.go","why":"w"}`},
+	}
+	for _, c := range cases {
+		last = ""
+		if r := runCLI(t, addr, "", nil, c.args...); r.code != 0 || last != c.want {
+			t.Fatalf("%v: %+v last=%q", c.args, r, last)
+		}
+	}
+	// flag desconhecida com "--" é erro de uso; nada é enviado.
+	last = ""
+	if r := runCLI(t, addr, "", nil, "decide", "x", "--wy", "y"); r.code != 2 || last != "" || !strings.Contains(r.err, "--wy") {
+		t.Fatalf("%+v", r)
+	}
+	if r := runCLI(t, addr, "", nil, "decide", "x", "--why"); r.code != 2 {
+		t.Fatalf("%+v", r)
+	}
+}

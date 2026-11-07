@@ -50,7 +50,11 @@ func (c *cli) resume(args []string) error {
 
 // simple envia {field: texto} para /api/me/<action>.
 func (c *cli) simple(action, what string, args []string, field string) error {
-	text := joinText(args)
+	pos, err := c.parse(flag.NewFlagSet(action, flag.ContinueOnError), args)
+	if err != nil {
+		return err
+	}
+	text := joinText(pos)
 	if text == "" {
 		return usagef(`uso: nobre %s "<%s>"`, action, what)
 	}
