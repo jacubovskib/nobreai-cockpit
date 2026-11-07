@@ -85,7 +85,10 @@ func TestSetupInstallsEverythingAndRegistersProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	unit, _ := os.ReadFile(filepath.Join(e.d.UnitDir, "nobred.service"))
+	// KillMode=process: terminais/agentes abertos pelo "Continuar" (filhos do
+	// nobred) sobrevivem a restart/stop do serviço.
 	if !strings.Contains(string(unit), "ExecStart=/opt/x/bin/nobred\n") || !strings.Contains(string(unit), "Restart=on-failure") ||
+		!strings.Contains(string(unit), "\nKillMode=process\n") ||
 		!strings.Contains(string(unit), "\nEnvironment=\"PATH=/opt/x/bin:/usr/bin:/home/u/.local/bin\"\n") {
 		t.Fatalf("unit: %s", unit)
 	}

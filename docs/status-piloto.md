@@ -53,11 +53,11 @@ Houve revisão por task, revisão final do branch, uma rodada de correções e u
 ### Para instalar e testar
 Siga `docs/piloto-checklist.md` (instala `nobre`/`nobred` em `~/.local/bin` e roda `~/.local/bin/nobre setup`, de preferência antes com `--dry-run`).
 
-### Cuidado conhecido
-Se o "Continuar" abrir o terminator quando nenhuma janela dele estiver aberta, esse terminal e o Claude dentro dele ficam no grupo do serviço `nobred` e **são encerrados se o daemon for reiniciado** (rebuild, `nobre setup` de novo, `systemctl --user restart nobred`). Correção de uma linha pendente: `KillMode=process` na unit. Até lá, mantenha uma janela do terminator aberta antes de clicar em "Iniciar Claude Code neste card".
+### Corrigido depois da revisão
+- A unit do `nobred` usa `KillMode=process`: terminais e sessões do Claude abertos pelo "Continuar" sobrevivem a um restart do daemon.
+- O prompt padrão "Retomar card" diz que o pacote está no contexto da sessão.
 
 ### Pendências pequenas
-- O prompt padrão "Retomar card" ainda diz "pacote abaixo", mas o pacote chega pelo início da sessão.
 - A prévia de prompt mostra o pacote; o "Continuar" o envia vazio.
 - A unit guarda o PATH do terminal onde o setup rodou (inclusive venv/nvm).
 - Outros menores estão no ledger local.

@@ -74,7 +74,7 @@ func unitContent(nobred, path string) string {
 		env = "Environment=" + q + "\n"
 	}
 	return "[Unit]\nDescription=NobreAI Cockpit (nobred)\nAfter=network.target\n\n" +
-		"[Service]\n" + env + "ExecStart=" + nobred + "\nRestart=on-failure\n\n" +
+		"[Service]\n" + env + "ExecStart=" + nobred + "\nRestart=on-failure\nKillMode=process\n\n" +
 		"[Install]\nWantedBy=default.target\n"
 }
 

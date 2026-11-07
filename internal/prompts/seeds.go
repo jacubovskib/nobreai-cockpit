@@ -9,7 +9,7 @@ func Seeds() []domain.Prompt {
 	return []domain.Prompt{
 		{Name: "Retomar card", Slug: "retomar-card", Tag: "Retomada", IsDefaultHandoff: true, Agents: all,
 			Description: "Entrega o pacote de retomada e pede para continuar do ponto exato.",
-			Body:        "Você está continuando o card {{card.id}} ({{card.titulo}}).\nLeia o pacote de retomada abaixo e continue a partir de:\n{{card.onde_parei}}\n\nNão pergunte o que estava sendo feito: está tudo no card. Atualize-o com nobre note a cada passo relevante.\n\n{{card.pacote}}"},
+			Body:        "Você está continuando o card {{card.id}} ({{card.titulo}}).\nLeia o pacote de retomada (no contexto desta sessão ou abaixo) e continue a partir de:\n{{card.onde_parei}}\n\nNão pergunte o que estava sendo feito: está tudo no card. Atualize-o com nobre note a cada passo relevante.\n\n{{card.pacote}}"},
 		{Name: "Revisar antes do PR", Slug: "revisar-pr", Tag: "Revisão", Agents: []string{"claude", "codex"},
 			Description: "Revisão do diff do branch, com cada problema registrado em Falta.",
 			Body:        "Revise o diff de {{git.branch}} contra main.\nListe bugs, riscos e testes faltando, nessa ordem.\nRegistre cada problema como item em Falta no card {{card.id}}."},
