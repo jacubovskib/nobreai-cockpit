@@ -1,0 +1,1 @@
+{"type":"assistant","sessionId":"5f1c2d9e-8b7a-4c3d-9e2f-1a2b3c4d5e6f","isSidechain":true,"uuid":"s1","timestamp":"2026-11-07T11:59:10.000Z","message":{"id":"msg_sub_01","model":"claude-haiku-4-5","usage":{"input_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":40},"content":[{"type":"text","text":"achei"}]}}

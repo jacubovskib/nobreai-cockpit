@@ -32,7 +32,8 @@ type transcriptLine struct {
 // linha completa, e devolve uma linha por message.id (a última vence). Offset
 // maior que o arquivo (truncado ou trocado) recomeça do início: reler é seguro
 // porque o uso é gravado por message.id. Linha sem timestamp válido usa o mtime
-// do arquivo, para os tokens não se perderem.
+// do arquivo, para os tokens não se perderem. Mensagens sem nenhum token ficam
+// de fora.
 func ParseClaudeTranscript(path string, offset int64) ([]domain.UsageRow, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -84,7 +85,14 @@ func ParseClaudeTranscript(path string, offset int64) ([]domain.UsageRow, int64,
 		idx[row.MessageID] = len(rows)
 		rows = append(rows, row)
 	}
-	return rows, offset + int64(len(data)), nil
+	// Mensagem sem nenhum token (as sintéticas do Claude Code) não é uso.
+	out := rows[:0]
+	for _, r := range rows {
+		if r.Input+r.Output+r.CacheWrite+r.CacheRead > 0 {
+			out = append(out, r)
+		}
+	}
+	return out, offset + int64(len(data)), nil
 }
 
 // SubagentTranscripts lista <main sem .jsonl>/subagents/agent-*.jsonl.

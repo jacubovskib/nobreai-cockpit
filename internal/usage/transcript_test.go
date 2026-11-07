@@ -104,3 +104,19 @@ func TestParseOffsetBeyondSizeRestarts(t *testing.T) {
 		t.Fatalf("arquivo truncado/rotacionado deveria ser relido do início: rows=%d off=%d err=%v", len(rows), off, err)
 	}
 }
+
+func TestParseSkipsZeroTokenMessages(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	// Mensagens sintéticas do Claude Code (erro de API, "No response
+	// requested.") vêm com model "<synthetic>" e uso zerado: não são uso, e
+	// sem preço deixariam a sessão inteira "sem preço".
+	data := `{"type":"assistant","timestamp":"2026-11-05T16:00:00Z","message":{"id":"msg_s","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-11-05T16:00:01Z","message":{"id":"msg_r","model":"m","usage":{"input_tokens":1,"output_tokens":0}}}` + "\n"
+	if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := ParseClaudeTranscript(p, 0)
+	if err != nil || len(rows) != 1 || rows[0].MessageID != "msg_r" {
+		t.Fatalf("%+v %v", rows, err)
+	}
+}

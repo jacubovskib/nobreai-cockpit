@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
 	"github.com/nobretech/nobreai-cockpit/internal/api"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/demo"
@@ -95,11 +97,17 @@ func run(dbPath string, seedDemo bool) error {
 	}
 
 	hub := api.NewHub()
+	git := gitinfo.Exec{}
+	claudeAdapter := claude.New(st, adapter.Deps{Now: time.Now, Git: git, Publish: hub.Publish})
+	// As leituras de transcript em segundo plano terminam antes de st.Close
+	// (defers rodam em ordem inversa).
+	defer claudeAdapter.Wait()
 	handler := api.New(st, api.Deps{
 		Now:      time.Now,
 		ProcRoot: "/proc",
-		Git:      gitinfo.Exec{},
+		Git:      git,
 		Hub:      hub,
+		Adapters: map[string]adapter.Adapter{"claude": claudeAdapter},
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.

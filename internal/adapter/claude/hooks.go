@@ -1,0 +1,399 @@
+package claude
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/board"
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/prompts"
+	"github.com/nobretech/nobreai-cockpit/internal/resume"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
+)
+
+// payload é o JSON que o Claude Code entrega aos hooks. Todo evento tem
+// session_id, transcript_path, cwd e hook_event_name; os demais campos
+// dependem do evento.
+type payload struct {
+	SessionID      string `json:"session_id"`
+	TranscriptPath string `json:"transcript_path"`
+	Cwd            string `json:"cwd"`
+	HookEventName  string `json:"hook_event_name"`
+	// SessionStart: startup | resume | clear | compact.
+	Source string `json:"source"`
+	// UserPromptSubmit.
+	Prompt string `json:"prompt"`
+	// PreToolUse / PostToolUse. tool_input e tool_response variam por
+	// ferramenta: são lidos sob demanda.
+	ToolName     string          `json:"tool_name"`
+	ToolInput    json.RawMessage `json:"tool_input"`
+	ToolResponse json.RawMessage `json:"tool_response"`
+	// Stop.
+	StopHookActive bool `json:"stop_hook_active"`
+	// SessionEnd.
+	Reason string `json:"reason"`
+}
+
+type toolInput struct {
+	FilePath     string `json:"file_path"`
+	NotebookPath string `json:"notebook_path"`
+	Command      string `json:"command"`
+}
+
+func (p payload) input() toolInput {
+	var in toolInput
+	_ = json.Unmarshal(p.ToolInput, &in)
+	return in
+}
+
+// HandleHook trata um evento de hook. Toda sessão é registrada; sem captura
+// completa (projeto cadastrado com capture=true) só sessão e uso são gravados:
+// nada de prompts, arquivos, contexto ou bloqueios.
+//
+// O store não recebe contexto: o trabalho de banco nunca é cancelado junto
+// com a requisição (o `nobre hook` desiste em 2 s, mas o daemon termina o que
+// começou). A leitura do transcript roda em segundo plano (ver ingestAsync).
+func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.HookReply, error) {
+	var p payload
+	if err := json.Unmarshal(h.Payload, &p); err != nil {
+		return adapter.HookReply{}, fmt.Errorf("payload do hook inválido: %w", err)
+	}
+	if p.SessionID == "" {
+		return adapter.HookReply{}, errors.New("payload do hook sem session_id")
+	}
+	event := h.Event
+	if event == "" {
+		event = p.HookEventName
+	}
+	now := a.deps.Now()
+	sess, err := a.session(p, h.AgentPID, event, now)
+	if err != nil {
+		return adapter.HookReply{}, err
+	}
+	switch event {
+	case "SessionStart":
+		return a.sessionStart(sess, p, h.Env, now)
+	case "UserPromptSubmit":
+		if sess.FullCapture {
+			a.event(sess.ID, domain.EvPrompt, map[string]any{"text": p.Prompt}, now)
+		} else {
+			a.publish("sessions") // última atividade mudou
+		}
+	case "PreToolUse":
+		return a.preToolUse(sess, p, now)
+	case "PostToolUse":
+		if sess.FullCapture {
+			a.postToolUse(sess, p, now)
+		}
+	case "Stop":
+		reply, err := a.stop(sess, p, now)
+		a.ingestAsync(sess.ID, transcriptPath(p, sess))
+		return reply, err
+	case "SessionEnd":
+		return a.sessionEnd(sess, p, now)
+	}
+	return adapter.HookReply{}, nil
+}
+
+func transcriptPath(p payload, sess domain.Session) string {
+	if p.TranscriptPath != "" {
+		return p.TranscriptPath
+	}
+	return sess.TranscriptPath
+}
+
+// session devolve a sessão do evento, criando-a se não existe. Sessão que
+// não está viva (encerrada ou com o processo dado como morto) e volta a mandar
+// eventos é reaberta, com o PID novo; SessionEnd nunca reabre. As demais
+// apenas têm a última atividade atualizada.
+func (a *Adapter) session(p payload, pid int, event string, now time.Time) (domain.Session, error) {
+	id := "claude:" + p.SessionID
+	sess, err := a.st.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return a.createSession(id, p, pid, now)
+	}
+	if err != nil {
+		return sess, err
+	}
+	if event != "SessionEnd" && (!sess.Live() || (pid > 0 && pid != sess.PID)) {
+		if err := a.st.ReopenSession(id, pid, now); err != nil {
+			return sess, err
+		}
+		a.publish("sessions", "cards")
+		return a.st.GetSession(id)
+	}
+	if err := a.st.TouchSession(id, now); err != nil {
+		return sess, err
+	}
+	sess.LastEventAt = now
+	return sess, nil
+}
+
+func (a *Adapter) createSession(id string, p payload, pid int, now time.Time) (domain.Session, error) {
+	x := domain.Session{ID: id, Agent: a.Name(), ProviderSessionID: p.SessionID, PID: pid, Cwd: p.Cwd,
+		TranscriptPath: p.TranscriptPath, StartedAt: now, LastEventAt: now}
+	if a.deps.Git != nil && p.Cwd != "" {
+		x.Branch, x.GitHead = a.deps.Git.Branch(p.Cwd), a.deps.Git.Head(p.Cwd)
+	}
+	proj, err := a.st.ProjectForPath(p.Cwd)
+	if err != nil {
+		return x, err
+	}
+	if proj != nil && proj.Capture {
+		x.ProjectID, x.FullCapture = &proj.ID, true
+	}
+	// Dois hooks simultâneos podem criar a mesma sessão: StartSession ignora o
+	// segundo e a releitura devolve a que ficou.
+	if err := a.st.StartSession(x); err != nil {
+		return x, err
+	}
+	a.publish("sessions")
+	return a.st.GetSession(id)
+}
+
+// event grava um evento da sessão e avisa o stream. Falha só vai para o log:
+// o hook nunca quebra o agente por causa de um evento.
+func (a *Adapter) event(sessionID, kind string, data map[string]any, at time.Time) {
+	b, err := json.Marshal(data)
+	if err == nil {
+		err = a.st.AddEvent(domain.Event{SessionID: sessionID, Kind: kind, Data: b, At: at})
+	}
+	if err != nil {
+		log.Printf("hook claude: evento %s da sessão %s: %v", kind, sessionID, err)
+		return
+	}
+	a.publish("sessions")
+}
+
+func (a *Adapter) postToolUse(sess domain.Session, p payload, now time.Time) {
+	in := p.input()
+	switch p.ToolName {
+	case "Read":
+		if in.FilePath != "" {
+			a.event(sess.ID, domain.EvFileRead, map[string]any{"path": in.FilePath}, now)
+		}
+	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+		path := in.FilePath
+		if path == "" {
+			path = in.NotebookPath
+		}
+		if path != "" {
+			a.event(sess.ID, domain.EvFileEdit, map[string]any{"path": path}, now)
+		}
+	case "Bash":
+		data := map[string]any{"command": in.Command}
+		if code, ok := exitCode(p.ToolResponse); ok {
+			data["exit_code"] = code
+		}
+		a.event(sess.ID, domain.EvCommand, data, now)
+	}
+}
+
+// exitCode lê o código de saída do tool_response do Bash, se vier (o Claude
+// Code nem sempre o informa; nunca é inventado).
+func exitCode(raw json.RawMessage) (int, bool) {
+	var r map[string]json.RawMessage
+	if json.Unmarshal(raw, &r) != nil {
+		return 0, false
+	}
+	for _, k := range []string{"exit_code", "exitCode"} {
+		var code int
+		if v, ok := r[k]; ok && json.Unmarshal(v, &code) == nil {
+			return code, true
+		}
+	}
+	return 0, false
+}
+
+// preToolUse nega a ferramenta quando o limite (diário do agente ou do card)
+// foi atingido com ação "pause". Comandos `nobre ` sempre passam: o agente
+// precisa conseguir registrar o handoff.
+func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
+	if !sess.FullCapture {
+		return adapter.HookReply{}, nil
+	}
+	if p.ToolName == "Bash" && strings.HasPrefix(strings.TrimSpace(p.input().Command), "nobre ") {
+		return adapter.HookReply{}, nil
+	}
+	ls, err := board.LimitStatus(a.st, a.Name(), sess.CardID, now)
+	if err != nil {
+		return adapter.HookReply{}, err
+	}
+	if !ls.Over || ls.Action != "pause" {
+		return adapter.HookReply{}, nil
+	}
+	detail, err := a.limitDetail(ls, sess.CardID)
+	if err != nil {
+		return adapter.HookReply{}, err
+	}
+	return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName":            "PreToolUse",
+		"permissionDecision":       "deny",
+		"permissionDecisionReason": "NobreAI Cockpit: limite de custo atingido (" + detail + "). Registre “Onde parei” com nobre note e encerre.",
+	}})
+}
+
+// limitDetail descreve o(s) limite(s) atingido(s): "diário: US$ 10,40 de US$
+// 10,00" e/ou "card NAC-3: US$ 5,10 de US$ 5,00".
+func (a *Adapter) limitDetail(ls board.LimitState, cardID *int64) (string, error) {
+	var parts []string
+	if ls.AgentDailyUSD > 0 && ls.AgentSpentUSD >= ls.AgentDailyUSD-1e-9 {
+		parts = append(parts, fmt.Sprintf("diário: %s de %s", usd(ls.AgentSpentUSD), usd(ls.AgentDailyUSD)))
+	}
+	if cardID != nil && ls.CardUSD > 0 && ls.CardSpentUSD >= ls.CardUSD-1e-9 {
+		c, err := a.st.GetCardByID(*cardID)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, fmt.Sprintf("card %s: %s de %s", c.Key, usd(ls.CardSpentUSD), usd(ls.CardUSD)))
+	}
+	return strings.Join(parts, "; "), nil
+}
+
+// usd formata em pt-BR: "US$ 8,20".
+func usd(v float64) string {
+	return "US$ " + strings.Replace(fmt.Sprintf("%.2f", v), ".", ",", 1)
+}
+
+// stop decide se o turno é bloqueado. Com card e IncompleteAction
+// "ask_agent", bloqueia quando a sessão editou arquivos do card depois do
+// último "Onde parei" (o Stop dispara a cada resposta: os demais itens da regra
+// de handoff só aparecem na UI e no fim da sessão). Sem card, lembra uma única
+// vez de criar card quando a sessão já editou ReminderEditThreshold arquivos.
+func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
+	if p.StopHookActive || !sess.FullCapture {
+		return adapter.HookReply{}, nil
+	}
+	set, err := a.st.GetSettings()
+	if err != nil {
+		return adapter.HookReply{}, err
+	}
+	if sess.CardID != nil {
+		if set.IncompleteAction != "ask_agent" {
+			return adapter.HookReply{}, nil
+		}
+		c, err := a.st.GetCardByID(*sess.CardID)
+		if err != nil {
+			return adapter.HookReply{}, err
+		}
+		edited, err := a.st.SessionEditedAfter(sess.ID, c.ID, c.WhereStoppedAt)
+		if err != nil || !edited {
+			return adapter.HookReply{}, err
+		}
+		reason, err := a.handoffPrompt(c, sess.ID, set, now)
+		if err != nil {
+			return adapter.HookReply{}, err
+		}
+		return jsonReply(map[string]any{"decision": "block", "reason": reason})
+	}
+	if set.ReminderEditThreshold <= 0 {
+		return adapter.HookReply{}, nil
+	}
+	if reminded, err := a.st.SessionReminded(sess.ID); err != nil || reminded {
+		return adapter.HookReply{}, err
+	}
+	n, err := a.st.DistinctEditedFiles(sess.ID)
+	if err != nil || n < set.ReminderEditThreshold {
+		return adapter.HookReply{}, err
+	}
+	if err := a.st.MarkReminded(sess.ID); err != nil {
+		return adapter.HookReply{}, err
+	}
+	return jsonReply(map[string]any{"decision": "block", "reason": fmt.Sprintf(
+		`NobreAI Cockpit: esta sessão já editou %d arquivos sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.`, n)})
+}
+
+const handoffSlug = "fechar-handoff"
+
+// handoffPrompt renderiza o prompt "fechar-handoff" para o card. Se o prompt
+// salvo foi apagado ou tem variáveis inválidas, usa o corpo original.
+func (a *Adapter) handoffPrompt(c domain.Card, sessionID string, set domain.Settings, now time.Time) (string, error) {
+	var seed string
+	for _, sp := range prompts.Seeds() {
+		if sp.Slug == handoffSlug {
+			seed = sp.Body
+		}
+	}
+	body := seed
+	p, err := a.st.GetPrompt(handoffSlug)
+	switch {
+	case err == nil:
+		body = p.Body
+	case !errors.Is(err, store.ErrNotFound):
+		return "", err
+	}
+	ct, err := a.st.CardContent(c.ID)
+	if err != nil {
+		return "", err
+	}
+	lastEdit, err := a.st.LastEventAt(c.ID, domain.EvFileEdit)
+	if err != nil {
+		return "", err
+	}
+	readiness := domain.Readiness(c, ct, true, lastEdit, set, now)
+	var pkg string
+	if strings.Contains(body, "card.pacote") {
+		if pkg, err = a.resumePackage(c, sessionID); err != nil {
+			return "", err
+		}
+	}
+	vars := resume.Vars(c, ct, pkg, readiness)
+	out, err := prompts.Render(body, vars)
+	if err != nil {
+		if out, err = prompts.Render(seed, vars); err != nil {
+			return "", err
+		}
+	}
+	if p.Slug != "" {
+		if err := a.st.MarkPromptUsed(handoffSlug, now); err != nil {
+			log.Printf("hook claude: marcar uso do prompt %s: %v", handoffSlug, err)
+		}
+		a.publish("prompts")
+	}
+	return out, nil
+}
+
+// endReasons traduz o reason do SessionEnd do Claude Code.
+var endReasons = map[string]string{
+	"clear":             "conversa limpa (/clear)",
+	"logout":            "logout",
+	"prompt_input_exit": "usuário saiu",
+	"other":             "encerrada pelo agente",
+}
+
+// sessionEnd encerra a sessão (o card sai de em_andamento) e só depois lê o
+// transcript.
+func (a *Adapter) sessionEnd(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
+	reason := endReasons[p.Reason]
+	if reason == "" {
+		reason = p.Reason
+	}
+	if reason == "" {
+		reason = "encerrada pelo agente"
+	}
+	if err := a.st.EndSession(sess.ID, reason, now); err != nil {
+		return adapter.HookReply{}, err
+	}
+	a.publish("sessions", "cards")
+	a.event(sess.ID, domain.EvSessionEnd, map[string]any{"reason": p.Reason}, now)
+	a.ingestAsync(sess.ID, transcriptPath(p, sess))
+	return adapter.HookReply{}, nil
+}
+
+// jsonReply serializa a resposta do hook (sem escapar <, > e &: o texto vai
+// para o agente ler).
+func jsonReply(v any) (adapter.HookReply, error) {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return adapter.HookReply{}, err
+	}
+	return adapter.HookReply{Stdout: strings.TrimSuffix(b.String(), "\n")}, nil
+}
