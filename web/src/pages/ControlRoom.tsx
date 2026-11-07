@@ -9,6 +9,7 @@ import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
 import { Tokens, formatTokens } from '../ui/Tokens'
 import { minutesSince } from './board'
+import { NewTask } from './NewTask'
 
 const panel: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, padding: 18, borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--border)' }
 const btn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', minHeight: 40, padding: '0 14px', borderRadius: 8, border: '1px solid #3A3F4B', background: 'transparent', color: 'var(--text)', font: 'inherit', cursor: 'pointer', textDecoration: 'none' }
@@ -89,14 +90,22 @@ function NoCardRow({ s }: { s: SessionWithUsage }) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [error, setError] = useState('')
+  // Card já criado nesta tentativa: se o vínculo falhar, o retry só refaz o attach.
+  const [createdKey, setCreatedKey] = useState('')
   const create = useMutation({
     mutationFn: async () => {
-      if (!s.project_id) throw new Error('Esta sessão não pertence a um projeto cadastrado.')
-      const card = await post<Card>('/api/cards', { title: title.trim(), project_id: s.project_id })
-      await post(`/api/cards/${card.key}/attach`, { session_id: s.id })
+      let key = createdKey
+      if (!key) {
+        if (!s.project_id) throw new Error('Esta sessão não pertence a um projeto cadastrado.')
+        const card = await post<Card>('/api/cards', { title: title.trim(), project_id: s.project_id })
+        key = card.key
+        setCreatedKey(key)
+        qc.invalidateQueries({ queryKey: ['cards'] })
+      }
+      await post(`/api/cards/${key}/attach`, { session_id: s.id })
     },
     onSuccess: () => {
-      setOpen(false); setTitle(''); setError('')
+      setOpen(false); setTitle(''); setError(''); setCreatedKey('')
       qc.invalidateQueries({ queryKey: ['overview'] }); qc.invalidateQueries({ queryKey: ['cards'] })
     },
     onError: (e: Error) => setError(e.message),
@@ -111,7 +120,7 @@ function NoCardRow({ s }: { s: SessionWithUsage }) {
       </span>
       {open ? (
         <form
-          onSubmit={(e) => { e.preventDefault(); if (title.trim()) create.mutate() }}
+          onSubmit={(e) => { e.preventDefault(); if (createdKey || title.trim()) create.mutate() }}
           style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 200px' }}>
@@ -123,13 +132,19 @@ function NoCardRow({ s }: { s: SessionWithUsage }) {
               style={{ minHeight: 40, padding: '0 10px', borderRadius: 8, border: '1px solid #2E333E', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' }}
             />
           </div>
-          <button type="submit" style={btnPrimary} disabled={create.isPending || !title.trim()}>Criar e vincular</button>
+          <button type="submit" style={btnPrimary} disabled={create.isPending || (!createdKey && !title.trim())}>{createdKey ? 'Vincular ao card criado' : 'Criar e vincular'}</button>
           <button type="button" style={btn} onClick={() => { setOpen(false); setError('') }}>Cancelar</button>
         </form>
       ) : (
         <div><button type="button" style={btn} onClick={() => setOpen(true)}>Criar card desta sessão</button></div>
       )}
-      {error && <span role="alert" style={{ color: 'var(--err)', fontSize: 13 }}>{error}</span>}
+      {error && (
+        <span role="alert" style={{ color: 'var(--err)', fontSize: 13 }}>
+          {createdKey && <>O card <Link to={`/cards/${createdKey}`}>{createdKey}</Link> foi criado, mas não foi vinculado à sessão. </>}
+          {error}
+          {createdKey && ' Clique em “Vincular ao card criado” para tentar de novo.'}
+        </span>
+      )}
     </div>
   )
 }
@@ -164,11 +179,14 @@ export function ControlRoom() {
 
   return (
     <div style={{ maxWidth: 1180, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <header style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <header style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em' }}>Sala de controle</h1>
         <p style={{ margin: 0, color: 'var(--text-2)' }}>
           {dateText} · {today.active_agents} {today.active_agents === 1 ? 'agente ativo' : 'agentes ativos'} em {cardsActive} {cardsActive === 1 ? 'card' : 'cards'} · atualizado ao vivo
         </p>
+        </div>
+        <NewTask />
       </header>
 
       <section aria-label="Resumo de hoje" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>

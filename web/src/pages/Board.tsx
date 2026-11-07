@@ -7,6 +7,7 @@ import type { CardSummary, Column } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
 import { ReadinessPips } from '../ui/ReadinessPips'
+import { NewTask } from './NewTask'
 import { COLUMNS, groupByColumn, minutesSince, plural } from './board'
 
 const FILTERS = [
@@ -43,7 +44,7 @@ function BoardCard({ card, onMove, busy }: { card: CardSummary; onMove: (key: st
         {stale && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--warn)' }}>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M12 3 2 21h20z" /><path d="M12 10v5M12 18v.5" /></svg>
-            sem sessão há {mins} min
+            {card.last_activity_at ? `sem sessão há ${mins} min` : 'sem sessão viva'}
           </span>
         )}
       </div>
@@ -109,6 +110,7 @@ export function Board() {
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em' }}>Board</h1>
           <p style={{ margin: 0, color: 'var(--text-2)' }}>As colunas seguem o estado real das sessões</p>
         </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
         <div role="group" aria-label="Filtrar por agente" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {FILTERS.map((f) => {
             const on = agent === f.id
@@ -128,6 +130,8 @@ export function Board() {
               </button>
             )
           })}
+        </div>
+        <NewTask />
         </div>
       </header>
 
