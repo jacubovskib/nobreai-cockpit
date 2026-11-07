@@ -138,11 +138,7 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	if resolve == nil {
 		resolve = launch.ResolveBinary
 	}
-	path := s.deps.SessionPATH
-	if path == "" {
-		path = os.Getenv("PATH")
-	}
-	argv := launch.TerminalArgvWith(resolve, set.TerminalCmd, path, p.Path, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(bin, initial))
+	argv := launch.TerminalArgvWith(resolve, set.TerminalCmd, s.sessionPATH(), p.Path, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(bin, initial))
 	for _, a := range argv {
 		if len(a) >= maxArgBytes { // MAX_ARG_STRLEN do Linux é 131072
 			writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
@@ -167,6 +163,14 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publish("cards")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// sessionPATH é o PATH das sessões abertas pelo daemon (terminal ou PTY).
+func (s *server) sessionPATH() string {
+	if s.deps.SessionPATH != "" {
+		return s.deps.SessionPATH
+	}
+	return os.Getenv("PATH")
 }
 
 // checkoutCardBranch troca o repositório para o branch do card, se for outro

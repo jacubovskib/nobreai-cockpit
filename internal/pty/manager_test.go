@@ -226,3 +226,24 @@ func TestCloseKillsAll(t *testing.T) {
 		return runtime.NumGoroutine() <= before
 	})
 }
+
+func TestStartAfterCloseReturnsErrEnded(t *testing.T) {
+	m := NewManager(Options{})
+	m.Close()
+	if _, err := m.Start(sh("true")); err != ErrEnded {
+		t.Fatalf("err = %v, quero ErrEnded", err)
+	}
+}
+
+func TestSignalExitCode(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, err := m.Start(sh("kill -9 $$"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, tm)
+	if c := tm.Info().ExitCode; c == nil || *c != 137 {
+		t.Fatalf("exit = %v, quero 137", c)
+	}
+}

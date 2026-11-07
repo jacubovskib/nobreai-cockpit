@@ -51,13 +51,18 @@ type StartSpec struct {
 
 // Info é a visão pública de um terminal.
 type Info struct {
-	ID, CardKey, Agent, Origin, Title string
-	PID                               int
-	StartedAt                         time.Time
-	EndedAt                           *time.Time
-	ExitCode                          *int
-	Cols, Rows                        uint16
-	Clients                           int
+	ID        string     `json:"id"`
+	CardKey   string     `json:"card_key"`
+	Agent     string     `json:"agent"`
+	Origin    string     `json:"origin"`
+	Title     string     `json:"title"`
+	PID       int        `json:"pid"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at"`
+	ExitCode  *int       `json:"exit_code"`
+	Cols      uint16     `json:"cols"`
+	Rows      uint16     `json:"rows"`
+	Clients   int        `json:"clients"`
 }
 
 // Manager mantém os terminais vivos e os recém-encerrados.
@@ -66,6 +71,8 @@ type Manager struct {
 	mu    sync.Mutex
 	terms map[string]*Terminal
 	wg    sync.WaitGroup
+	// closed é protegido por mu: depois de Close, Start devolve ErrEnded.
+	closed bool
 }
 
 // NewManager cria um Manager aplicando os padrões.
@@ -98,6 +105,9 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, ErrEnded
+	}
 	m.pruneLocked()
 	live := 0
 	for _, t := range m.terms {
@@ -218,6 +228,7 @@ func (m *Manager) kill(t *Terminal) {
 // Close mata todos os terminais vivos e espera as goroutines terminarem.
 func (m *Manager) Close() {
 	m.mu.Lock()
+	m.closed = true
 	for _, t := range m.terms {
 		m.kill(t)
 	}
@@ -238,6 +249,8 @@ type Terminal struct {
 	mu   sync.Mutex
 	info Info
 	subs map[*sub]struct{}
+	// ptmxClosed (sob mu) evita Setsize concorrente com o Close do ptmx.
+	ptmxClosed bool
 }
 
 func (t *Terminal) ended() bool {
@@ -273,15 +286,21 @@ func (t *Terminal) run() {
 	}()
 
 	werr := t.cmd.Wait()
-	code := t.cmd.ProcessState.ExitCode()
 	_ = werr
+	code := t.cmd.ProcessState.ExitCode()
+	if ws, ok := t.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		code = 128 + int(ws.Signal())
+	}
 
 	// Deixa o leitor esgotar o que sobrou; se um neto segurar o PTY, fecha à força.
 	select {
 	case <-readDone:
 	case <-time.After(drainGrace):
 	}
+	t.mu.Lock()
+	t.ptmxClosed = true
 	_ = t.ptmx.Close()
+	t.mu.Unlock()
 	<-readDone
 
 	end := t.now()
@@ -352,12 +371,15 @@ func (t *Terminal) Resize(cols, rows uint16) error {
 	if t.ended() {
 		return ErrEnded
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.ptmxClosed {
+		return ErrEnded
+	}
 	if err := cpty.Setsize(t.ptmx, &cpty.Winsize{Cols: cols, Rows: rows}); err != nil {
 		return err
 	}
-	t.mu.Lock()
 	t.info.Cols, t.info.Rows = cols, rows
-	t.mu.Unlock()
 	return nil
 }
 

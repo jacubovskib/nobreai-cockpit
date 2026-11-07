@@ -22,6 +22,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/demo"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
+	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -111,6 +112,11 @@ func run(dbPath string, seedDemo bool) error {
 	// As leituras de transcript em segundo plano terminam antes de st.Close
 	// (defers rodam em ordem inversa).
 	defer claudeAdapter.Wait()
+	// Ordem no desligamento: o servidor HTTP para primeiro (Shutdown, no corpo
+	// de run), depois os terminais morrem (Close), depois o Wait do adaptador
+	// e por fim o banco.
+	terms := pty.NewManager(pty.Options{})
+	defer terms.Close()
 	handler := api.New(st, api.Deps{
 		Now:         time.Now,
 		ProcRoot:    "/proc",
@@ -119,6 +125,7 @@ func run(dbPath string, seedDemo bool) error {
 		Hub:         hub,
 		Adapters:    map[string]adapter.Adapter{"claude": claudeAdapter},
 		SessionPATH: sessionPATH,
+		Terminals:   terms,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.
