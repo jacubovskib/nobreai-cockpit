@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,6 +36,11 @@ type termEnv struct {
 
 func newTermEnv(t *testing.T, bin string) *termEnv {
 	t.Helper()
+	return newTermEnvOpts(t, bin, pty.Options{})
+}
+
+func newTermEnvOpts(t *testing.T, bin string, opts pty.Options) *termEnv {
+	t.Helper()
 	st, err := store.Open(t.TempDir() + "/cockpit.db")
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +48,7 @@ func newTermEnv(t *testing.T, bin string) *termEnv {
 	t.Cleanup(func() { st.Close() })
 	hub := NewHub()
 	t.Cleanup(hub.Close)
-	mgr := pty.NewManager(pty.Options{})
+	mgr := pty.NewManager(opts)
 	t.Cleanup(mgr.Close)
 	srv := httptest.NewServer(New(st, Deps{Hub: hub, Terminals: mgr,
 		Adapters: map[string]adapter.Adapter{"claude": &binAdapter{bin: bin}}}))
@@ -179,7 +185,7 @@ func TestTerminalWSExitMessage(t *testing.T) {
 	}
 	joined := strings.Join(seq, "|")
 	last := seq[len(seq)-1]
-	if last != `T:{"type":"exit","code":3}` || !strings.Contains(joined, "fim") {
+	if last != `T:{"type":"exit","code":3,"reason":"agent"}` || !strings.Contains(joined, "fim") {
 		t.Fatalf("seq = %q", seq)
 	}
 	if strings.Index(joined, "fim") > strings.Index(joined, `"exit"`) {
@@ -190,13 +196,14 @@ func TestTerminalWSExitMessage(t *testing.T) {
 func TestTerminalWSRejectsForeignOrigin(t *testing.T) {
 	e := newTermEnv(t, "/bin/cat")
 	_, info := e.create(t, map[string]any{})
-	for _, origin := range []string{"http://evil.example", "http://127.0.0.1:1", "https://127.0.0.1:" + portOf(e.srv.URL), "null"} {
+	for _, origin := range []string{"http://evil.example", "http://127.0.0.1:1", "https://127.0.0.1:" + portOf(e.srv.URL), "null",
+		"http://10.0.0.1:" + portOf(e.srv.URL), "http://localhost.evil:" + portOf(e.srv.URL), "http://127.0.0.1", "http://127.0.0.1:" + portOf(e.srv.URL) + "/x"} {
 		_, resp, err := e.dial(t, info.ID, "", http.Header{"Origin": {origin}})
 		if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("origin %q: err=%v resp=%v", origin, err, resp)
 		}
 	}
-	for _, origin := range []string{"http://127.0.0.1:" + portOf(e.srv.URL), "http://localhost:" + portOf(e.srv.URL)} {
+	for _, origin := range []string{"http://127.0.0.1:" + portOf(e.srv.URL), "http://localhost:" + portOf(e.srv.URL), "http://127.0.0.2:" + portOf(e.srv.URL)} {
 		if _, _, err := e.dial(t, info.ID, "", http.Header{"Origin": {origin}}); err != nil {
 			t.Fatalf("origin %q: %v", origin, err)
 		}
@@ -273,7 +280,7 @@ func TestTerminalWSEndedTerminal(t *testing.T) {
 		}
 	}
 	if !strings.Contains(out.String(), "antes") || len(texts) != 2 ||
-		!strings.Contains(texts[0], `"type":"info"`) || texts[1] != `{"type":"exit","code":2}` {
+		!strings.Contains(texts[0], `"type":"info"`) || texts[1] != `{"type":"exit","code":2,"reason":"agent"}` {
 		t.Fatalf("out=%q texts=%v", out.String(), texts)
 	}
 	if websocket.CloseStatus(rerr) != websocket.StatusNormalClosure {
@@ -493,5 +500,159 @@ func TestCreateTerminalEnvAllowlist(t *testing.T) {
 		if resp, _ := e.create(t, map[string]any{"env": map[string]string{k: "x"}}); resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("env %s = %d", k, resp.StatusCode)
 		}
+	}
+}
+
+// readExit lê até o fechamento e devolve a mensagem exit (se houver) e o erro final.
+func readExit(t *testing.T, c *websocket.Conn) (map[string]any, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var exit map[string]any
+	for {
+		typ, data, err := c.Read(ctx)
+		if err != nil {
+			return exit, err
+		}
+		if typ == websocket.MessageText {
+			var m map[string]any
+			if json.Unmarshal(data, &m) == nil && m["type"] == "exit" {
+				exit = m
+			}
+		}
+	}
+}
+
+func TestTerminalWSDaemonShutdownReason(t *testing.T) {
+	e := newTermEnv(t, "/bin/cat")
+	_, info := e.create(t, map[string]any{})
+	c, _, err := e.dial(t, info.ID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, c, func(string) bool { return true }) // conectado (info)
+	go e.mgr.Close()                                   // desligamento do nobred
+	exit, rerr := readExit(t, c)
+	if exit == nil || exit["reason"] != "daemon" || exit["code"] != float64(128+15) {
+		t.Fatalf("exit = %v (%v)", exit, rerr)
+	}
+	if websocket.CloseStatus(rerr) != websocket.StatusNormalClosure {
+		t.Fatalf("fechamento = %v", rerr)
+	}
+}
+
+func TestTerminalWSKilledReason(t *testing.T) {
+	e := newTermEnv(t, "/bin/cat")
+	_, info := e.create(t, map[string]any{})
+	c, _, err := e.dial(t, info.ID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, c, func(string) bool { return true })
+	if err := e.mgr.Kill(info.ID); err != nil {
+		t.Fatal(err)
+	}
+	if exit, rerr := readExit(t, c); exit == nil || exit["reason"] != "killed" {
+		t.Fatalf("exit = %v (%v)", exit, rerr)
+	}
+}
+
+func TestTerminalWSWriteTimeoutKeepsConnection(t *testing.T) {
+	e := newTermEnvOpts(t, "/bin/sh", pty.Options{WriteTimeout: 200 * time.Millisecond})
+	_, info := e.create(t, map[string]any{"args": []string{"-c", "stty raw -echo; echo pronto; sleep 30"}})
+	c, _, err := e.dial(t, info.ID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, c, func(o string) bool { return strings.Contains(o, "pronto") })
+	ctx := context.Background()
+	big := bytes.Repeat([]byte("a"), 900<<10) // o agente não lê: a escrita vence o prazo
+	for i := 0; i < 2; i++ {
+		if err := c.Write(ctx, websocket.MessageBinary, big); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Write(ctx, websocket.MessageText, []byte(`{"type":"resize","cols":77,"rows":21}`)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for mustTerm(t, e, info.ID).Info().Cols != 77 {
+		if time.Now().After(deadline) {
+			t.Fatal("conexão caiu depois do prazo de escrita: resize não chegou")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := mustTerm(t, e, info.ID).Info().Clients; n != 1 {
+		t.Fatalf("clients = %d", n)
+	}
+}
+
+func TestTerminalWSSlowClientClosesWithReason(t *testing.T) {
+	e := newTermEnvOpts(t, "/bin/sh", pty.Options{SubLimit: 16})
+	_, info := e.create(t, map[string]any{"args": []string{"-c", "sleep 0.5; printf '%080d' 0; sleep 30"}})
+	c, _, err := e.dial(t, info.ID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit, rerr := readExit(t, c)
+	var ce websocket.CloseError
+	if exit != nil || !errors.As(rerr, &ce) || ce.Reason != "lento" {
+		t.Fatalf("exit=%v err=%v", exit, rerr)
+	}
+}
+
+func TestTerminalWSSendsEmptySnapshot(t *testing.T) {
+	// O cliente libera a entrada depois do snapshot: ele chega mesmo vazio.
+	e := newTermEnv(t, "/bin/cat")
+	_, info := e.create(t, map[string]any{})
+	c, _, err := e.dial(t, info.ID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if typ, _, err := c.Read(ctx); err != nil || typ != websocket.MessageText {
+		t.Fatalf("1ª = %v %v", typ, err)
+	}
+	if typ, data, err := c.Read(ctx); err != nil || typ != websocket.MessageBinary || len(data) != 0 {
+		t.Fatalf("2ª = %v %q %v", typ, data, err)
+	}
+}
+
+func TestCreateTerminalCardKeyFromResumeKey(t *testing.T) {
+	e := newTermEnv(t, "/bin/cat")
+	if _, info := e.create(t, map[string]any{"resume_key": "NAC-12", "origin": "nobre run"}); info.CardKey != "NAC-12" {
+		t.Fatalf("card_key = %q", info.CardKey)
+	}
+	if _, info := e.create(t, map[string]any{"resume_key": "NAC-12", "card_key": "NAC-3"}); info.CardKey != "NAC-3" {
+		t.Fatalf("card_key explícito = %q", info.CardKey)
+	}
+}
+
+func TestTerminalEnvDropsDaemonNobreVarsAndSetsColorterm(t *testing.T) {
+	t.Setenv("NOBRE_RESUME", "NAC-99")
+	t.Setenv("NOBRE_AGENT_PID", "4242")
+	t.Setenv("COLORTERM", "")
+	sh := writeScript(t, "#!/bin/sh\necho \"R=[$NOBRE_RESUME] P=[$NOBRE_AGENT_PID] C=[$COLORTERM] L=[$LANG]\"\n")
+	e := newTermEnv(t, sh)
+	run := func(body map[string]any) string {
+		t.Helper()
+		resp, info := e.create(t, body)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("code = %d", resp.StatusCode)
+		}
+		tm := mustTerm(t, e, info.ID)
+		<-tm.Done()
+		snap, _, cancel := tm.Subscribe()
+		cancel()
+		return string(snap)
+	}
+	t.Setenv("LANG", "C")
+	if out := run(map[string]any{}); !strings.Contains(out, "R=[] P=[] C=[truecolor] L=[C]") {
+		t.Fatalf("saída = %q", out)
+	}
+	out := run(map[string]any{"resume_key": "NAC-5", "env": map[string]string{"COLORTERM": "24bit", "LANG": "pt_BR.UTF-8"}})
+	if !strings.Contains(out, "R=[NAC-5] P=[] C=[24bit] L=[pt_BR.UTF-8]") {
+		t.Fatalf("saída = %q", out)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -114,10 +115,13 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	env := s.terminalEnv()
 	for k, v := range in.Env {
-		env = append(env, k+"="+v)
+		env = setEnv(env, k, v)
 	}
 	if in.ResumeKey != "" {
-		env = append(env, "NOBRE_RESUME="+in.ResumeKey)
+		env = setEnv(env, "NOBRE_RESUME", in.ResumeKey)
+		if in.CardKey == "" { // `nobre run` dentro de um card: o terminal aparece nele
+			in.CardKey = in.ResumeKey
+		}
 	}
 	tm, err := s.startTerminal(pty.StartSpec{
 		Argv: append([]string{bin}, in.Args...), Dir: in.Dir, Env: env,
@@ -149,16 +153,32 @@ func (s *server) startTerminal(spec pty.StartSpec) (*pty.Terminal, error) {
 	return tm, nil
 }
 
-// terminalEnv é o ambiente do daemon com o PATH de sessão e TERM do xterm.
+// terminalEnv é o ambiente do daemon com o PATH de sessão, TERM do xterm e
+// cor de 24 bits. NOBRE_RESUME/NOBRE_AGENT_PID herdados do daemon ligariam o
+// agente ao card ou processo errado: só valem os da requisição.
 func (s *server) terminalEnv() []string {
 	env := make([]string, 0, 64)
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "PATH=") || strings.HasPrefix(kv, "TERM=") {
+		k, _, _ := strings.Cut(kv, "=")
+		switch k {
+		case "PATH", "TERM", "COLORTERM", "NOBRE_RESUME", "NOBRE_AGENT_PID":
 			continue
 		}
 		env = append(env, kv)
 	}
-	return append(env, "PATH="+s.sessionPATH(), "TERM=xterm-256color")
+	return append(env, "PATH="+s.sessionPATH(), "TERM=xterm-256color", "COLORTERM=truecolor")
+}
+
+// setEnv define k=v substituindo ocorrências anteriores (o getenv da libc
+// devolve a primeira).
+func setEnv(env []string, k, v string) []string {
+	out := env[:0]
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, k+"=") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, k+"="+v)
 }
 
 func (s *server) deleteTerminal(w http.ResponseWriter, r *http.Request) {
@@ -169,8 +189,9 @@ func (s *server) deleteTerminal(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// wsOriginOK aceita Origin ausente (cliente CLI) ou exatamente
-// http://127.0.0.1:<porta> / http://localhost:<porta> da porta de escuta.
+// wsOriginOK aceita Origin ausente (cliente CLI) ou http://<host>:<porta> com
+// host loopback (localhost ou 127.0.0.0/8, a mesma regra do allowedHost) e a
+// porta de escuta.
 func wsOriginOK(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -182,7 +203,11 @@ func wsOriginOK(r *http.Request) bool {
 	} else {
 		_, port, _ = net.SplitHostPort(r.Host)
 	}
-	return port != "" && (origin == "http://127.0.0.1:"+port || origin == "http://localhost:"+port)
+	u, err := url.Parse(origin)
+	if err != nil || port == "" || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	return loopbackHost(u.Hostname()) && u.Port() == port
 }
 
 type wsInfo struct {
@@ -190,10 +215,15 @@ type wsInfo struct {
 	pty.Info
 }
 
+// wsExit: Reason é pty.EndAgent, EndKilled ou EndDaemon.
 type wsExit struct {
-	Type string `json:"type"`
-	Code int    `json:"code"`
+	Type   string `json:"type"`
+	Code   int    `json:"code"`
+	Reason string `json:"reason"`
 }
+
+// wsCloseSlow é o motivo de fechamento do cliente que não acompanhou a saída.
+const wsCloseSlow = "lento"
 
 // terminalWS: GET /api/terminals/{id}/ws. Servidor: binário = saída do
 // terminal (primeiro o snapshot), texto JSON info/exit. Cliente: binário =
@@ -218,6 +248,9 @@ func (s *server) terminalWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(wsReadLimit)
+	// No desligamento, Close espera este cliente entregar a mensagem de fim.
+	release, _ := s.deps.Terminals.Hold()
+	defer release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -225,7 +258,7 @@ func (s *server) terminalWS(w http.ResponseWriter, r *http.Request) {
 	snap, out, unsub := tm.Subscribe()
 	defer unsub()
 
-	go func() { // leitor: entrada e resize; qualquer erro derruba a conexão
+	go func() { // leitor: entrada e resize; só erro do socket derruba a conexão
 		defer cancel()
 		for {
 			typ, data, err := conn.Read(ctx)
@@ -236,8 +269,10 @@ func (s *server) terminalWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if typ == websocket.MessageBinary {
+				// Agente que não lê (prazo) ou PTY com erro: descarta esta
+				// entrada e segue; a conexão continua mostrando a saída.
 				if err := tm.Write(data); err != nil && !errors.Is(err, pty.ErrEnded) {
-					return
+					log.Printf("terminal %s: entrada descartada: %v", tm.Info().ID, err)
 				}
 				continue
 			}
@@ -263,7 +298,9 @@ func (s *server) terminalWS(w http.ResponseWriter, r *http.Request) {
 	if !write(websocket.MessageText, info) {
 		return
 	}
-	if len(snap) > 0 && !write(websocket.MessageBinary, snap) {
+	// O snapshot vai sempre, mesmo vazio: a interface só libera a entrada
+	// depois de escrevê-lo (respostas a consultas do histórico não viram tecla).
+	if !write(websocket.MessageBinary, snap) {
 		return
 	}
 	for {
@@ -272,14 +309,14 @@ func (s *server) terminalWS(w http.ResponseWriter, r *http.Request) {
 			return
 		case b, open := <-out:
 			if !open {
-				if code := tm.Info().ExitCode; code != nil {
-					exit, _ := json.Marshal(wsExit{Type: "exit", Code: *code})
+				if in := tm.Info(); in.ExitCode != nil {
+					exit, _ := json.Marshal(wsExit{Type: "exit", Code: *in.ExitCode, Reason: in.EndReason})
 					if write(websocket.MessageText, exit) {
 						conn.Close(websocket.StatusNormalClosure, "")
 					}
 					return
 				}
-				conn.Close(websocket.StatusPolicyViolation, "cliente lento demais")
+				conn.Close(websocket.StatusPolicyViolation, wsCloseSlow)
 				return
 			}
 			if !write(websocket.MessageBinary, b) {

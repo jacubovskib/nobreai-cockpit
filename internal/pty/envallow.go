@@ -7,7 +7,7 @@ var allowedEnvRe = regexp.MustCompile(`^((ANTHROPIC_|CLAUDE_|AWS_|GOOGLE_|VERTEX
 var allowedEnvExact = map[string]bool{
 	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
 	"http_proxy": true, "https_proxy": true, "no_proxy": true,
-	"LANG": true, "TZ": true,
+	"LANG": true, "TZ": true, "COLORTERM": true,
 }
 
 // AllowedEnv diz se o `nobre run` pode repassar a variável ao terminal do

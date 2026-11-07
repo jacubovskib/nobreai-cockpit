@@ -165,7 +165,7 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	terminalID := ""
 	if background {
 		tm, err := s.startTerminal(pty.StartSpec{
-			Argv: argv, Dir: p.Path, Env: append(s.terminalEnv(), "NOBRE_RESUME="+c.Key),
+			Argv: argv, Dir: p.Path, Env: setEnv(s.terminalEnv(), "NOBRE_RESUME", c.Key),
 			CardKey: c.Key, Agent: in.Agent, Origin: termOriginPlatform,
 		})
 		switch {
