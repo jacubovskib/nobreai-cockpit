@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { Money } from './Money'
+import { CurrencyContext } from './money'
 import { Tokens } from './Tokens'
 import { ReadinessPips } from './ReadinessPips'
 import { AgentSwatch } from './AgentSwatch'
@@ -17,6 +18,10 @@ describe('Money', () => {
   it('converte para BRL quando a moeda é BRL com cotação', () => {
     render(<Money usd={4} currency="BRL" rate={5.5} />)
     expect(screen.getByText('R$ 22,00')).toBeInTheDocument()
+  })
+  it('sem props usa a moeda do contexto (configuração)', () => {
+    render(<CurrencyContext.Provider value={{ currency: 'BRL', rate: 5 }}><Money usd={2} /></CurrencyContext.Provider>)
+    expect(screen.getByText('R$ 10,00')).toBeInTheDocument()
   })
   it('fica em USD se BRL sem cotação', () => {
     render(<Money usd={4} currency="BRL" rate={0} />)

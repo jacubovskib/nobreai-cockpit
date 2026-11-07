@@ -81,12 +81,14 @@ export interface Prompt {
   last_used_at: string | null
 }
 
+// Preço por milhão de tokens (USD). Cache null = desconhecido (uso com cache
+// fica "sem preço"); 0 = grátis.
 export interface Price {
   model: string
   input_per_m: number
   output_per_m: number
-  cache_write_per_m: number
-  cache_read_per_m: number
+  cache_write_per_m: number | null
+  cache_read_per_m: number | null
 }
 
 export interface Limit {
@@ -134,7 +136,10 @@ export interface TouchedFile { path: string; kind: 'editado' | 'lido' | string; 
 export interface CardSummary extends Card {
   agent: string
   session_count: number
+  // live: sessão viva (não encerrada e com processo existindo) é dona do card.
   live: boolean
+  // pid_dead_at: sem sessão viva, quando o processo da sessão dona sumiu (carência).
+  pid_dead_at: string | null
   last_activity_at: string | null
   totals: Total
   readiness: ReadinessResult
@@ -143,6 +148,8 @@ export interface CardSummary extends Card {
 // GET /api/cards/{key}
 export interface CardDetail extends Card {
   content: Content
+  // sessions: as ligadas ao card e as que deixaram uso/eventos nele, cada uma
+  // com o uso daquele card.
   sessions: SessionWithUsage[]
   readiness: ReadinessResult
   totals: Total
@@ -150,6 +157,7 @@ export interface CardDetail extends Card {
   touched_files: TouchedFile[]
 }
 
+// Sessão não encerrada; com pid_dead_at o processo já sumiu (não é viva).
 export interface ActiveSession extends Session {
   card: Card | null
   last_activity: string
@@ -164,6 +172,7 @@ export interface AgentSpend {
   daily_usd: number
   pct: number
   warn_pct: number
+  action: 'pause' | 'warn' | ''
   unpriced: boolean
 }
 

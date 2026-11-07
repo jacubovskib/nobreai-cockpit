@@ -82,7 +82,25 @@ describe('Config', () => {
     fireEvent.change(screen.getByLabelText('Preço de entrada de gpt-x'), { target: { value: '3' } })
     fireEvent.change(screen.getByLabelText('Preço de saída de gpt-x'), { target: { value: '15,5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Salvar preço de gpt-x' }))
-    await waitFor(() => expect(calls(fn, 'PUT', '/api/prices')).toEqual([{ model: 'gpt-x', input_per_m: 3, output_per_m: 15.5, cache_write_per_m: 0, cache_read_per_m: 0 }]))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/prices')).toEqual([{ model: 'gpt-x', input_per_m: 3, output_per_m: 15.5, cache_write_per_m: null, cache_read_per_m: null }]))
+  })
+
+  it('cache em branco = desconhecido (null); 0 explícito = grátis', async () => {
+    const fn = mock({ ...routes, 'PUT /api/prices': {} })
+    wrap(<Config />)
+    expect(await screen.findByText(/em branco = desconhecido/)).toBeInTheDocument()
+    fireEvent.change(await screen.findByLabelText('Preço de entrada de gpt-x'), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText('Preço de saída de gpt-x'), { target: { value: '15' } })
+    fireEvent.change(screen.getByLabelText('Preço de cache (leitura) de gpt-x'), { target: { value: '0' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar preço de gpt-x' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/prices')).toEqual([{ model: 'gpt-x', input_per_m: 3, output_per_m: 15, cache_write_per_m: null, cache_read_per_m: 0 }]))
+  })
+
+  it('preço salvo com cache nulo mostra o campo vazio', async () => {
+    mock({ ...routes, '/api/prices': [{ model: 'gpt-x', input_per_m: 3, output_per_m: 15, cache_write_per_m: null, cache_read_per_m: 0.3 }] })
+    wrap(<Config />)
+    expect(await screen.findByLabelText('Preço de cache (escrita) de gpt-x')).toHaveValue('')
+    expect(screen.getByLabelText('Preço de cache (leitura) de gpt-x')).toHaveValue('0,3')
   })
 
   it('adiciona projeto com caminho', async () => {
@@ -144,6 +162,9 @@ describe('Analytics', () => {
     wrap(<Analytics />)
     expect(await screen.findByRole('img', { name: /Codex sem preço/ })).toBeInTheDocument()
     expect(await screen.findByText('sem card')).toBeInTheDocument()
+    // Por agente: entrada, saída e cache, não só o total.
+    const ag = screen.getByRole('region', { name: /Por agente/ })
+    for (const h of ['Entrada', 'Saída', 'Cache']) expect(within(ag).getByRole('columnheader', { name: h })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Ver como tabela' }))
     expect(screen.getByRole('columnheader', { name: 'Codex' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '30 dias' }))

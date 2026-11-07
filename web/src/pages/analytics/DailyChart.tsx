@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { agentInfo } from '../../ui/agents'
+import { formatMoney, useCurrency, type CurrencyPref } from '../../ui/money'
 import { niceMax, usd2, type Day } from './data'
 
 const H = 240
@@ -8,31 +9,41 @@ const GAP = 2
 const total = (d: Day) => Object.values(d.cells).reduce((s, c) => s + c.usd, 0)
 const anyUnpriced = (d: Day) => Object.values(d.cells).some((c) => c.unpriced)
 
-// ariaFor descreve o dia em texto: serve ao leitor de tela e ao teste.
-export function ariaFor(d: Day, agents: string[]) {
+// ariaFor descreve o dia em texto (na moeda de exibição): serve ao leitor de
+// tela e ao teste.
+export function ariaFor(d: Day, agents: string[], pref: CurrencyPref = {}) {
+  const money = (usd: number) => formatMoney(usd, pref)
   const parts = agents.map((a) => {
     const c = d.cells[a]
-    return `${agentInfo(a).name} ${c ? (c.unpriced ? 'sem preço' : `US$ ${usd2(c.usd)}`) : 'US$ 0,00'}`
+    return `${agentInfo(a).name} ${c ? (c.unpriced ? 'sem preço' : money(c.usd)) : money(0)}`
   })
-  const t = anyUnpriced(d) ? `US$ ${usd2(total(d))} mais uso sem preço` : `US$ ${usd2(total(d))}`
+  const t = anyUnpriced(d) ? `${money(total(d))} mais uso sem preço` : money(total(d))
   return `${d.label}: total ${t}; ${parts.join(', ')}`
 }
 
-// DailyChart: barras empilhadas de custo por dia e agente, um eixo só.
-// Uso sem preço nunca vira zero: o dia mostra o marcador "sem preço".
+// DailyChart: barras empilhadas de custo por dia e agente, um eixo só, na
+// moeda de exibição. Uso sem preço nunca vira zero: o dia mostra o marcador
+// "sem preço".
 export function DailyChart({ days, agents }: { days: Day[]; agents: string[] }) {
   const [active, setActive] = useState(-1)
-  const max = niceMax(Math.max(0, ...days.map(total)))
+  const pref = useCurrency()
+  const money = (usd: number) => formatMoney(usd, pref)
+  // Escala na moeda de exibição, para o eixo ter valores redondos nela.
+  const rate = pref.currency === 'BRL' && pref.rate && pref.rate > 0 ? pref.rate : 1
+  const max = niceMax(Math.max(0, ...days.map(total)) * rate) / rate
   const ticks = [0, 1, 2, 3, 4].map((i) => (max / 4) * i)
   const dense = days.length > 14
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr', columnGap: 8 }}>
       <div aria-hidden="true" style={{ position: 'relative', height: H, fontSize: 12, color: 'var(--text-2)' }}>
-        {ticks.map((t) => (
-          <span key={t} style={{ position: 'absolute', right: 0, bottom: (t / max) * H - 8, lineHeight: '16px' }}>
-            {Number.isInteger(t) ? t : usd2(t)}
-          </span>
-        ))}
+        {ticks.map((t) => {
+          const v = Math.round(t * rate * 100) / 100
+          return (
+            <span key={t} style={{ position: 'absolute', right: 0, bottom: (t / max) * H - 8, lineHeight: '16px' }}>
+              {Number.isInteger(v) ? v : usd2(v)}
+            </span>
+          )
+        })}
       </div>
       <div style={{ position: 'relative', height: H, borderBottom: '1px solid #3A3F4B' }}>
         {ticks.slice(1).map((t) => (
@@ -48,7 +59,7 @@ export function DailyChart({ days, agents }: { days: Day[]; agents: string[] }) 
                 key={d.day}
                 role="img"
                 tabIndex={0}
-                aria-label={ariaFor(d, agents)}
+                aria-label={ariaFor(d, agents, pref)}
                 onMouseEnter={() => setActive(i)}
                 onMouseLeave={() => setActive((v) => (v === i ? -1 : v))}
                 onFocus={() => setActive(i)}
@@ -92,13 +103,13 @@ export function DailyChart({ days, agents }: { days: Day[]; agents: string[] }) 
                       ...(i > days.length - 3 ? { right: 0 } : i < 2 ? { left: 0 } : { left: '50%', transform: 'translateX(-50%)' }),
                     }}
                   >
-                    <strong>{d.label} · {unpriced ? `US$ ${usd2(total(d))} + sem preço` : `US$ ${usd2(total(d))}`}</strong>
+                    <strong>{d.label} · {unpriced ? `${money(total(d))} + sem preço` : money(total(d))}</strong>
                     {agents.map((a) => {
                       const c = d.cells[a]
                       return (
                         <span key={a} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, background: agentInfo(a).color }} />
-                          {agentInfo(a).name} {c?.unpriced ? 'sem preço' : `US$ ${usd2(c?.usd ?? 0)}`}
+                          {agentInfo(a).name} {c?.unpriced ? 'sem preço' : money(c?.usd ?? 0)}
                         </span>
                       )
                     })}

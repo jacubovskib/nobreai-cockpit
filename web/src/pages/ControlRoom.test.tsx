@@ -5,6 +5,7 @@ import { ControlRoom } from './ControlRoom'
 import { CardsList } from './CardsList'
 import { Board } from './Board'
 import type { Overview, CardSummary } from '../api/types'
+import { CurrencyContext } from '../ui/money'
 
 const total = { key: '', agent: '', day: '', sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0, cost_usd: 0, unpriced: false }
 const overview: Overview = {
@@ -82,6 +83,41 @@ describe('ControlRoom', () => {
     expect(calls(fn, 'POST', '/api/cards/NAC-9/attach')[0]).toEqual({ session_id: 's1' })
   })
 
+  it('sessão com processo morto mostra "processo encerrado há N min", não "Ao vivo"', async () => {
+    const dead = {
+      id: 'claude:1', agent: 'claude', model: 'opus', started_at: new Date(Date.now() - 3600_000).toISOString(),
+      pid_dead_at: new Date(Date.now() - 7 * 60_000).toISOString(), ended_at: null,
+      card: { key: 'NAC-38', title: 'OAuth' }, last_activity: '', session_usage: total, card_totals: total, readiness: null,
+    }
+    mock({ '/api/overview': { ...overview, active: [dead] }, '/api/settings': {} })
+    wrap(<ControlRoom />)
+    expect(await screen.findByText('processo encerrado há 7 min')).toBeInTheDocument()
+    expect(screen.queryByText(/Ao vivo/)).not.toBeInTheDocument()
+  })
+
+  it('limite: texto segue a ação, marcador em warn_pct e "+ sem preço" no uso misto', async () => {
+    const per_agent = [
+      { agent: 'claude', spent_usd: 5, daily_usd: 10, pct: 50, warn_pct: 60, action: 'pause', unpriced: true },
+      { agent: 'codex', spent_usd: 1, daily_usd: 10, pct: 10, warn_pct: 80, action: 'warn', unpriced: false },
+    ]
+    mock({ '/api/overview': { ...overview, today: { ...overview.today, per_agent } }, '/api/settings': {} })
+    wrap(<ControlRoom />)
+    expect(await screen.findByText(/Claude Code: em 100% o agente é bloqueado \(a partir da próxima etapa\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Codex: em 100% só avisa/)).toBeInTheDocument()
+    expect(screen.queryByText(/a sessão é pausada/)).not.toBeInTheDocument()
+    expect(screen.getByTestId('warn-marker-claude')).toHaveStyle({ left: '60%' })
+    expect(screen.getByTestId('warn-marker-codex')).toHaveStyle({ left: '80%' })
+    expect(screen.getByText('+ sem preço')).toBeInTheDocument()
+  })
+
+  it('sessão sem card encerrada aparece marcada e permite criar card', async () => {
+    const ended = { ...noCard, id: 's2', ended_at: new Date(Date.now() - 3600_000).toISOString() }
+    mock({ '/api/overview': { ...overview, alerts: [], no_card: [ended] }, '/api/settings': {} })
+    wrap(<ControlRoom />)
+    expect(await screen.findByText('encerrada')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Criar card desta sessão' })).toBeInTheDocument()
+  })
+
   it('Nova tarefa cria o card com o projeto escolhido', async () => {
     const fn = mock({
       '/api/overview': { ...overview, alerts: [] }, '/api/settings': {},
@@ -132,6 +168,32 @@ describe('Board', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Codex' }))
     expect(screen.queryByText('t-NAC-1')).not.toBeInTheDocument()
     expect(screen.getByText('t-NAC-2')).toBeInTheDocument()
+  })
+
+  it('processo morto mostra "processo encerrado há N min", não "ao vivo"', async () => {
+    const pid_dead_at = new Date(Date.now() - 5 * 60_000).toISOString()
+    mock({ '/api/cards': [mk('NAC-4', 'em_andamento', 'claude', { live: false, pid_dead_at, last_activity_at: pid_dead_at })] })
+    wrap(<Board />)
+    expect(await screen.findByText('processo encerrado há 5 min')).toBeInTheDocument()
+    expect(screen.queryByText('ao vivo')).not.toBeInTheDocument()
+  })
+
+  it('explica que Em andamento exige sessão viva', async () => {
+    mock({ '/api/cards': cards })
+    wrap(<Board />)
+    expect(await screen.findByText(/“Em andamento” só aceita card com sessão viva/)).toBeInTheDocument()
+    expect(screen.queryByText(/o daemon reconcilia/)).not.toBeInTheDocument()
+  })
+
+  it('custo respeita BRL da configuração', async () => {
+    mock({ '/api/cards': [mk('NAC-5', 'backlog', 'claude', { totals: { ...total, cost_usd: 2 } })] })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}><MemoryRouter>
+        <CurrencyContext.Provider value={{ currency: 'BRL', rate: 5 }}><Board /></CurrencyContext.Provider>
+      </MemoryRouter></QueryClientProvider>,
+    )
+    expect(await screen.findByText('R$ 10,00')).toBeInTheDocument()
   })
 
   it('sem last_activity_at mostra "sem sessão viva"', async () => {

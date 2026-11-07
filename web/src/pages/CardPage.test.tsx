@@ -71,6 +71,14 @@ describe('CardPage', () => {
     expect(screen.getByText('a.go')).toBeInTheDocument()
   })
 
+  it('processo da sessão morto: mostra "processo encerrado há N min", não "ao vivo"', async () => {
+    const dead = { ...sess, card_id: 1, pid_dead_at: new Date(Date.now() - 4 * 60_000).toISOString() }
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, column: 'em_andamento', sessions: [dead], live: null } })
+    wrap(<CardPage />)
+    expect(await screen.findByText('processo encerrado há 4 min')).toBeInTheDocument()
+    expect(screen.queryByText(/ao vivo/i)).not.toBeInTheDocument()
+  })
+
   it('card inexistente mostra Card não encontrado', async () => {
     mock({ ...base })
     wrap(<CardPage />)

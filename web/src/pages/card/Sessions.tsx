@@ -2,6 +2,7 @@ import type { CardDetail } from '../../api/types'
 import { AgentSwatch } from '../../ui/AgentSwatch'
 import { Money } from '../../ui/Money'
 import { Tokens } from '../../ui/Tokens'
+import { minutesSince } from '../board'
 import { h2, muted, panel } from './shared'
 
 const cell = { padding: '8px 10px', textAlign: 'left' as const, whiteSpace: 'nowrap' as const }
@@ -38,12 +39,14 @@ export function Sessions({ card, currency, rate }: { card: CardDetail; currency?
             <tbody>
               {sessions.map((s, i) => {
                 const live = card.live?.id === s.id
+                const stale = !live && s.card_id === card.id && !s.ended_at && s.pid_dead_at
                 return (
                   <tr key={s.id} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={cell}>{i + 1}</td>
                     <td style={cell}>
                       <AgentSwatch agent={s.agent} />
                       {live && <span style={{ color: 'var(--ok)', marginLeft: 8 }}>ao vivo</span>}
+                      {stale && <span style={{ color: 'var(--warn)', marginLeft: 8 }}>processo encerrado há {minutesSince(s.pid_dead_at)} min</span>}
                     </td>
                     <td style={cell}>{new Date(s.started_at).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
                     <td style={cell}>{duration(s.started_at, s.ended_at ?? s.last_event_at)}</td>

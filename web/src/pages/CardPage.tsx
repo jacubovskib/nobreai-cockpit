@@ -8,7 +8,7 @@ import { agentInfo } from '../ui/agents'
 import { Money } from '../ui/Money'
 import { StatusBadge } from '../ui/StatusBadge'
 import { formatTokens } from '../ui/Tokens'
-import { plural } from './board'
+import { minutesSince, plural } from './board'
 import { CliPanel } from './card/CliPanel'
 import { ContinuePanel } from './card/ContinuePanel'
 import { Decisions } from './card/Decisions'
@@ -54,6 +54,8 @@ export function CardPage() {
   const agents = new Set(c.sessions.map((s) => s.agent)).size
   const t = c.totals
   const tokens = t.input + t.output + t.cache_write + t.cache_read
+  // Sessão dona cujo processo sumiu (carência antes de encerrar): não é viva.
+  const stale = c.live ? undefined : c.sessions.find((s) => s.card_id === c.id && !s.ended_at && s.pid_dead_at)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -65,6 +67,7 @@ export function CardPage() {
           <span className="mono" style={muted}>{c.key}</span>
           <StatusBadge column={c.column} live={!!c.live} />
           {c.live && <span style={muted}>{agentInfo(c.live.agent).name} ao vivo</span>}
+          {stale && <span style={{ color: 'var(--warn)' }}>{agentInfo(stale.agent).name} · processo encerrado há {minutesSince(stale.pid_dead_at)} min</span>}
         </div>
         <h1 style={{ fontSize: 26 }}>{c.title}</h1>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', ...muted }}>

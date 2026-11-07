@@ -5,8 +5,9 @@ import type { Total } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
+import { formatAmount, formatMoney, moneySymbol, useCurrency } from '../ui/money'
 import { DailyChart } from './analytics/DailyChart'
-import { buildDays, range, tokens, usd2, ymd } from './analytics/data'
+import { buildDays, range, tokens, ymd } from './analytics/data'
 import { btn, h2, muted, panel } from './card/shared'
 
 const PERIODS = [
@@ -35,7 +36,12 @@ export function Analytics() {
   const [asTable, setAsTable] = useState(false)
   const { from, to } = useMemo(() => range(period), [period])
   const settings = useSettings().data
-  const cur = { currency: settings?.currency, rate: settings?.brl_rate }
+  // Props explícitas vindas das configurações (a tela também funciona fora do
+  // Layout); o que faltar vem do CurrencyContext.
+  const cur = useCurrency({ currency: settings?.currency, rate: settings?.brl_rate })
+  const money = (usd: number) => formatMoney(usd, cur)
+  const amount = (usd: number) => formatAmount(usd, cur)
+  const symbol = moneySymbol(cur)
   const dayAgent = useTotals('day_agent', from, to)
   const byAgent = useTotals('agent', from, to)
   const byCard = useTotals('card', from, to)
@@ -99,8 +105,8 @@ export function Analytics() {
           <span style={muted}>Custo em {long}</span>
           <span style={{ fontSize: 26, fontWeight: 600 }}><Money usd={cost} unpriced={costUnpriced && cost === 0} {...cur} /></span>
           <span style={muted}>
-            {costUnpriced ? 'inclui uso de modelo sem preço, fora da soma' : `média ${cur.currency === 'BRL' && cur.rate ? `R$ ${usd2(avg * cur.rate)}` : `US$ ${usd2(avg)}`}/dia`}
-            {cur.currency !== 'BRL' && cur.rate ? ` · ≈ R$ ${usd2(cost * cur.rate)}` : ''}
+            {costUnpriced ? 'inclui uso de modelo sem preço, fora da soma' : `média ${money(avg)}/dia`}
+            {symbol === 'US$' && cur.rate ? ` · ≈ ${formatMoney(cost, { currency: 'BRL', rate: cur.rate })}` : ''}
           </span>
         </div>
         <div style={panel}>
@@ -113,14 +119,14 @@ export function Analytics() {
           <span style={{ fontSize: 26, fontWeight: 600 }}>{nSessions}</span>
           <span style={muted}>
             em {cardRows.length} {cardRows.length === 1 ? 'card' : 'cards'}
-            {nSessions > 0 && !costUnpriced ? ` · US$ ${usd2(cost / nSessions)} por sessão` : ''}
+            {nSessions > 0 && !costUnpriced ? ` · ${money(cost / nSessions)} por sessão` : ''}
           </span>
         </div>
       </section>
 
       <section aria-labelledby="dia-t" style={panel}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <h2 id="dia-t" style={h2}>Custo por dia e por agente (US$)</h2>
+          <h2 id="dia-t" style={h2}>Custo por dia e por agente ({symbol})</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <ul aria-label="Legenda" style={{ display: 'flex', gap: 16, listStyle: 'none', margin: 0, padding: 0 }}>
               {agents.map((a) => (
@@ -151,9 +157,9 @@ export function Analytics() {
                     <tr key={d.day} style={{ borderTop: '1px solid var(--border)' }}>
                       <th scope="row" style={{ ...td, textAlign: 'left', fontWeight: 400 }}>{d.label}</th>
                       {agents.map((a) => (
-                        <td key={a} style={num}>{d.cells[a]?.unpriced ? 'sem preço' : usd2(d.cells[a]?.usd ?? 0)}</td>
+                        <td key={a} style={num}>{d.cells[a]?.unpriced ? 'sem preço' : amount(d.cells[a]?.usd ?? 0)}</td>
                       ))}
-                      <td style={num}>{unp ? `${usd2(tot)} + sem preço` : usd2(tot)}</td>
+                      <td style={num}>{unp ? `${amount(tot)} + sem preço` : amount(tot)}</td>
                     </tr>
                   )
                 })}
@@ -172,20 +178,24 @@ export function Analytics() {
                 <tr style={thead}>
                   <th scope="col" style={th}>Agente</th>
                   <th scope="col" style={{ ...th, textAlign: 'right' }}>Sessões</th>
-                  <th scope="col" style={{ ...th, textAlign: 'right' }}>Tokens</th>
+                  <th scope="col" style={{ ...th, textAlign: 'right' }}>Entrada</th>
+                  <th scope="col" style={{ ...th, textAlign: 'right' }}>Saída</th>
+                  <th scope="col" style={{ ...th, textAlign: 'right' }}>Cache</th>
                   <th scope="col" style={{ ...th, textAlign: 'right' }}>Custo</th>
                   <th scope="col" style={{ ...th, textAlign: 'right' }}>Por sessão</th>
                 </tr>
               </thead>
               <tbody>
-                {agentRows.length === 0 && <tr><td colSpan={5} style={{ ...td, color: 'var(--text-2)' }}>Sem uso no período.</td></tr>}
+                {agentRows.length === 0 && <tr><td colSpan={7} style={{ ...td, color: 'var(--text-2)' }}>Sem uso no período.</td></tr>}
                 {agentRows.map((t) => (
                   <tr key={t.key} style={{ borderTop: '1px solid var(--border)' }}>
                     <th scope="row" style={{ ...td, textAlign: 'left', fontWeight: 400 }}><AgentSwatch agent={t.key} /></th>
                     <td style={num}>{t.sessions}</td>
-                    <td style={num}>{tokens(t.input + t.output + t.cache_write + t.cache_read)}</td>
+                    <td style={num}>{tokens(t.input)}</td>
+                    <td style={num}>{tokens(t.output)}</td>
+                    <td style={num} title={`${tokens(t.cache_write)} escrita · ${tokens(t.cache_read)} leitura`}>{tokens(t.cache_write + t.cache_read)}</td>
                     <td style={num}><Money usd={t.cost_usd} unpriced={t.unpriced} {...cur} /></td>
-                    <td style={num}>{t.unpriced || t.sessions === 0 ? '—' : usd2(t.cost_usd / t.sessions)}</td>
+                    <td style={num}>{t.unpriced || t.sessions === 0 ? '—' : amount(t.cost_usd / t.sessions)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -194,7 +204,7 @@ export function Analytics() {
         </section>
 
         <section aria-labelledby="cards-t" style={panel}>
-          <h2 id="cards-t" style={h2}>Cards mais caros · US$</h2>
+          <h2 id="cards-t" style={h2}>Cards mais caros · {symbol}</h2>
           {topCards.length === 0 && <p style={muted}>Sem uso no período.</p>}
           {topCards.map((t) => {
             const label = t.key === '' ? 'sem card' : t.key
@@ -207,7 +217,7 @@ export function Analytics() {
                     <span style={{ display: 'block', height: 6, borderRadius: 3, background: '#C3C8D2', width: `${t.unpriced ? 0 : Math.round((t.cost_usd / topMax) * 100)}%` }} />
                   </span>
                 </span>
-                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{t.unpriced ? 'sem preço' : usd2(t.cost_usd)}</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{t.unpriced ? 'sem preço' : amount(t.cost_usd)}</span>
               </>
             )
             const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, color: 'inherit', textDecoration: 'none', minHeight: 40 }

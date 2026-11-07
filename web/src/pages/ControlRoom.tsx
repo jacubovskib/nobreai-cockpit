@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useOverview, useSettings } from '../api/queries'
 import { patch, post } from '../api/client'
-import type { ActiveSession, Alert, Card, DomainEvent, SessionWithUsage, Total } from '../api/types'
+import type { ActiveSession, AgentSpend, Alert, Card, DomainEvent, SessionWithUsage, Total } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
+import { formatMoney, useCurrency, type CurrencyPref } from '../ui/money'
 import { Tokens, formatTokens } from '../ui/Tokens'
 import { minutesSince } from './board'
 import { NewTask } from './NewTask'
@@ -59,10 +60,18 @@ function ActiveCard({ s }: { s: ActiveSession }) {
           <strong><AgentSwatch agent={s.agent} /></strong>
           <span className="mono" style={{ fontSize: 12, color: 'var(--text-2)' }}>{s.model}</span>
         </div>
-        <span className="badge badge-live">
-          <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><circle cx="4" cy="4" r="3.5" fill="var(--ok)" /></svg>
-          Ao vivo · {mins} min
-        </span>
+        {s.pid_dead_at ? (
+          // Processo sumiu: a sessão está na carência antes de ser encerrada.
+          <span className="badge" style={{ color: 'var(--warn)' }}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M12 3 2 21h20z" /><path d="M12 10v5M12 18v.5" /></svg>
+            processo encerrado há {minutesSince(s.pid_dead_at)} min
+          </span>
+        ) : (
+          <span className="badge badge-live">
+            <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><circle cx="4" cy="4" r="3.5" fill="var(--ok)" /></svg>
+            Ao vivo · {mins} min
+          </span>
+        )}
       </div>
       {s.card ? (
         <Link to={`/cards/${s.card.key}`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
@@ -115,7 +124,8 @@ function NoCardRow({ s }: { s: SessionWithUsage }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 8, background: '#0F1116' }}>
       <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 13 }}>
-        <AgentSwatch agent={s.agent} /> · <span className="mono">{dir || s.cwd}</span> · {minutesSince(s.started_at)} min ·{' '}
+        <AgentSwatch agent={s.agent} /> · <span className="mono">{dir || s.cwd}</span> ·{' '}
+        {s.ended_at ? <span style={{ color: 'var(--text-2)' }}>encerrada</span> : `${minutesSince(s.started_at)} min`} ·{' '}
         <Money usd={s.usage.cost_usd} unpriced={s.usage.unpriced} />
       </span>
       {open ? (
@@ -149,6 +159,41 @@ function NoCardRow({ s }: { s: SessionWithUsage }) {
   )
 }
 
+// actionText descreve o que acontece em 100% do limite diário do agente.
+const actionText = (action: AgentSpend['action']) =>
+  action === 'pause' ? 'em 100% o agente é bloqueado (a partir da próxima etapa)' : 'em 100% só avisa'
+
+function AgentLimit({ l, cur }: { l: AgentSpend; cur: CurrencyPref }) {
+  const limited = l.daily_usd > 0
+  const warn = limited && l.spent_usd > 0 && l.pct >= l.warn_pct
+  // Uso misto: parte com preço (somada) e parte sem preço (fora da soma).
+  const mixed = l.unpriced && l.spent_usd > 0
+  const pref = useCurrency(cur)
+  const money = (v: number) => formatMoney(v, pref)
+  const tip = limited
+    ? `${agentInfo(l.agent).name}: ${money(l.spent_usd)}${mixed ? ' + sem preço' : ''} de ${money(l.daily_usd)} (${l.pct}%${warn ? ', acima do aviso' : ''})`
+    : `${agentInfo(l.agent).name}: sem limite diário`
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} title={tip}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, gap: 8 }}>
+        <AgentSwatch agent={l.agent} />
+        <span>
+          <strong style={{ fontWeight: 600 }}><Money usd={l.spent_usd} unpriced={l.unpriced && l.spent_usd === 0} {...cur} /></strong>
+          {mixed && <span style={{ color: 'var(--warn)' }}> + sem preço</span>}{' '}
+          <span style={{ color: 'var(--text-2)' }}>
+            / {limited ? <Money usd={l.daily_usd} {...cur} /> : 'sem limite'}
+            {limited && ` · ${l.pct}%${warn ? ' · aviso' : ''}`}
+          </span>
+        </span>
+      </div>
+      <div role="img" aria-label={tip} style={{ position: 'relative', height: 8, borderRadius: 4, background: 'var(--border)' }}>
+        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 4, width: `${Math.min(l.pct, 100)}%`, background: agentInfo(l.agent).color, boxShadow: warn ? '0 0 0 2px #FAB219' : undefined }} />
+        {limited && <div data-testid={`warn-marker-${l.agent}`} aria-hidden="true" style={{ position: 'absolute', left: `${l.warn_pct}%`, top: -3, width: 2, height: 14, background: '#6B7280' }} />}
+      </div>
+    </div>
+  )
+}
+
 const pad = (n: number) => String(n).padStart(2, '0')
 function eventText(e: DomainEvent): string {
   const d = (e.data ?? {}) as { path?: string; command?: string; text?: string }
@@ -170,8 +215,10 @@ export function ControlRoom() {
   if (isPending || !data) return <p className="placeholder">Carregando…</p>
 
   const { today, alerts, active, no_card, events } = data
-  const agentsActive = [...new Set(active.map((a) => agentInfo(a.agent).name))].join(', ')
-  const cardsActive = new Set(active.filter((a) => a.card).map((a) => a.card!.key)).size
+  // Só sessões vivas (processo existindo) contam como ativas.
+  const alive = active.filter((a) => !a.pid_dead_at)
+  const agentsActive = [...new Set(alive.map((a) => agentInfo(a.agent).name))].join(', ')
+  const cardsActive = new Set(alive.filter((a) => a.card).map((a) => a.card!.key)).size
   const sessionAgent = new Map<string, string>([...active, ...no_card].map((s) => [s.id, s.agent]))
   const sessionCard = new Map<string, string>(active.filter((a) => a.card).map((a) => [a.id, a.card!.key]))
   const cur = { currency: settings?.currency, rate: settings?.brl_rate }
@@ -242,31 +289,11 @@ export function ControlRoom() {
               <h2 id="limite-t" style={h2}>Custo hoje × limite diário</h2>
               <Link to="/analytics" style={{ fontSize: 13 }}>Ver analytics</Link>
             </div>
-            {today.per_agent.map((l) => {
-              const warn = l.daily_usd > 0 && l.pct >= l.warn_pct
-              const tip = l.daily_usd > 0
-                ? `${agentInfo(l.agent).name}: US$ ${l.spent_usd.toFixed(2)} de US$ ${l.daily_usd.toFixed(2)} (${l.pct}%${warn ? ', acima do aviso' : ''})`
-                : `${agentInfo(l.agent).name}: sem limite diário`
-              return (
-                <div key={l.agent} style={{ display: 'flex', flexDirection: 'column', gap: 6 }} title={tip}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, gap: 8 }}>
-                    <AgentSwatch agent={l.agent} />
-                    <span>
-                      <strong style={{ fontWeight: 600 }}><Money usd={l.spent_usd} unpriced={l.unpriced && l.spent_usd === 0} {...cur} /></strong>{' '}
-                      <span style={{ color: 'var(--text-2)' }}>
-                        / {l.daily_usd > 0 ? <Money usd={l.daily_usd} {...cur} /> : 'sem limite'}
-                        {l.daily_usd > 0 && ` · ${l.pct}%${warn ? ' · aviso' : ''}`}
-                      </span>
-                    </span>
-                  </div>
-                  <div role="img" aria-label={tip} style={{ position: 'relative', height: 8, borderRadius: 4, background: 'var(--border)' }}>
-                    <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 4, width: `${Math.min(l.pct, 100)}%`, background: agentInfo(l.agent).color, boxShadow: warn ? '0 0 0 2px #FAB219' : undefined }} />
-                    <div aria-hidden="true" style={{ position: 'absolute', left: '80%', top: -3, width: 2, height: 14, background: '#6B7280' }} />
-                  </div>
-                </div>
-              )
-            })}
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)' }}>Marcador cinza = aviso em 80%. Em 100% a sessão é pausada.</p>
+            {today.per_agent.map((l) => <AgentLimit key={l.agent} l={l} cur={cur} />)}
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)' }}>
+              Marcador cinza = aviso do limite de cada agente.
+              {today.per_agent.filter((l) => l.daily_usd > 0 && l.action).map((l) => ` ${agentInfo(l.agent).name}: ${actionText(l.action)}.`).join('')}
+            </p>
           </section>
 
           <section aria-labelledby="feed-t" style={panel}>

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useHealth, useSettings } from '../api/queries'
 import { useStream } from '../api/useStream'
+import { CurrencyContext } from '../ui/money'
 
 const svgProps = {
   width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
@@ -62,7 +63,10 @@ function DaemonStatus() {
 export function Layout() {
   useStream()
   const settings = useSettings()
+  // Toda tela abaixo mostra custo na moeda configurada (Money/useMoney).
+  const currency = { currency: settings.data?.currency, rate: settings.data?.brl_rate }
   return (
+    <CurrencyContext.Provider value={currency}>
     <div className="shell">
       <nav className="sidebar" aria-label="Principal">
         <div className="brand">
@@ -100,5 +104,6 @@ export function Layout() {
         </main>
       </div>
     </div>
+    </CurrencyContext.Provider>
   )
 }

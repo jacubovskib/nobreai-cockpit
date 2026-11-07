@@ -26,6 +26,9 @@ const cardBox = (c: CardSummary, stale: boolean): React.CSSProperties => ({
 function BoardCard({ card, onMove, busy }: { card: CardSummary; onMove: (key: string, col: Column) => void; busy: boolean }) {
   const stale = card.column === 'em_andamento' && !card.live
   const mins = minutesSince(card.last_activity_at)
+  const staleText = card.pid_dead_at
+    ? `processo encerrado há ${minutesSince(card.pid_dead_at)} min`
+    : card.last_activity_at ? `sem sessão há ${mins} min` : 'sem sessão viva'
   return (
     <article
       draggable
@@ -44,7 +47,7 @@ function BoardCard({ card, onMove, busy }: { card: CardSummary; onMove: (key: st
         {stale && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--warn)' }}>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M12 3 2 21h20z" /><path d="M12 10v5M12 18v.5" /></svg>
-            {card.last_activity_at ? `sem sessão há ${mins} min` : 'sem sessão viva'}
+            {staleText}
           </span>
         )}
       </div>
@@ -174,7 +177,7 @@ export function Board() {
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 24px', fontSize: 12, color: 'var(--text-2)' }}>
         <span>Bolinhas = critérios de “pronto para handoff” cumpridos (regra em Configuração).</span>
-        <span>Arrastar um card é permitido; o daemon reconcilia com o estado real da sessão.</span>
+        <span>Arrastar um card é permitido; “Em andamento” só aceita card com sessão viva — use Continuar com… ou nobre resume.</span>
       </div>
     </div>
   )

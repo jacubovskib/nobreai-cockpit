@@ -1,7 +1,8 @@
-const fmt = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+import { formatMoney, useCurrency } from './money'
 
 // Money mostra custo em USD ("US$ 4,82"); com currency "BRL" e cotação > 0
-// converte para "R$ x,xx". unpriced nunca vira zero: mostra "sem preço".
+// converte para "R$ x,xx". Sem currency/rate nas props usa a configuração
+// (CurrencyContext). unpriced nunca vira zero: mostra "sem preço".
 export function Money({
   usd,
   unpriced,
@@ -13,7 +14,7 @@ export function Money({
   currency?: string
   rate?: number
 }) {
+  const pref = useCurrency({ currency, rate })
   if (unpriced) return <span>sem preço</span>
-  if (currency === 'BRL' && rate && rate > 0) return <span>{`R$ ${fmt.format(usd * rate)}`}</span>
-  return <span>{`US$ ${fmt.format(usd)}`}</span>
+  return <span>{formatMoney(usd, pref)}</span>
 }

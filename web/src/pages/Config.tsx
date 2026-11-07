@@ -323,7 +323,9 @@ function Projects({ projects }: { projects: Project[] }) {
 
 // ---- Preços e moeda ----
 interface PriceDraft { input: string; output: string; cw: string; cr: string }
-const priceDraft = (p?: Price): PriceDraft => ({ input: showNum(p?.input_per_m ?? 0), output: showNum(p?.output_per_m ?? 0), cw: showNum(p?.cache_write_per_m ?? 0), cr: showNum(p?.cache_read_per_m ?? 0) })
+// Cache: null (desconhecido) fica em branco; 0 (grátis) aparece como "0".
+const showCache = (n: number | null | undefined) => (n == null ? '' : String(n).replace('.', ','))
+const priceDraft = (p?: Price): PriceDraft => ({ input: showNum(p?.input_per_m ?? 0), output: showNum(p?.output_per_m ?? 0), cw: showCache(p?.cache_write_per_m), cr: showCache(p?.cache_read_per_m) })
 
 function PriceRow({ model, price, unpriced }: { model: string; price?: Price; unpriced: boolean }) {
   const qc = useQueryClient()
@@ -337,18 +339,20 @@ function PriceRow({ model, price, unpriced }: { model: string; price?: Price; un
   const remove = useMutation({ mutationFn: () => del(`/api/prices?model=${encodeURIComponent(model)}`), onSuccess: refresh })
   const submit = () => {
     const f = (s: string) => (s === '' ? 0 : parseDec(s))
-    const p: Price = { model, input_per_m: f(d.input), output_per_m: f(d.output), cache_write_per_m: f(d.cw), cache_read_per_m: f(d.cr) }
+    // Cache em branco = desconhecido (null), nunca 0.
+    const fc = (s: string) => (s.trim() === '' ? null : parseDec(s))
+    const p: Price = { model, input_per_m: f(d.input), output_per_m: f(d.output), cache_write_per_m: fc(d.cw), cache_read_per_m: fc(d.cr) }
     if (!(p.input_per_m > 0 && p.output_per_m > 0)) {
       return setBad(new Error('Informe os preços de entrada e saída (maiores que zero)'))
     }
-    if (!(p.cache_write_per_m >= 0 && p.cache_read_per_m >= 0)) {
+    if (![p.cache_write_per_m, p.cache_read_per_m].every((v) => v === null || v >= 0)) {
       return setBad(new Error(`Preço inválido para ${model}.`))
     }
     setBad(null)
     save.mutate(p)
   }
-  const cell = (k: keyof PriceDraft, label: string) => (
-    <td style={td}><input style={small} inputMode="decimal" placeholder="US$/1M" aria-label={`${label} de ${model}`} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} /></td>
+  const cell = (k: keyof PriceDraft, label: string, placeholder = 'US$/1M') => (
+    <td style={td}><input style={small} inputMode="decimal" placeholder={placeholder} aria-label={`${label} de ${model}`} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} /></td>
   )
   return (
     <tr style={{ borderTop: '1px solid var(--border)', background: unpriced ? '#1E1A12' : undefined }}>
@@ -358,8 +362,8 @@ function PriceRow({ model, price, unpriced }: { model: string; price?: Price; un
       </th>
       {cell('input', 'Preço de entrada')}
       {cell('output', 'Preço de saída')}
-      {cell('cw', 'Preço de cache (escrita)')}
-      {cell('cr', 'Preço de cache (leitura)')}
+      {cell('cw', 'Preço de cache (escrita)', 'desconhecido')}
+      {cell('cr', 'Preço de cache (leitura)', 'desconhecido')}
       <td style={td}>
         <div style={{ display: 'flex', gap: 6 }}>
           <button type="button" style={btn} aria-label={`Salvar preço de ${model}`} disabled={save.isPending} onClick={submit}>Salvar</button>
@@ -391,7 +395,7 @@ function Prices({ settings }: { settings: Settings }) {
     save.mutate({ currency, brl_rate: r })
   }
   return (
-    <Section id="precos" title="Preços e moeda" hint="Preço por milhão de tokens. A tabela começa vazia: preencha com os valores públicos de cada provider. Modelo sem preço aparece como “sem preço”, nunca como zero.">
+    <Section id="precos" title="Preços e moeda" hint="Preço por milhão de tokens. A tabela começa vazia: preencha com os valores públicos de cada provider. Modelo sem preço aparece como “sem preço”, nunca como zero. Cache: em branco = desconhecido (uso com cache fica “sem preço”); 0 = grátis.">
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
         <label style={field}>Moeda de exibição
           <select style={{ ...input, minHeight: 40 }} value={currency} onChange={(e) => setCurrency(e.target.value)}>
