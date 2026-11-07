@@ -36,36 +36,34 @@ make build
 
 Sem `--seed-demo`, o `nobred` usa o banco real (vazio até os hooks existirem). O daemon só escuta e atende em loopback.
 
-## Próxima etapa: integração com os agentes
+## Etapa "integração": concluída
 
-Ordem: **Task 8 → 9 → 10 → 12 → 17**. Pendências que precisam entrar em cada uma:
+Branch `feat/piloto-integracao` (a partir de `feat/piloto-bases-frontend`).
 
-**Task 8 (adaptador Claude Code / hooks)**
-- Sessão retomada com o mesmo ID depois de encerrada fica encerrada (`ON CONFLICT DO NOTHING`).
-- Adicionar `_txlock=immediate` ao DSN antes de hooks concorrentes.
-- Linha do transcript sem `timestamp` é descartada (tokens perdidos).
-- Offset do transcript maior que o arquivo nunca reseta (arquivo truncado ou rotacionado).
-- Publicar `sessions` no `UserPromptSubmit`.
-- `me/done` e `me/test` não registram evento nem tocam a sessão.
-- O hook precisa sempre resolver um PID, porque a reconciliação ignora sessões com `pid <= 0`.
-- Ligar a um card uma sessão aberta cujo processo morreu deveria tratá-la como encerrada. A linha "Sessões sem card" deveria marcar esse caso.
+| Task | O que entrega |
+|---|---|
+| 8 | Adaptador do Claude Code (hooks): contexto no início, pacote via `NOBRE_RESUME`, registro de prompts/arquivos/comandos, bloqueio único para atualizar o card, lembrete de card, limites, tokens dos transcripts (com subagentes) |
+| 9 | CLI `nobre` (comandos do agente, administração e `nobre hook`, que nunca quebra o agente) |
+| 10 | `nobre setup`: hooks no `~/.claude/settings.json` com backup, skill `nobre-cockpit`, serviço systemd; seção de agentes na Configuração |
+| 12 | "Continuar com outro agente": abre o Claude num terminal novo (formato por terminal), com PATH correto e janela que fica aberta se falhar |
+| 17 | Teste de ponta a ponta do handoff e roteiro manual `docs/piloto-checklist.md` |
 
-**Task 9 (CLI `nobre`)**
-- `me/start` pode deixar um card órfão: criar e ligar numa só transação.
-- O Makefile só compila `cmd/nobred`.
+Houve revisão por task, revisão final do branch, uma rodada de correções e uma re-revisão, que aprovou tudo. `go test ./...` e `pnpm -C web test --run` (65 testes) estão verdes.
 
-**Task 12 ("Continuar com…")**
-- Exigir JSON em todo POST, inclusive sem corpo.
-- Validar `launch_mode` e `terminal_cmd`.
-- `TerminalCmd` nulo é gravado como `null`.
-- `DiffStat` sem `--`.
-- Validar o branch antes do `Checkout` (`check-ref-format`, sem `-` inicial).
-- O modo `platform`/vazio deve usar `Settings.LaunchMode`.
-- Falta a opção de prompt "Nenhum: só o pacote" (hoje vai slug vazio).
-- O texto do ContinuePanel não bate com o comportamento planejado (409 a menos que forçado).
+### Para instalar e testar
+Siga `docs/piloto-checklist.md` (instala `nobre`/`nobred` em `~/.local/bin` e roda `~/.local/bin/nobre setup`, de preferência antes com `--dry-run`).
 
-**Plano 2 (fora do piloto)**
-Limites mensais, linha do tempo das sessões e último prompt no pacote de retomada, indicador "Retomadas sem perguntas", modos tmux e segundo plano, adaptadores Codex e Kiro, "bloquear novas sessões", MCP, times.
+### Cuidado conhecido
+Se o "Continuar" abrir o terminator quando nenhuma janela dele estiver aberta, esse terminal e o Claude dentro dele ficam no grupo do serviço `nobred` e **são encerrados se o daemon for reiniciado** (rebuild, `nobre setup` de novo, `systemctl --user restart nobred`). Correção de uma linha pendente: `KillMode=process` na unit. Até lá, mantenha uma janela do terminator aberta antes de clicar em "Iniciar Claude Code neste card".
+
+### Pendências pequenas
+- O prompt padrão "Retomar card" ainda diz "pacote abaixo", mas o pacote chega pelo início da sessão.
+- A prévia de prompt mostra o pacote; o "Continuar" o envia vazio.
+- A unit guarda o PATH do terminal onde o setup rodou (inclusive venv/nvm).
+- Outros menores estão no ledger local.
+
+## Plano 2 (fora do piloto)
+Adaptadores Codex e Kiro, modos tmux e segundo plano, "bloquear novas sessões", limites mensais, linha do tempo das sessões e último prompt no pacote, indicador "Retomadas sem perguntas", MCP, times.
 
 ## Decisões tomadas durante a execução
 
@@ -92,4 +90,4 @@ Limites mensais, linha do tempo das sessões e último prompt no pacote de retom
 
 ## Como retomar
 
-Retomar pela Task 8 com o mesmo plano. O ledger em `.superpowers/sdd/plan/progress.md` marca o que está completo; não refazer tasks marcadas `complete`.
+O piloto está completo. O próximo trabalho é o plano 2. O ledger em `.superpowers/sdd/plan/progress.md` guarda as decisões e os pontos menores adiados.
