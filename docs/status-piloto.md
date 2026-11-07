@@ -2,70 +2,94 @@
 
 Atualizado em 2026-11-07. Branch: `feat/piloto-bases-frontend`. Plano: `docs/plan.md`. Spec: `docs/spec.md`.
 
-## Pronto (backend da etapa "bases")
+## Etapa "bases + frontend": concluída
 
-| Task | O que entrega | Commits |
-|---|---|---|
-| 1 | Domínio e banco SQLite com migrações | 6686f1a |
-| 2 | Cards (`NAC-n`), projetos e transições do board | 1b7339c |
-| 3 | Conteúdo do card e regra de "pronto para handoff" | 2da6ba2 |
-| 4 | Sessões, eventos e identificação do processo do agente (`/proc`) | e0ed48f |
-| 5 | Tokens dos transcripts do Claude Code e custo | 0bd7de1 |
-| 6 | Prompts salvos com variáveis e pacote de retomada | e8d2d2f |
-| 7 | API HTTP + SSE do `nobred` (só aceita `127.0.0.1`/`localhost` e JSON) | 50ee20c..851a324 |
-| 11 | Reconciliação do board, limites e `/api/overview` | 4a9f3bb..8e498e9 |
-| 18 | Dados de demonstração (`nobred --seed-demo`, nunca toca o banco real) | 941a37c..60d2d0c |
+| Task | O que entrega |
+|---|---|
+| 1 | Domínio e banco SQLite com migrações |
+| 2 | Cards (`NAC-n`), projetos e transições do board |
+| 3 | Conteúdo do card e regra de "pronto para handoff" |
+| 4 | Sessões, eventos e identificação do processo do agente (`/proc`) |
+| 5 | Tokens dos transcripts do Claude Code e custo |
+| 6 | Prompts salvos com variáveis e pacote de retomada |
+| 7 | API HTTP + SSE do `nobred` |
+| 11 | Reconciliação do board, limites e `/api/overview` |
+| 18 | Dados de demonstração (`nobred --seed-demo`, nunca toca o banco real) |
+| 13 | Base da interface web embutida no `nobred` |
+| 14 | Sala de controle, Board, lista de Cards e "Nova tarefa" |
+| 15 | Tela do card (documento de handoff) |
+| 16 | Analytics, Configuração e Prompts |
 
-Cada task passou por implementação com testes primeiro e por uma revisão independente. `go vet ./... && go test ./...` está verde.
+O processo:
+- Cada task foi feita com o teste antes do código e passou por uma revisão independente.
+- No fim houve uma revisão do branch inteiro, seguida de uma rodada de correções e de uma re-revisão, que aprovou todas as correções.
+- `go vet ./... && go test ./...` e `pnpm -C web test --run` (56 testes) estão verdes, e `make build` funciona.
 
 ### Como ver funcionando
 
 ```bash
 cd /home/nobre/workspace/nobretech/nobreai-cockpit
-go run ./cmd/nobred --seed-demo        # banco separado: ~/.local/share/nobreai-cockpit/cockpit-demo.db
-curl -s -H 'Host: 127.0.0.1:7420' http://127.0.0.1:7420/api/overview | head
+make build
+./nobred --seed-demo      # banco separado: ~/.local/share/nobreai-cockpit/cockpit-demo.db
+# abrir http://127.0.0.1:7420
 ```
 
-Ainda não há interface web: a API responde, mas as telas são as próximas tasks.
+Sem `--seed-demo`, o `nobred` usa o banco real (vazio até os hooks existirem). O daemon só escuta e atende em loopback.
 
-## Falta fazer
+## Próxima etapa: integração com os agentes
 
-### Próximo: frontend (nesta ordem)
-1. **Task 13** — base da UI (Vite + React + TS), tokens do design, barra lateral, cliente da API, stream SSE, embed no `nobred`. O proxy do Vite precisa de `changeOrigin: true` por causa da checagem de Host. Mostrar faixa "Dados de demonstração" quando a setting `demo` for true.
-2. **Task 14** — Sala de controle e Board.
-3. **Task 15** — Tela do card (handoff). O botão "Continuar com…" fica desabilitado com "disponível na próxima etapa" até a Task 12.
-4. **Task 16** — Analytics, Configuração e Prompts. A seção de agentes fica com "disponível na próxima etapa" até a Task 10. O preview de prompt precisa funcionar com texto ainda não salvo (hoje a rota de render exige prompt salvo; ajustar).
+Ordem: **Task 8 → 9 → 10 → 12 → 17**. Pendências que precisam entrar em cada uma:
 
-### Depois: integração com os agentes
-5. **Task 8** — adaptador do Claude Code (hooks).
-6. **Task 9** — CLI `nobre`.
-7. **Task 10** — setup automático (hooks, skill, serviço systemd).
-8. **Task 12** — "Continuar com…" abrindo o terminal. **Antes dela:** validar `launch_mode` e `terminal_cmd` no `PUT /api/settings` e exigir `Content-Type: application/json` em todo POST (inclusive sem corpo).
-9. **Task 17** — teste de ponta a ponta do handoff e checklist com o Claude real.
+**Task 8 (adaptador Claude Code / hooks)**
+- Sessão retomada com o mesmo ID depois de encerrada fica encerrada (`ON CONFLICT DO NOTHING`).
+- Adicionar `_txlock=immediate` ao DSN antes de hooks concorrentes.
+- Linha do transcript sem `timestamp` é descartada (tokens perdidos).
+- Offset do transcript maior que o arquivo nunca reseta (arquivo truncado ou rotacionado).
+- Publicar `sessions` no `UserPromptSubmit`.
+- `me/done` e `me/test` não registram evento nem tocam a sessão.
+- O hook precisa sempre resolver um PID, porque a reconciliação ignora sessões com `pid <= 0`.
+- Ligar a um card uma sessão aberta cujo processo morreu deveria tratá-la como encerrada. A linha "Sessões sem card" deveria marcar esse caso.
 
-### Plano 2 (fora do piloto)
-Adaptadores Codex e Kiro, modos tmux e segundo plano, "bloquear novas sessões", MCP, times.
+**Task 9 (CLI `nobre`)**
+- `me/start` pode deixar um card órfão: criar e ligar numa só transação.
+- O Makefile só compila `cmd/nobred`.
+
+**Task 12 ("Continuar com…")**
+- Exigir JSON em todo POST, inclusive sem corpo.
+- Validar `launch_mode` e `terminal_cmd`.
+- `TerminalCmd` nulo é gravado como `null`.
+- `DiffStat` sem `--`.
+- Validar o branch antes do `Checkout` (`check-ref-format`, sem `-` inicial).
+- O modo `platform`/vazio deve usar `Settings.LaunchMode`.
+- Falta a opção de prompt "Nenhum: só o pacote" (hoje vai slug vazio).
+- O texto do ContinuePanel não bate com o comportamento planejado (409 a menos que forçado).
+
+**Plano 2 (fora do piloto)**
+Limites mensais, linha do tempo das sessões e último prompt no pacote de retomada, indicador "Retomadas sem perguntas", modos tmux e segundo plano, adaptadores Codex e Kiro, "bloquear novas sessões", MCP, times.
 
 ## Decisões tomadas durante a execução
 
-- Task 1 pulou o `git init`/cópia de docs (feitos antes, no commit 098676f).
-- Os corpos dos 5 prompts padrão vêm literalmente da tela Prompts do design.
-- A rota `POST /api/cards/{key}/attach` ficou na Task 7 (era da Task 14).
-- `Settings` ganhou o campo `demo`.
-- Ligar a um card uma sessão já encerrada deixa o card em "Pausado", nunca "Em andamento".
-- Quando uma sessão troca de card, o card anterior vai para "Pausado" se não tiver outra sessão viva, e mantém o próprio histórico.
-- A API local recusa Host diferente de `127.0.0.1`/`localhost` na porta certa e POST com corpo que não seja JSON (proteção contra CSRF e DNS rebinding).
-- `LimitStatus` devolve erro em vez de esconder falhas de banco.
-- As telas 15/16 mostram controles desabilitados para rotas que só chegam nas Tasks 10/12.
-
-## Pontos menores anotados para a revisão final
-
-Lista completa no ledger local (`.superpowers/sdd/plan/progress.md`, fora do git). Os que merecem atenção antes de usar no dia a dia:
-- Seed de prompts e seed de demonstração não são atômicos.
-- Mensagens de erro da API às vezes trazem texto técnico em inglês.
-- `PUT /api/settings` com `"rules": null` apaga as regras.
-- O custo por card no banco de demonstração fica próximo do design, mas não idêntico (ex.: US$ 4,41 em vez de 4,82).
+1. Task 1 pulou o `git init`/cópia de docs (feitos antes, no commit 098676f).
+2. Os corpos dos 5 prompts padrão vêm literalmente da tela Prompts do design.
+3. A rota `POST /api/cards/{key}/attach` ficou na Task 7.
+4. `Settings` ganhou o campo `demo`.
+5. Ligar a um card uma sessão já encerrada deixa o card em "Pausado".
+6. Quando uma sessão troca de card, o card anterior vai para "Pausado" se não tiver outra sessão viva, e mantém o próprio histórico.
+7. A API local só aceita conexões de loopback, Host `127.x`/`localhost` na porta certa, e POST com corpo em JSON (proteção contra CSRF, DNS rebinding e acesso pela rede).
+8. `LimitStatus` devolve erro em vez de esconder falhas de banco.
+9. Controles que dependem das Tasks 10/12 aparecem desabilitados com "disponível na próxima etapa".
+10. `/cards` é uma lista pesquisável de todos os cards.
+11. Botão "Nova tarefa" para você mesmo criar cards no Backlog.
+12. Novas rotas: `POST /api/prompts/render` (prévia de prompt não salvo) e `GET /api/events?kind=`.
+13. Preço de entrada e de saída precisa ser maior que zero.
+14. Sessão viva = `ended_at` nulo **e** processo existente. Durante a carência a UI mostra "processo encerrado há N min".
+15. Mover um card para "Em andamento" sem sessão viva é recusado (409).
+16. O custo fica no card em que foi gasto (`usage.card_id`), mesmo depois de um handoff.
+17. Preço de cache em branco = desconhecido. Se houver tokens de cache, o custo vira "sem preço". `0` explícito = grátis. Preços de cache 0 já salvos viraram "desconhecido".
+18. Sessão cujo processo morreu não impede outra sessão de assumir o card.
+19. Uso registrado antes de a sessão ter card vai para o card quando ela é ligada.
+20. O workspace de execução local (`.superpowers/`, fora do git) foi mantido para retomar as Tasks 8+.
 
 ## Como retomar
 
-Retomar a execução por subagentes a partir da Task 13. O ledger em `.superpowers/sdd/plan/progress.md` marca o que está completo. Não refazer tasks marcadas como `complete`.
+Retomar pela Task 8 com o mesmo plano. O ledger em `.superpowers/sdd/plan/progress.md` marca o que está completo; não refazer tasks marcadas `complete`.
