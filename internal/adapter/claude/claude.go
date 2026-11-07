@@ -15,6 +15,8 @@ import (
 type Adapter struct {
 	st   *store.Store
 	deps adapter.Deps
+	// paths são os arquivos que Detect e Install leem e escrevem.
+	paths Paths
 
 	// ingest serializa a leitura do transcript por sessão (chave: ID da
 	// sessão, valor: *sync.Mutex); wg acompanha as leituras em andamento.
@@ -29,7 +31,7 @@ func New(st *store.Store, deps adapter.Deps) *Adapter {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &Adapter{st: st, deps: deps}
+	return &Adapter{st: st, deps: deps, paths: DefaultPaths()}
 }
 
 func (a *Adapter) Name() string { return "claude" }

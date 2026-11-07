@@ -35,6 +35,17 @@ const settings = {
 }
 const tot = (o: object) => ({ key: '', agent: '', day: '', sessions: 1, input: 0, output: 0, cache_write: 0, cache_read: 0, cost_usd: 0, unpriced: false, ...o })
 
+const stub = { found: false, path: '', version: '' }
+const agents = [
+  { agent: 'claude', detection: { found: true, path: '/usr/bin/claude', version: '2.1.0', checks: [
+    { key: 'cli', label: 'CLI encontrado', detail: '/usr/bin/claude', ok: true },
+    { key: 'hooks', label: 'Hooks instalados', detail: 'faltam: Stop', ok: false },
+    { key: 'skill', label: 'Skill do Cockpit instalada', detail: '', ok: true },
+    { key: 'events', label: 'Recebendo eventos', detail: 'nenhum evento recebido ainda', ok: false },
+  ] } },
+  ...['codex', 'kiro'].map((agent) => ({ agent, detection: { ...stub, checks: [{ key: 'adapter', label: 'Adaptador', detail: 'Adaptador chega no plano 2', ok: false }] } })),
+]
+
 describe('Config', () => {
   const routes = {
     '/api/settings': settings, '/api/limits': [], '/api/projects': [{ id: 1, name: 'api', path: '/w/api', capture: true }],
@@ -65,12 +76,41 @@ describe('Config', () => {
     expect(calls(fn, 'PUT', '/api/limits')[1]).toEqual({ agent: 'codex', daily_usd: 10.5, card_usd: 0, warn_pct: 80, action: 'pause' })
   })
 
-  it('destaca modelo visto no uso sem preço e agentes ficam para a próxima etapa', async () => {
-    mock(routes)
+  it('destaca modelo visto no uso sem preço', async () => {
+    mock({ ...routes, '/api/agents': agents })
     wrap(<Config />)
     expect(await screen.findByText(/visto no uso, sem preço/)).toBeInTheDocument()
-    expect(screen.getAllByText('disponível na próxima etapa')).toHaveLength(3)
-    expect(screen.getByRole('button', { name: 'Instalar o que falta' })).toBeDisabled()
+  })
+
+  it('lista agentes detectados; codex e kiro ficam em breve', async () => {
+    mock({ ...routes, '/api/agents': agents })
+    wrap(<Config />)
+    const claude = await screen.findByRole('article', { name: 'Claude Code' })
+    expect(within(claude).getByText('detectado')).toBeInTheDocument()
+    expect(within(claude).getByText('Hooks instalados')).toBeInTheDocument()
+    expect(within(claude).getByText('faltam: Stop')).toBeInTheDocument()
+    const sec = screen.getByRole('region', { name: 'Agentes detectados' })
+    expect(within(sec).getAllByText('em breve')).toHaveLength(2)
+    expect(screen.getAllByText('Adaptador chega no plano 2')).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Instalar o que falta' })).toHaveLength(1)
+  })
+
+  it('instalar o que falta chama o POST e mostra mensagens e backup', async () => {
+    const fn = mock({ ...routes, '/api/agents': agents,
+      'POST /api/agents/claude/install': { changed: ['Stop'], backup: '/h/.claude/settings.json.bak-20261107130405', messages: ['Hooks instalados em Stop.'] } })
+    wrap(<Config />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Instalar o que falta' }))
+    expect(await screen.findByText('Hooks instalados em Stop.')).toBeInTheDocument()
+    expect(screen.getByText('/h/.claude/settings.json.bak-20261107130405')).toBeInTheDocument()
+    expect(fn.mock.calls.some(([u, i]) => u === '/api/agents/claude/install' && i?.method === 'POST')).toBe(true)
+  })
+
+  it('erro na instalação aparece na tela', async () => {
+    mock({ ...routes, '/api/agents': agents,
+      'POST /api/agents/claude/install': { status: 500, body: { error: '~/.claude/settings.json não é um JSON válido; nada foi alterado' } } })
+    wrap(<Config />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Instalar o que falta' }))
+    expect(await screen.findByText(/não é um JSON válido/)).toBeInTheDocument()
   })
 
   it('preço vazio mostra erro e não envia; preço válido envia o PUT', async () => {

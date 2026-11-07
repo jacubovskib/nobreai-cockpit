@@ -1,8 +1,8 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { del, patch, post, put } from '../api/client'
-import { useCards, useLimits, usePrices, useProjects, useSettings, useTotals } from '../api/queries'
-import type { Limit, Price, Project, Settings } from '../api/types'
+import { useAgents, useCards, useLimits, usePrices, useProjects, useSettings, useTotals } from '../api/queries'
+import type { AgentDetection, InstallReport, Limit, Price, Project, Settings } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { ErrorLine, btn, btnPrimary, h2, input, muted, panel } from './card/shared'
@@ -16,11 +16,6 @@ const RULES: [string, string][] = [
   ['how_to_test', '“Como testar” preenchido'],
   ['no_open_questions', 'Nenhuma pergunta em aberto sem resposta'],
 ]
-const SETUP_CHECKS: Record<string, string[]> = {
-  claude: ['CLI encontrado', 'Hooks instalados', 'Skill do Cockpit instalada', 'Recebendo eventos'],
-  codex: ['CLI encontrado', 'Hooks instalados', 'Instruções no AGENTS.md atualizadas', 'Uso de tokens'],
-  kiro: ['CLI encontrado', 'Hook de arquivo editado', 'Steering do Cockpit instalado', 'Recebendo eventos'],
-}
 const NAV = [
   ['agentes', 'Agentes e setup'], ['limites', 'Limites de custo'], ['cards', 'Criação de cards'],
   ['handoff', 'Pronto para handoff'], ['projetos', 'Projetos'], ['precos', 'Preços e moeda'],
@@ -74,36 +69,64 @@ function useSaveSettings(settings: Settings) {
 }
 
 // ---- Agentes ----
+function AgentCard({ info }: { info: AgentDetection }) {
+  const qc = useQueryClient()
+  const install = useMutation({
+    mutationFn: () => post<InstallReport>(`/api/agents/${info.agent}/install`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
+  })
+  const d = info.detection
+  const installable = info.agent === 'claude'
+  const rep = install.data
+  return (
+    <article aria-label={agentInfo(info.agent).name} style={{ ...panel, background: 'var(--bg)', padding: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        <h3 style={{ fontSize: 15 }}><AgentSwatch agent={info.agent} /></h3>
+        <span className="badge">{installable ? (d.found ? 'detectado' : 'não encontrado') : 'em breve'}</span>
+      </div>
+      {installable && d.found && <p style={{ ...muted, margin: 0 }}>{d.path}{d.version ? ` · ${d.version}` : ''}</p>}
+      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {d.checks.map((c) => (
+          <li key={c.key} style={{ display: 'flex', gap: 8, color: c.ok ? 'var(--text)' : 'var(--text-2)' }}>
+            <span role="img" aria-label={c.ok ? 'ok' : 'pendente'} style={{ color: c.ok ? 'var(--ok)' : 'var(--text-2)' }}>{c.ok ? '✓' : '–'}</span>
+            <span>
+              {c.label}
+              {c.detail && <><br /><span style={{ ...muted, fontSize: 12, wordBreak: 'break-all' }}>{c.detail}</span></>}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {installable && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <button type="button" style={btnPrimary} disabled={install.isPending} onClick={() => install.mutate()}>
+            {install.isPending ? 'Instalando…' : 'Instalar o que falta'}
+          </button>
+          {rep && (
+            <div role="status" style={{ ...muted, fontSize: 13 }}>
+              {rep.messages.map((m) => <div key={m}>{m}</div>)}
+              {rep.backup && <div>Backup: <code>{rep.backup}</code></div>}
+            </div>
+          )}
+          <ErrorLine error={install.error} />
+        </div>
+      )}
+    </article>
+  )
+}
+
 function Agents() {
+  const agents = useAgents()
   return (
     <Section
       id="agentes"
       title="Agentes detectados"
-      hint="Detecção, instalação de hooks e skills: disponível na próxima etapa."
-      action={
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" style={btn} disabled>Escanear de novo</button>
-          <button type="button" style={btn} disabled>Instalar o que falta</button>
-        </div>
-      }
+      hint="Instala os hooks e a skill do Claude Code neste computador. Codex e Kiro chegam depois."
+      action={<button type="button" style={btn} disabled={agents.isFetching} onClick={() => agents.refetch()}>Escanear de novo</button>}
     >
+      {agents.isError && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível detectar os agentes.</p>}
+      {agents.isPending && <p className="placeholder">Detectando…</p>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-        {AGENT_IDS.map((a) => (
-          <article key={a} style={{ ...panel, background: 'var(--bg)', padding: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-              <h3 style={{ fontSize: 15 }}><AgentSwatch agent={a} /></h3>
-              <span className="badge">disponível na próxima etapa</span>
-            </div>
-            <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {SETUP_CHECKS[a].map((c) => (
-                <li key={c} style={{ display: 'flex', gap: 8, color: 'var(--text-2)' }}>
-                  <span aria-hidden="true">–</span>
-                  <span>{c} <span style={{ fontSize: 12 }}>(não verificado)</span></span>
-                </li>
-              ))}
-            </ul>
-          </article>
-        ))}
+        {agents.data?.map((a) => <AgentCard key={a.agent} info={a} />)}
       </div>
     </Section>
   )

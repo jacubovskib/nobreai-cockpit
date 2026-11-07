@@ -208,3 +208,7 @@ export interface Overview {
 
 // Evento SSE `changed`: data = {"kind": "..."}
 export type StreamKind = 'cards' | 'sessions' | 'config' | 'usage' | 'prompts' | string
+
+export interface AgentCheck { key: string; label: string; detail: string; ok: boolean }
+export interface AgentDetection { agent: string; detection: { found: boolean; path: string; version: string; checks: AgentCheck[] } }
+export interface InstallReport { changed: string[]; backup: string; messages: string[] }

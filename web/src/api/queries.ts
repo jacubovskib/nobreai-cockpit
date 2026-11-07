@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { get } from './client'
-import type { CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, PromptEvent, Settings, SessionWithUsage, Total } from './types'
+import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, PromptEvent, Settings, SessionWithUsage, Total } from './types'
 
 export const useHealth = () =>
   useQuery({ queryKey: ['health'], queryFn: () => get<Health>('/api/health'), refetchInterval: 15000, retry: false })
@@ -46,3 +46,6 @@ export const useSessions = (limit = 50) =>
 
 export const usePromptEvents = (limit = 50) =>
   useQuery({ queryKey: ['events', 'prompt', limit], queryFn: () => get<PromptEvent[]>(`/api/events?kind=prompt&limit=${limit}`) })
+
+export const useAgents = () =>
+  useQuery({ queryKey: ['agents'], queryFn: () => get<AgentDetection[]>('/api/agents') })

@@ -60,6 +60,7 @@ func New(st *store.Store, deps Deps) http.Handler {
 	s.usageRoutes(mux)
 	s.overviewRoutes(mux)
 	s.hookRoutes(mux)
+	s.agentRoutes(mux)
 	mux.Handle("/", spaHandler(distFS()))
 	return localOnly(mux)
 }
