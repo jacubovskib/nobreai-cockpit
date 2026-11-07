@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 
@@ -17,7 +18,14 @@ const (
 // hook implementa `nobre hook <agente> <Evento>`. Falha aberta: qualquer
 // problema (daemon fora, prazo de 2 s, status não 2xx, JSON inválido) sai com
 // 0 e sem nenhuma saída, nem em stderr, para nunca atrapalhar o agente.
-func (c *cli) hook(args []string) int {
+func (c *cli) hook(args []string) (code int) {
+	// Nem um pânico pode atrapalhar o agente: sai com 0 e sem saída (a
+	// resposta só é escrita no fim, então nada saiu ainda).
+	defer func() {
+		if recover() != nil {
+			code = 0
+		}
+	}()
 	start := time.Now()
 	if len(args) != 2 {
 		return 0
@@ -33,6 +41,12 @@ func (c *cli) hook(args []string) int {
 	}
 	ch := make(chan read, 1)
 	go func() {
+		// Pânico aqui derrubaria o processo: vira erro de leitura.
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- read{nil, fmt.Errorf("leitura do stdin: %v", r)}
+			}
+		}()
 		b, err := io.ReadAll(io.LimitReader(c.in, maxHookStdin+1))
 		ch <- read{b, err}
 	}()

@@ -134,3 +134,20 @@ func TestHookLargeStdinWithinBudget(t *testing.T) {
 		t.Fatalf("stdout=%q got=%d dur=%v", r.stdout, got, r.dur)
 	}
 }
+
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) { panic("leitura quebrada") }
+
+func TestHookRecoversFromPanic(t *testing.T) {
+	r := runCLIReader(t, "127.0.0.1:1", panicReader{}, nil, "hook", "claude", "Stop")
+	if r.code != 0 || r.stdout != "" || r.err != "" {
+		t.Fatalf("%+v", r)
+	}
+	// Pânico fora da goroutine de leitura (getenv nil) também sai com 0.
+	var out bytes.Buffer
+	c := &cli{in: strings.NewReader("{}"), out: &out, err: &out}
+	if code := c.hook([]string{"claude", "Stop"}); code != 0 || out.Len() != 0 {
+		t.Fatalf("code = %d, saída %q", code, out.String())
+	}
+}

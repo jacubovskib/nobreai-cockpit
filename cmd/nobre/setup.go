@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/launch"
 )
 
 // setupDeps são os caminhos e comandos do `nobre setup`. Os testes injetam
@@ -64,10 +65,34 @@ func isFile(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
-func unitContent(nobred string) string {
+// unitContent monta a unidade do nobred. path vai em Environment=PATH: o
+// systemd do usuário só tem /usr/local/bin e /usr/bin, e o daemon precisa
+// achar o claude e passar o PATH ao terminal do "Continuar".
+func unitContent(nobred, path string) string {
+	env := ""
+	if q := systemdPATH(path); q != "" {
+		env = "Environment=" + q + "\n"
+	}
 	return "[Unit]\nDescription=NobreAI Cockpit (nobred)\nAfter=network.target\n\n" +
-		"[Service]\nExecStart=" + nobred + "\nRestart=on-failure\n\n" +
+		"[Service]\n" + env + "ExecStart=" + nobred + "\nRestart=on-failure\n\n" +
 		"[Install]\nWantedBy=default.target\n"
+}
+
+// systemdPATH devolve "PATH=<path>" entre aspas duplas para o Environment=
+// do systemd: \ e " escapados e % dobrado (especificadores). Entradas com
+// quebra de linha são descartadas. "" = nada a gravar.
+func systemdPATH(path string) string {
+	var keep []string
+	for _, d := range strings.Split(path, ":") {
+		if d != "" && !strings.ContainsAny(d, "\n\r") {
+			keep = append(keep, d)
+		}
+	}
+	if len(keep) == 0 {
+		return ""
+	}
+	v := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(strings.Join(keep, ":"))
+	return `"PATH=` + v + `"`
 }
 
 // checklist imprime os itens ✓/! do setup e lembra se algum falhou.
@@ -153,7 +178,8 @@ func (c *cli) setupService(d *setupDeps, dry bool, l *checklist) {
 		return
 	}
 	unit := filepath.Join(d.UnitDir, "nobred.service")
-	want := unitContent(d.NobredBin)
+	// O PATH deste terminal (onde o claude funciona) mais o diretório do nobre.
+	want := unitContent(d.NobredBin, launch.PathWithDir(c.getenv("PATH"), filepath.Dir(d.NobreBin)))
 	cur, _ := os.ReadFile(unit)
 	if dry {
 		if string(cur) == want {

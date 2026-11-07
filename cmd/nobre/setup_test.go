@@ -44,8 +44,11 @@ func (e *setupEnv) run(t *testing.T, addr, stdin, cwd string, args ...string) re
 	var out, errb bytes.Buffer
 	c := &cli{in: strings.NewReader(stdin), out: &out, err: &errb, sd: e.d,
 		getenv: func(k string) string {
-			if k == "NOBRE_ADDR" {
+			switch k {
+			case "NOBRE_ADDR":
 				return addr
+			case "PATH":
+				return "/usr/bin:/home/u/.local/bin"
 			}
 			return ""
 		},
@@ -82,7 +85,8 @@ func TestSetupInstallsEverythingAndRegistersProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	unit, _ := os.ReadFile(filepath.Join(e.d.UnitDir, "nobred.service"))
-	if !strings.Contains(string(unit), "ExecStart=/opt/x/bin/nobred\n") || !strings.Contains(string(unit), "Restart=on-failure") {
+	if !strings.Contains(string(unit), "ExecStart=/opt/x/bin/nobred\n") || !strings.Contains(string(unit), "Restart=on-failure") ||
+		!strings.Contains(string(unit), "\nEnvironment=\"PATH=/opt/x/bin:/usr/bin:/home/u/.local/bin\"\n") {
 		t.Fatalf("unit: %s", unit)
 	}
 	if len(e.ran) != 3 ||
@@ -194,5 +198,19 @@ func TestSetupRestartsDaemonWhenUnitChanged(t *testing.T) {
 	last := e.ran[len(e.ran)-1]
 	if r.code != 0 || strings.Join(last, " ") != "systemctl --user restart nobred" {
 		t.Fatalf("%+v ran=%v", r, e.ran)
+	}
+}
+
+func TestUnitPATHQuotedForSystemd(t *testing.T) {
+	got := unitContent("/opt/x/nobred", `/a b:/100%:/q"uote:/back\slash`)
+	want := `Environment="PATH=/a b:/100%%:/q\"uote:/back\\slash"` + "\n"
+	if !strings.Contains(got, "\n"+want) {
+		t.Fatalf("unit:\n%s\nquero a linha %q", got, want)
+	}
+	if !strings.Contains(unitContent("/x", "/a\n/b:/c"), `Environment="PATH=/c"`) {
+		t.Fatalf("entrada com quebra de linha deveria sumir:\n%s", unitContent("/x", "/a\n/b:/c"))
+	}
+	if strings.Contains(unitContent("/x", ""), "Environment=") {
+		t.Fatal("PATH vazio não deveria gerar Environment=")
 	}
 }
