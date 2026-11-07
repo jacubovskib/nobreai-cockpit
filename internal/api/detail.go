@@ -16,6 +16,8 @@ type CardDetail struct {
 	Readiness domain.ReadinessResult `json:"readiness"`
 	Totals    store.Total            `json:"totals"`
 	Live      *domain.Session        `json:"live"`
+	// TouchedFiles são os arquivos lidos/editados (eventos dos hooks).
+	TouchedFiles []store.TouchedFile `json:"touched_files"`
 }
 
 // CardSummary é o card como aparece no board.
@@ -55,6 +57,11 @@ func (s *server) cardDetail(c domain.Card) (CardDetail, error) {
 	if err != nil {
 		return d, err
 	}
+	touched, err := s.st.TouchedFiles(c.ID)
+	if err != nil {
+		return d, err
+	}
+	d.TouchedFiles = touched
 	d.Sessions = withUsage(sessions, bySession)
 	d.Totals = byCard[c.Key]
 	for i := range sessions {

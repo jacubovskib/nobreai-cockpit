@@ -105,11 +105,12 @@ func TestCreateAndGetCard(t *testing.T) {
 		Sessions []any          `json:"sessions"`
 		Content  map[string]any `json:"content"`
 		Live     *any           `json:"live"`
+		Touched  []any          `json:"touched_files"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
 		t.Fatal(err)
 	}
-	if d.Key != "NAC-1" || d.Readiness.Total != 5 || d.Sessions == nil || d.Live != nil {
+	if d.Key != "NAC-1" || d.Readiness.Total != 5 || d.Sessions == nil || d.Live != nil || d.Touched == nil {
 		t.Fatalf("detail = %s", rec.Body)
 	}
 	if todos, ok := d.Content["todos"].([]any); !ok || len(todos) != 0 {
@@ -194,5 +195,37 @@ func TestPromptRenderUnknown(t *testing.T) {
 	}
 	if text := decode[map[string]string](t, rec)["text"]; !bytes.Contains([]byte(text), []byte("NAC-1 (OAuth2)")) {
 		t.Fatalf("text = %q", text)
+	}
+}
+
+func TestCardDetailTouchedFiles(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	if err := a.st.StartSession(domain.Session{ID: "claude:s", Agent: "claude", PID: 1, StartedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.AttachSession("claude:s", c.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []struct{ kind, path string }{{domain.EvFileRead, "a.go"}, {domain.EvFileEdit, "b.go"}} {
+		data, _ := json.Marshal(map[string]string{"path": e.path})
+		if err := a.st.AddEvent(domain.Event{SessionID: "claude:s", Kind: e.kind, Data: data, At: testNow}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var d struct {
+		TouchedFiles []struct {
+			Path  string `json:"path"`
+			Kind  string `json:"kind"`
+			Count int    `json:"count"`
+		} `json:"touched_files"`
+	}
+	rec := a.do(t, "GET", "/api/cards/"+c.Key, nil, 0)
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.TouchedFiles) != 2 || d.TouchedFiles[0].Path != "b.go" || d.TouchedFiles[0].Kind != "editado" ||
+		d.TouchedFiles[1].Path != "a.go" || d.TouchedFiles[1].Kind != "lido" || d.TouchedFiles[1].Count != 1 {
+		t.Fatalf("touched_files = %s", rec.Body)
 	}
 }

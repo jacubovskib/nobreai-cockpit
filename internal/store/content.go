@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"sort"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -169,4 +170,68 @@ func (s *Store) LastEventAt(cardID int64, kind string) (*time.Time, error) {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// TouchedFile é um arquivo lido ou editado pelas sessões do card.
+type TouchedFile struct {
+	Path   string    `json:"path"`
+	Kind   string    `json:"kind"` // "editado" ou "lido"
+	Count  int       `json:"count"`
+	LastAt time.Time `json:"last_at"`
+}
+
+// TouchedFiles agrega os eventos file_edit/file_read do card por caminho. Um
+// caminho lido e editado conta como "editado". Ordem: editados primeiro,
+// depois o toque mais recente primeiro.
+func (s *Store) TouchedFiles(cardID int64) ([]TouchedFile, error) {
+	rows, err := s.DB.Query(`SELECT COALESCE(json_extract(data, '$.path'), ''), kind, at FROM events
+		WHERE card_id = ? AND kind IN (?, ?)`, cardID, domain.EvFileEdit, domain.EvFileRead)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byPath := map[string]*TouchedFile{}
+	for rows.Next() {
+		var path, kind, at string
+		if err := rows.Scan(&path, &kind, &at); err != nil {
+			return nil, err
+		}
+		if path == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, at)
+		if err != nil {
+			return nil, err
+		}
+		f, ok := byPath[path]
+		if !ok {
+			f = &TouchedFile{Path: path, Kind: "lido", LastAt: t}
+			byPath[path] = f
+		}
+		f.Count++
+		if kind == domain.EvFileEdit {
+			f.Kind = "editado"
+		}
+		if t.After(f.LastAt) {
+			f.LastAt = t
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]TouchedFile, 0, len(byPath))
+	for _, f := range byPath {
+		out = append(out, *f)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if (a.Kind == "editado") != (b.Kind == "editado") {
+			return a.Kind == "editado"
+		}
+		if !a.LastAt.Equal(b.LastAt) {
+			return a.LastAt.After(b.LastAt)
+		}
+		return a.Path < b.Path
+	})
+	return out, nil
 }

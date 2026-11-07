@@ -290,3 +290,48 @@ func TestRecentSessions(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+func TestReattachMovesPreviousCardToPaused(t *testing.T) {
+	s := newTestStore(t)
+	c1 := seedCard(t, s, domain.Backlog)
+	c2 := seedCard(t, s, domain.Backlog)
+	if err := s.StartSession(newSession("claude:a", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AttachSession("claude:a", c1.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetCard(c1.Key); got.Column != domain.EmAndamento {
+		t.Fatalf("c1 = %s", got.Column)
+	}
+	if err := s.AttachSession("claude:a", c2.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetCard(c1.Key); got.Column != domain.Pausado {
+		t.Fatalf("c1 = %s, want pausado", got.Column)
+	}
+	if got, _ := s.GetCard(c2.Key); got.Column != domain.EmAndamento {
+		t.Fatalf("c2 = %s, want em_andamento", got.Column)
+	}
+
+	// card anterior com outra sessão viva continua em andamento
+	if err := s.StartSession(newSession("claude:b", 2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StartSession(newSession("claude:c", 3)); err != nil {
+		t.Fatal(err)
+	}
+	c3 := seedCard(t, s, domain.Backlog)
+	if err := s.AttachSession("claude:b", c3.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`UPDATE sessions SET card_id=? WHERE id='claude:c'`, c3.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AttachSession("claude:b", c1.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetCard(c3.Key); got.Column != domain.EmAndamento {
+		t.Fatalf("c3 = %s, want em_andamento (claude:c ainda viva)", got.Column)
+	}
+}

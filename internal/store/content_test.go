@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -134,5 +135,52 @@ func TestSettingsDefaultsAndRoundTrip(t *testing.T) {
 	got, _ := s.GetSettings()
 	if got.GraceMin != 30 || !got.Rules["no_open_questions"] || got.BRLRate != 5.5 || got.WhereStoppedTTLMin != 15 {
 		t.Fatalf("got = %+v", got)
+	}
+}
+
+func TestTouchedFiles(t *testing.T) {
+	s := newTestStore(t)
+	c := newCard(t, s)
+	if err := s.StartSession(domain.Session{ID: "claude:a", Agent: "claude", StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AttachSession("claude:a", c.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	ev := func(kind, path string, min int) {
+		t.Helper()
+		data, _ := json.Marshal(map[string]string{"path": path})
+		if err := s.AddEvent(domain.Event{SessionID: "claude:a", Kind: kind, Data: data, At: t0.Add(time.Duration(min) * time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ev(domain.EvFileRead, "lido.go", 9)
+	ev(domain.EvFileRead, "ambos.go", 1)
+	ev(domain.EvFileEdit, "ambos.go", 2)
+	ev(domain.EvFileEdit, "editado.go", 5)
+	ev(domain.EvFileRead, "velho.go", 3)
+	ev(domain.EvCommand, "", 20)
+
+	got, err := s.TouchedFiles(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []TouchedFile{
+		{Path: "editado.go", Kind: "editado", Count: 1, LastAt: t0.Add(5 * time.Minute)},
+		{Path: "ambos.go", Kind: "editado", Count: 2, LastAt: t0.Add(2 * time.Minute)},
+		{Path: "lido.go", Kind: "lido", Count: 1, LastAt: t0.Add(9 * time.Minute)},
+		{Path: "velho.go", Kind: "lido", Count: 1, LastAt: t0.Add(3 * time.Minute)},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v", got)
+	}
+	for i := range want {
+		if got[i].Path != want[i].Path || got[i].Kind != want[i].Kind || got[i].Count != want[i].Count || !got[i].LastAt.Equal(want[i].LastAt) {
+			t.Fatalf("item %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if none, err := s.TouchedFiles(999); err != nil || len(none) != 0 {
+		t.Fatalf("none = %+v, %v", none, err)
 	}
 }

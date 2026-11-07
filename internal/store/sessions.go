@@ -158,9 +158,10 @@ func moveCardTx(tx *sql.Tx, cardID int64, ev domain.Transition) error {
 
 // AttachSession liga a sessão ao card, move o card para em_andamento e copia
 // para o card os eventos já capturados da sessão. Se a sessão já terminou, o
-// card vai para pausado (nunca em_andamento sem dono vivo). Se outra sessão
-// viva é dona do card devolve ErrCardBusy, a menos que force (a outra é
-// desligada).
+// card vai para pausado (nunca em_andamento sem dono vivo). Se a sessão viva
+// estava em outro card e ele fica sem dono vivo, esse card também pausa. Se
+// outra sessão viva é dona do card devolve ErrCardBusy, a menos que force (a
+// outra é desligada).
 func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -169,7 +170,8 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	defer tx.Rollback()
 
 	var ended sql.NullString
-	if err := tx.QueryRow(`SELECT ended_at FROM sessions WHERE id=?`, sessionID).Scan(&ended); errors.Is(err, sql.ErrNoRows) {
+	var prevCard sql.NullInt64
+	if err := tx.QueryRow(`SELECT ended_at, card_id FROM sessions WHERE id=?`, sessionID).Scan(&ended, &prevCard); errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
@@ -195,6 +197,18 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	}
 	if _, err := tx.Exec(`UPDATE sessions SET card_id=? WHERE id=?`, cardID, sessionID); err != nil {
 		return err
+	}
+	if prevCard.Valid && prevCard.Int64 != cardID && !ended.Valid {
+		// A sessão viva saiu do card anterior: sem outro dono vivo, ele pausa.
+		var live int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE card_id=? AND ended_at IS NULL`, prevCard.Int64).Scan(&live); err != nil {
+			return err
+		}
+		if live == 0 {
+			if err := moveCardTx(tx, prevCard.Int64, domain.SessionEnded); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := tx.Exec(`UPDATE events SET card_id=? WHERE session_id=?`, cardID, sessionID); err != nil {
 		return err
