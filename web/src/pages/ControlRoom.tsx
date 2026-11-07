@@ -9,6 +9,7 @@ import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
 import { formatMoney, useCurrency, type CurrencyPref } from '../ui/money'
 import { Tokens, formatTokens } from '../ui/Tokens'
+import { WorktreeTag } from '../ui/WorktreeTag'
 import { minutesSince } from './board'
 import { NewTask } from './NewTask'
 
@@ -73,6 +74,7 @@ function ActiveCard({ s }: { s: ActiveSession }) {
           </span>
         )}
       </div>
+      <WorktreeTag path={s.worktree} linked={s.worktree_linked} branch={s.branch} />
       {s.card ? (
         <Link to={`/cards/${s.card.key}`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
           <span className="mono" style={{ fontSize: 13, color: 'var(--text-2)' }}>{s.card.key}</span>
@@ -124,7 +126,8 @@ function NoCardRow({ s }: { s: SessionWithUsage }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 8, background: '#0F1116' }}>
       <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 13 }}>
-        <AgentSwatch agent={s.agent} /> · <span className="mono">{dir || s.cwd}</span> ·{' '}
+        <AgentSwatch agent={s.agent} /> ·{' '}
+        {s.worktree ? <WorktreeTag path={s.worktree} linked={s.worktree_linked} /> : <span className="mono">{dir || s.cwd}</span>} ·{' '}
         {s.ended_at ? (
           <span style={{ color: 'var(--text-2)' }}>encerrada</span>
         ) : s.pid_dead_at ? (

@@ -33,6 +33,10 @@ export interface Session {
   cwd: string
   branch: string
   git_head: string
+  // worktree: topo do worktree git do cwd ('' fora de repositório);
+  // worktree_linked: worktree ligado (git worktree add), não o principal.
+  worktree: string
+  worktree_linked: boolean
   model: string
   transcript_path: string
   full_capture: boolean
@@ -212,3 +216,31 @@ export type StreamKind = 'cards' | 'sessions' | 'config' | 'usage' | 'prompts' |
 export interface AgentCheck { key: string; label: string; detail: string; ok: boolean }
 export interface AgentDetection { agent: string; detection: { found: boolean; path: string; version: string; checks: AgentCheck[] } }
 export interface InstallReport { changed: string[]; backup: string; messages: string[] }
+
+// GET /api/worktrees
+export interface CardRef { key: string; title: string; column: Column }
+
+// Sessão no seu worktree: vivas e encerradas nas últimas 24 h. last_activity só nas vivas.
+export interface WorktreeSession extends Session { live: boolean; last_activity: string; card: CardRef | null }
+
+export interface Worktree {
+  path: string
+  head: string
+  branch: string
+  main: boolean
+  bare: boolean
+  detached: boolean
+  locked: boolean
+  prunable: boolean
+  sessions: WorktreeSession[]
+  // cards: cards não concluídos cujo branch é o do worktree.
+  cards: CardRef[]
+}
+
+export interface ProjectWorktrees {
+  project: Project
+  error: string
+  worktrees: Worktree[]
+  // orphans: sessões não encerradas cujo worktree não existe mais.
+  orphans: WorktreeSession[]
+}

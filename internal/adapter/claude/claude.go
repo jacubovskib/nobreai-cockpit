@@ -22,6 +22,9 @@ type Adapter struct {
 	// sessão, valor: *sync.Mutex); wg acompanha as leituras em andamento.
 	ingest sync.Map
 	wg     sync.WaitGroup
+	// repoRoots guarda o topo do repositório de cada diretório de projeto
+	// (chave e valor: string), para traduzir caminhos de worktrees.
+	repoRoots sync.Map
 }
 
 var _ adapter.Adapter = (*Adapter)(nil)

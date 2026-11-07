@@ -12,6 +12,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -50,7 +51,7 @@ func fakeClaude(t *testing.T) string {
 
 // continueAPI monta a API com lançador e git falsos e o CLI claude em
 // claudeBin; devolve o card NAC-1 (branch "feat/x") num projeto em /w/api.
-func continueAPI(t *testing.T, g *fakeGit, claudeBin ...string) (*testAPI, *fakeLauncher) {
+func continueAPI(t *testing.T, g gitinfo.GitInfo, claudeBin ...string) (*testAPI, *fakeLauncher) {
 	t.Helper()
 	st, err := store.Open(t.TempDir() + "/cockpit.db")
 	if err != nil {
@@ -281,5 +282,34 @@ func TestContinueRendersPackageEmpty(t *testing.T) {
 	rec := a.do(t, "POST", "/api/prompts/render", map[string]any{"card": "NAC-1", "body": "{{card.pacote}}"}, 0)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Usar PKCE") {
 		t.Fatalf("render = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// wtFakeGit é o fakeGit com uma lista fixa de worktrees.
+type wtFakeGit struct {
+	*fakeGit
+	list []gitinfo.Worktree
+}
+
+func (g wtFakeGit) Locate(string) gitinfo.Location               { return gitinfo.Location{} }
+func (g wtFakeGit) Worktrees(string) ([]gitinfo.Worktree, error) { return g.list, nil }
+
+func TestContinueOpensInCardWorktree(t *testing.T) {
+	g := wtFakeGit{fakeGit: &fakeGit{branch: "main", clean: false}, list: []gitinfo.Worktree{
+		{Path: "/w/api", Branch: "main", Main: true},
+		{Path: "/w/api-velho", Branch: "feat/x", Prunable: true},
+		{Path: "/w/api-feat", Branch: "feat/x"},
+	}}
+	a, l := continueAPI(t, g)
+	// Árvore suja no principal não importa: nada de checkout lá.
+	if rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"prompt_slug": "nenhum"}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if len(g.checkouts) != 0 {
+		t.Fatalf("não deveria trocar de branch: %v", g.checkouts)
+	}
+	last := l.calls[0][len(l.calls[0])-1]
+	if !strings.Contains(last, "/w/api-feat") || strings.Contains(last, "/w/api-velho") {
+		t.Fatalf("deveria abrir no worktree do branch: %q", last)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/prompts"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
@@ -39,7 +40,14 @@ type payload struct {
 	StopHookActive bool `json:"stop_hook_active"`
 	// SessionEnd.
 	Reason string `json:"reason"`
+	// AgentID vem preenchido quando o hook dispara dentro de um subagente
+	// (que usa o session_id do agente principal).
+	AgentID string `json:"agent_id"`
 }
+
+// mainOnlyEvents são os eventos que só o agente principal dispara (o
+// subagente termina com SubagentStop): só eles podem mudar o local da sessão.
+var mainOnlyEvents = map[string]bool{"SessionStart": true, "UserPromptSubmit": true, "Stop": true}
 
 type toolInput struct {
 	FilePath     string `json:"file_path"`
@@ -133,16 +141,94 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 		return sess, err
 	}
 	sess.LastEventAt = now
+	// Subagentes com isolation: worktree mandam hooks com o cwd do worktree
+	// deles; seguir esses cwds faria a sessão oscilar entre worktrees.
+	if p.Cwd != "" && p.Cwd != sess.Cwd && mainOnlyEvents[event] && p.AgentID == "" {
+		return a.moveSession(sess, p.Cwd)
+	}
 	return sess, nil
 }
 
-func (a *Adapter) createSession(id string, p payload, pid int, now time.Time) (domain.Session, error) {
-	x := domain.Session{ID: id, Agent: a.Name(), ProviderSessionID: p.SessionID, PID: pid, Cwd: p.Cwd,
-		TranscriptPath: p.TranscriptPath, StartedAt: now, LastEventAt: now}
-	if a.deps.Git != nil && p.Cwd != "" {
-		x.Branch, x.GitHead = a.deps.Git.Branch(p.Cwd), a.deps.Git.Head(p.Cwd)
+// moveSession grava o novo diretório da sessão (o agente entrou num worktree,
+// por exemplo) com branch, HEAD e worktree de lá. O projeto ligado não muda.
+func (a *Adapter) moveSession(sess domain.Session, cwd string) (domain.Session, error) {
+	l := a.locate(cwd)
+	if err := a.st.UpdateSessionLocation(sess.ID, l); err != nil {
+		return sess, err
 	}
-	proj, err := a.st.ProjectForPath(p.Cwd)
+	a.publish("sessions")
+	sess.Cwd, sess.Branch, sess.GitHead, sess.Worktree, sess.WorktreeLinked = l.Cwd, l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
+	return sess, nil
+}
+
+// locate consulta o git sobre cwd: branch, HEAD e worktree (este só quando o
+// Git sabe ler worktrees).
+func (a *Adapter) locate(cwd string) store.SessionLocation {
+	l := store.SessionLocation{Cwd: cwd}
+	if a.deps.Git == nil || cwd == "" {
+		return l
+	}
+	l.Branch, l.GitHead = a.deps.Git.Branch(cwd), a.deps.Git.Head(cwd)
+	if wr, ok := a.deps.Git.(gitinfo.WorktreeReader); ok {
+		loc := wr.Locate(cwd)
+		l.Worktree, l.WorktreeLinked = loc.Root, loc.Linked
+	}
+	return l
+}
+
+// projectFor acha o projeto de cwd. Num worktree ligado fora do diretório do
+// projeto, cwd é traduzido para o mesmo lugar no checkout principal.
+func (a *Adapter) projectFor(cwd string) (*domain.Project, error) {
+	proj, err := a.st.ProjectForPath(cwd)
+	if proj != nil || err != nil || cwd == "" {
+		return proj, err
+	}
+	wr, ok := a.deps.Git.(gitinfo.WorktreeReader)
+	if !ok {
+		return nil, nil
+	}
+	loc := wr.Locate(cwd)
+	if !loc.Linked {
+		return nil, nil
+	}
+	rel, err := filepath.Rel(loc.Root, cwd)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return nil, nil
+	}
+	return a.st.ProjectForPath(filepath.Join(loc.Main, rel))
+}
+
+// projectRoot é a raiz do projeto vista pela sessão: num worktree ligado, o
+// diretório equivalente dentro do worktree.
+func (a *Adapter) projectRoot(sess domain.Session, pr domain.Project) string {
+	root := filepath.Clean(pr.Path)
+	if !sess.WorktreeLinked || sess.Worktree == "" {
+		return root
+	}
+	wr, ok := a.deps.Git.(gitinfo.WorktreeReader)
+	if !ok {
+		return root
+	}
+	main, cached := a.repoRoots.Load(root)
+	if !cached {
+		main = wr.Locate(root).Root
+		if main != "" { // falha do git não fica no cache
+			a.repoRoots.Store(root, main)
+		}
+	}
+	rel, err := filepath.Rel(main.(string), root)
+	if main.(string) == "" || err != nil || strings.HasPrefix(rel, "..") {
+		return root
+	}
+	return filepath.Join(sess.Worktree, rel)
+}
+
+func (a *Adapter) createSession(id string, p payload, pid int, now time.Time) (domain.Session, error) {
+	l := a.locate(p.Cwd)
+	x := domain.Session{ID: id, Agent: a.Name(), ProviderSessionID: p.SessionID, PID: pid, Cwd: p.Cwd,
+		Branch: l.Branch, GitHead: l.GitHead, Worktree: l.Worktree, WorktreeLinked: l.WorktreeLinked,
+		TranscriptPath: p.TranscriptPath, StartedAt: now, LastEventAt: now}
+	proj, err := a.projectFor(p.Cwd)
 	if err != nil {
 		return x, err
 	}
@@ -217,7 +303,7 @@ func (a *Adapter) projectRelative(sess domain.Session, path string) (string, err
 		if pr.ID != *sess.ProjectID {
 			continue
 		}
-		root := filepath.Clean(pr.Path)
+		root := a.projectRoot(sess, pr)
 		clean := filepath.Clean(path)
 		if rel, err := filepath.Rel(root, clean); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
 			return rel, nil
