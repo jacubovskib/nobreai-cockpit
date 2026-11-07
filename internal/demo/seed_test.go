@@ -314,3 +314,20 @@ func TestRefreshLivePID(t *testing.T) {
 		t.Fatalf("sessões com o PID novo = %d", n)
 	}
 }
+
+func TestSeedRefusesDBWithPriceOrLimit(t *testing.T) {
+	st := openStore(t)
+	if err := st.PutPrice(domain.Price{Model: "m", InputPerM: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Seed(st, testNow(), 1); !errors.Is(err, ErrNotEmpty) {
+		t.Fatalf("preço: err = %v", err)
+	}
+	st2 := openStore(t)
+	if err := st2.PutLimit(domain.Limit{Agent: "claude", DailyUSD: 1, WarnPct: 80, Action: "warn"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Seed(st2, testNow(), 1); !errors.Is(err, ErrNotEmpty) {
+		t.Fatalf("limite: err = %v", err)
+	}
+}

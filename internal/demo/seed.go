@@ -152,6 +152,14 @@ func Seed(st *store.Store, now time.Time, livePID int) error {
 	if len(existing) > 0 {
 		return ErrNotEmpty
 	}
+	// Preços e limites seriam sobrescritos: um banco real ainda sem cards não serve.
+	var configured int
+	if err := st.DB.QueryRow(`SELECT (SELECT count(*) FROM prices) + (SELECT count(*) FROM limits)`).Scan(&configured); err != nil {
+		return err
+	}
+	if configured > 0 {
+		return ErrNotEmpty
+	}
 	s := &seeder{st: st, now: now, livePID: livePID, prices: map[string]*domain.Price{}, spent: map[string]float64{}, ids: map[string][]string{}, byTitle: map[string]domain.Card{}}
 	steps := []func() error{s.setup, s.cards, s.history, s.noCardSession, s.fillDays, s.hero, s.feed, s.columns, s.flushEvents}
 	for _, step := range steps {

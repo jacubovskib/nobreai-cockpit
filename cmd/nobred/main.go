@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -25,16 +26,35 @@ func main() {
 	dbPath := flag.String("db", "", "caminho do banco SQLite (padrão: "+store.DefaultPath()+")")
 	seedDemo := flag.Bool("seed-demo", false, "carrega os dados de demonstração (sem --db usa "+store.DefaultDemoPath()+", nunca o banco real)")
 	flag.Parse()
-	path := *dbPath
-	if path == "" {
-		path = store.DefaultPath()
-		if *seedDemo {
-			path = store.DefaultDemoPath()
-		}
+	path, err := resolveDBPath(*dbPath, *seedDemo)
+	if err != nil {
+		log.Fatalf("nobred: %v", err)
 	}
 	if err := run(path, *seedDemo); err != nil {
 		log.Fatalf("nobred: %v", err)
 	}
+}
+
+// resolveDBPath decide o banco a abrir. Com --seed-demo o banco real nunca é
+// usado: sem --db vale o banco de demonstração, e --db igual ao caminho do
+// banco real é recusado.
+func resolveDBPath(dbFlag string, seedDemo bool) (string, error) {
+	if dbFlag == "" {
+		if seedDemo {
+			return store.DefaultDemoPath(), nil
+		}
+		return store.DefaultPath(), nil
+	}
+	if seedDemo && sameFile(dbFlag, store.DefaultPath()) {
+		return "", errors.New("--seed-demo não pode usar o banco real; omita --db ou use outro arquivo")
+	}
+	return dbFlag, nil
+}
+
+func sameFile(a, b string) bool {
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && aa == bb
 }
 
 func run(dbPath string, seedDemo bool) error {
