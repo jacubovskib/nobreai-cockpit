@@ -88,6 +88,10 @@ describe('WorktreeDetailPage', () => {
 
     const atividade = screen.getByRole('region', { name: 'Atividade recente' })
     expect(within(atividade).getByText('Bash go test ./auth/...')).toBeInTheDocument()
+    // A lista rola dentro do painel em vez de esticar a coluna.
+    const eventos = within(atividade).getByRole('list', { name: 'Eventos recentes' })
+    expect(eventos).toHaveStyle({ overflowY: 'auto', maxHeight: '520px' })
+    expect(eventos).toHaveAttribute('tabindex', '0')
   })
 
   it('worktree inexistente mostra aviso e volta para a lista', async () => {
