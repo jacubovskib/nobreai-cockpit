@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -41,7 +42,15 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "")
 		return
 	}
+	keepCmd := st.TerminalCmd
 	if !readJSON(w, r, &st) {
+		return
+	}
+	if st.TerminalCmd == nil { // omitido ou null: mantém o atual
+		st.TerminalCmd = keepCmd
+	}
+	if msg := validateLaunch(st.LaunchMode, st.TerminalCmd); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	switch {
@@ -243,4 +252,28 @@ func (s *server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publish("config")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+var bareCommand = regexp.MustCompile(`^[A-Za-z0-9._+-]+$`)
+
+// validateLaunch confere o modo de abertura e o comando do terminal; devolve
+// a mensagem de erro ("" se está tudo certo).
+func validateLaunch(mode string, cmd []string) string {
+	switch mode {
+	case "terminal", "tmux", "background":
+	default:
+		return "launch_mode inválido (use terminal, tmux ou background)"
+	}
+	if len(cmd) == 0 || len(cmd) > 8 {
+		return "terminal_cmd deve ter de 1 a 8 elementos"
+	}
+	for _, c := range cmd {
+		if c == "" {
+			return "terminal_cmd não pode ter elementos vazios"
+		}
+	}
+	if !filepath.IsAbs(cmd[0]) && !bareCommand.MatchString(cmd[0]) {
+		return "terminal_cmd: o primeiro elemento deve ser um caminho absoluto ou o nome de um comando (sem caracteres especiais do shell)"
+	}
+	return ""
 }

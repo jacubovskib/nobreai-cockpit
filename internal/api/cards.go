@@ -22,6 +22,7 @@ func (s *server) cardRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/cards/{key}", s.getCard)
 	mux.HandleFunc("PATCH /api/cards/{key}", s.patchCard)
 	mux.HandleFunc("POST /api/cards/{key}/attach", s.attachCard)
+	mux.HandleFunc("POST /api/cards/{key}/continue", s.continueCard)
 	mux.HandleFunc("GET /api/cards/{key}/resume", s.cardResume)
 	mux.HandleFunc("POST /api/cards/{key}/decisions", s.withCardKey(s.addDecision))
 	mux.HandleFunc("POST /api/cards/{key}/files", s.withCardKey(s.addFile))

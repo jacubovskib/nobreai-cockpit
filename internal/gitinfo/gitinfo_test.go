@@ -64,6 +64,15 @@ func TestGitInfoTempRepo(t *testing.T) {
 		t.Fatal("esperava erro ao trocar para branch inexistente")
 	}
 
+	for _, bad := range []string{"--orphan=x", "-b", "a..b", "", "a b", "@{-1}"} {
+		if err := g.Checkout(dir, bad); err == nil {
+			t.Fatalf("Checkout(%q) deveria falhar", bad)
+		}
+	}
+	if g.DiffStat(dir, "--output=/tmp/x") != "" || g.DiffStat(dir, "main") != "" {
+		t.Fatal("DiffStat deveria rejeitar since que não é hash")
+	}
+
 	other := t.TempDir()
 	if g.Branch(other) != "" || g.Head(other) != "" || g.Clean(other) {
 		t.Fatal("diretório fora de repo deveria dar vazio / não limpo")

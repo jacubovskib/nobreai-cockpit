@@ -46,7 +46,7 @@ func (a *testAPI) do(t *testing.T, method, path string, body any, pid int) *http
 	req := httptest.NewRequest(method, path, &buf)
 	req.Host = "127.0.0.1:7420"
 	req.RemoteAddr = "127.0.0.1:50000"
-	if body != nil {
+	if method != http.MethodGet && method != http.MethodHead {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if pid > 0 {

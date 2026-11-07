@@ -82,7 +82,7 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 	if err != nil {
 		return err
 	}
-	if in != nil {
+	if method != http.MethodGet && method != http.MethodHead {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.PID > 0 {

@@ -85,14 +85,25 @@ func TestRejectsNonJSONPost(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("json com charset = %d %s", rec.Code, rec.Body)
 	}
-	// POST sem corpo não exige Content-Type
+	// POST sem corpo também exige Content-Type
+	for _, m := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+		req = httptest.NewRequest(m, "/api/prompts/retomar-card/render", nil)
+		req.Host = "127.0.0.1:7420"
+		req.RemoteAddr = "127.0.0.1:50000"
+		rec = httptest.NewRecorder()
+		a.h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnsupportedMediaType {
+			t.Fatalf("%s sem corpo e sem Content-Type = %d %s", m, rec.Code, rec.Body)
+		}
+	}
 	req = httptest.NewRequest("POST", "/api/prompts/retomar-card/render", nil)
 	req.Host = "127.0.0.1:7420"
 	req.RemoteAddr = "127.0.0.1:50000"
+	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	a.h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("POST sem corpo = %d %s", rec.Code, rec.Body)
+		t.Fatalf("POST sem corpo com Content-Type = %d %s", rec.Code, rec.Body)
 	}
 }
 

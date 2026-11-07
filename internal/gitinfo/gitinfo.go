@@ -4,8 +4,11 @@ package gitinfo
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+var hexSHA = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
 
 // GitInfo consulta e altera o estado do git de um diretório. As consultas
 // devolvem "" (ou false) quando o diretório não é um repositório.
@@ -43,12 +46,15 @@ func (Exec) Head(dir string) string {
 }
 
 // DiffStat resume as mudanças da árvore de trabalho desde o commit since
-// (HEAD se vazio).
+// (HEAD se vazio). since precisa ser um hash hexadecimal; outro valor
+// (inclusive opção ou nome de branch) devolve "".
 func (Exec) DiffStat(dir, since string) string {
 	if since == "" {
 		since = "HEAD"
+	} else if !hexSHA.MatchString(since) {
+		return ""
 	}
-	out, _ := git(dir, "diff", "--stat", since)
+	out, _ := git(dir, "diff", "--stat", since, "--")
 	return out
 }
 
@@ -58,8 +64,15 @@ func (Exec) Clean(dir string) bool {
 	return err == nil && out == ""
 }
 
-// Checkout troca para o branch.
+// Checkout troca para o branch. O nome precisa ser um branch válido para o
+// git e não pode começar com "-" (seria lido como opção).
 func (Exec) Checkout(dir, branch string) error {
+	if branch == "" || strings.HasPrefix(branch, "-") || strings.HasPrefix(branch, "@") {
+		return fmt.Errorf("nome de branch inválido: %q", branch)
+	}
+	if _, err := git(dir, "check-ref-format", "--branch", branch); err != nil {
+		return fmt.Errorf("nome de branch inválido: %q", branch)
+	}
 	_, err := git(dir, "checkout", "-q", branch, "--")
 	return err
 }

@@ -74,7 +74,7 @@ const msgRemoteForbidden = "acesso permitido só a partir desta máquina"
 //     a porta em que o servidor escuta (lida de http.LocalAddrContextKey).
 //     Sem endereço local no contexto (handler chamado direto, como nos
 //     testes com httptest.NewRecorder) qualquer porta é aceita.
-//   - Requisição com corpo, fora GET/HEAD, precisa de Content-Type
+//   - Toda requisição fora GET/HEAD (mesmo sem corpo) precisa de Content-Type
 //     application/json: formulários e text/plain de outro site não passam
 //     sem preflight de CORS, que a API não responde.
 //
@@ -90,7 +90,7 @@ func localOnly(next http.Handler) http.Handler {
 			writeError(w, http.StatusForbidden, "host não permitido")
 			return
 		}
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.ContentLength != 0 {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			if err != nil || mt != "application/json" {
 				writeError(w, http.StatusUnsupportedMediaType, "use Content-Type: application/json")

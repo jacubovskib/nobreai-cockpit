@@ -21,6 +21,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/demo"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/launch"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -107,6 +108,7 @@ func run(dbPath string, seedDemo bool) error {
 		Now:      time.Now,
 		ProcRoot: "/proc",
 		Git:      git,
+		Launcher: launch.Exec{},
 		Hub:      hub,
 		Adapters: map[string]adapter.Adapter{"claude": claudeAdapter},
 	})
