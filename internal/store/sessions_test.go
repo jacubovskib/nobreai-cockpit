@@ -355,3 +355,30 @@ func TestReattachMovesPreviousCardToPaused(t *testing.T) {
 		t.Fatalf("c3 = %s, want em_andamento (claude:c ainda viva)", got.Column)
 	}
 }
+
+func TestCreateCardAndAttachAtomic(t *testing.T) {
+	s := newTestStore(t)
+	p, err := s.CreateProject("api", "/w/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StartSession(newSession("claude:s", 4242)); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.CreateCardAndAttach(domain.Card{Title: "novo", ProjectID: p.ID}, "claude:s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := s.SessionByPID(4242)
+	if sess == nil || sess.CardID == nil || *sess.CardID != c.ID {
+		t.Fatalf("sessão não ligada: %+v", sess)
+	}
+	// Sessão inexistente: a ligação falha e o card não pode sobrar.
+	if _, err := s.CreateCardAndAttach(domain.Card{Title: "órfão", ProjectID: p.ID}, "claude:nope"); err == nil {
+		t.Fatal("esperava erro")
+	}
+	cards, _ := s.ListCards(CardFilter{})
+	if len(cards) != 1 {
+		t.Fatalf("cards = %d, esperava 1 (sem órfão)", len(cards))
+	}
+}

@@ -4,6 +4,7 @@ web:
 	pnpm -C web install && pnpm -C web build
 
 build: web
+	go build -o nobre ./cmd/nobre
 	go build -o nobred ./cmd/nobred
 
 # Desenvolvimento: nobred em :7420 e Vite (com proxy de /api) em :5173.

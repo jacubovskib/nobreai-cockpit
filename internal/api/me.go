@@ -145,13 +145,9 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		}
 		projectID = p.ID
 	}
-	c, err := s.st.CreateCard(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
-		Branch: sess.Branch, ProjectID: projectID})
+	c, err := s.st.CreateCardAndAttach(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
+		Branch: sess.Branch, ProjectID: projectID}, sess.ID)
 	if err != nil {
-		writeStoreError(w, err, "")
-		return
-	}
-	if err := s.st.AttachSession(sess.ID, c.Key, false); err != nil {
 		writeStoreError(w, err, "")
 		return
 	}

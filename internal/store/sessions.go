@@ -227,7 +227,14 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := attachSessionTx(tx, sessionID, cardKey, force); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+// attachSessionTx é o corpo de AttachSession dentro de uma transação do chamador.
+func attachSessionTx(tx *sql.Tx, sessionID, cardKey string, force bool) error {
 	var ended, dead sql.NullString
 	var prevCard sql.NullInt64
 	if err := tx.QueryRow(`SELECT ended_at, pid_dead_at, card_id FROM sessions WHERE id=?`, sessionID).Scan(&ended, &dead, &prevCard); errors.Is(err, sql.ErrNoRows) {
@@ -292,7 +299,7 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // ReopenSession reabre a sessão que voltou a mandar eventos (retomada com o

@@ -76,6 +76,37 @@ func (s *Store) CreateCard(c domain.Card) (domain.Card, error) {
 		return c, err
 	}
 	defer tx.Rollback()
+	c, err = createCardTx(tx, c, now)
+	if err != nil {
+		return c, err
+	}
+	return c, tx.Commit()
+}
+
+// CreateCardAndAttach cria o card e liga a sessão a ele numa só transação:
+// se a ligação falhar, o card não fica órfão.
+func (s *Store) CreateCardAndAttach(c domain.Card, sessionID string) (domain.Card, error) {
+	if c.Column == "" {
+		c.Column = domain.Backlog
+	}
+	now := time.Now().UTC()
+	c.CreatedAt, c.UpdatedAt = now, now
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return c, err
+	}
+	defer tx.Rollback()
+	c, err = createCardTx(tx, c, now)
+	if err != nil {
+		return c, err
+	}
+	if err := attachSessionTx(tx, sessionID, c.Key, false); err != nil {
+		return c, err
+	}
+	return c, tx.Commit()
+}
+
+func createCardTx(tx *sql.Tx, c domain.Card, now time.Time) (domain.Card, error) {
 	res, err := tx.Exec(`INSERT INTO cards(key, project_id, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, col, created_at, updated_at)
 		VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ProjectID, c.Title, c.Goal, c.DoneWhen, c.WhereStopped, nullableTime(c.WhereStoppedAt),
@@ -91,7 +122,7 @@ func (s *Store) CreateCard(c domain.Card) (domain.Card, error) {
 	if _, err := tx.Exec(`UPDATE cards SET key=? WHERE id=?`, c.Key, c.ID); err != nil {
 		return c, err
 	}
-	return c, tx.Commit()
+	return c, nil
 }
 
 // GetCard busca um card pela chave (ErrNotFound se não existir).
