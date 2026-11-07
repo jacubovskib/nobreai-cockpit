@@ -73,10 +73,11 @@ const btnDanger: React.CSSProperties = { ...btn, borderColor: '#6b2c2c', color: 
 type Status = 'conectando' | 'conectado' | 'reconectando' | 'desconectado'
 
 export function TerminalView({
-  id, readonly = false, termFactory = xtermFactory, wsFactory: makeWs = wsFactory, onEnded,
+  id, readonly = false, autoFocus = false, termFactory = xtermFactory, wsFactory: makeWs = wsFactory, onEnded,
 }: {
   id: string
   readonly?: boolean
+  autoFocus?: boolean
   termFactory?: TermFactory
   wsFactory?: WsFactory
   onEnded?: () => void
@@ -129,7 +130,7 @@ export function TerminalView({
         term.reset() // o servidor reenvia o snapshot a cada conexão
         term.fit()
         sendResize()
-        if (!ro) term.focus()
+        if (!ro && autoFocus) term.focus()
       }
       sock.onmessage = (e) => {
         const d = e.data
@@ -173,7 +174,7 @@ export function TerminalView({
       if (ws) { ws.onclose = null; ws.onmessage = null; ws.onopen = null; ws.close() }
       term.dispose()
     }
-  }, [id, ro, termFactory, makeWs])
+  }, [id, ro, autoFocus, termFactory, makeWs])
 
   const kill = async () => {
     setKilling(true); setKillError('')

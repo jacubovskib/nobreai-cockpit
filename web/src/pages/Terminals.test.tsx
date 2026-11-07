@@ -28,12 +28,18 @@ describe('Terminals', () => {
     expect(screen.getByText('encerrado (código 2)')).toBeInTheDocument()
     expect(screen.queryByTestId('tv')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /Abrir terminal Claude Code do card NAC-1/ }))
-    expect(screen.getByTestId('tv')).toHaveTextContent('a:false')
+    expect(await screen.findByTestId('tv')).toHaveTextContent('a:false')
   })
 
   it('mostra estado vazio', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', { status: 200 })))
     renderAt()
     expect(await screen.findByText(/Nenhum terminal aberto/)).toBeInTheDocument()
+  })
+
+  it('id desconhecido mostra que o terminal não existe mais', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', { status: 200 })))
+    renderAt('/terminals?id=sumiu')
+    expect(await screen.findByText('Este terminal não existe mais (encerrado e removido).')).toBeInTheDocument()
   })
 })

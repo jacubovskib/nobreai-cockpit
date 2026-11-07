@@ -15,7 +15,8 @@ class FakeTerm implements TermLike {
   fit() {}
   focus() {}
   onData(cb: (d: string) => void) { this.dataCb = cb }
-  onResize() {}
+  resizeCb: () => void = () => {}
+  onResize(cb: () => void) { this.resizeCb = cb }
   dispose() { this.disposed = true }
 }
 class FakeWs implements WsLike {
@@ -121,6 +122,49 @@ describe('TerminalView', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Sim, encerrar' })) })
     expect(fetchMock).toHaveBeenCalledWith('/api/terminals/t1', expect.objectContaining({ method: 'DELETE' }))
+  })
+
+  it('resize é debounced em 100 ms e não é enviado em somente assistir', () => {
+    vi.useFakeTimers()
+    const a = setup()
+    act(() => a.socks[0].open())
+    const base = a.socks[0].sent.length
+    a.term.cols = 120
+    act(() => { a.term.resizeCb(); a.term.resizeCb() })
+    act(() => { vi.advanceTimersByTime(99) })
+    expect(a.socks[0].sent).toHaveLength(base)
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(a.socks[0].sent).toHaveLength(base + 1)
+    expect(JSON.parse(a.socks[0].sent.at(-1) as string)).toMatchObject({ cols: 120 })
+    a.unmount()
+
+    const b = setup({ readonly: true })
+    act(() => b.socks[0].open())
+    act(() => { b.term.resizeCb() })
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(b.socks[0].sent).toHaveLength(0)
+  })
+
+  it('fecha o socket antigo ao alternar somente assistir e ao trocar de id', () => {
+    const term = new FakeTerm()
+    const socks: FakeWs[] = []
+    const wsFactory = (url: string) => { const w = new FakeWs(url); socks.push(w); return w }
+    const ui = (id: string) => <TerminalView id={id} termFactory={() => term} wsFactory={wsFactory} />
+    const { rerender } = render(ui('t1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Somente assistir' }))
+    expect(socks[0].closed).toBe(true)
+    rerender(ui('t2'))
+    expect(socks[1].closed).toBe(true)
+    expect(socks[2].url).toContain('/t2/ws')
+  })
+
+  it('não foca o xterm sem autoFocus', () => {
+    const term = new FakeTerm()
+    const focus = vi.spyOn(term, 'focus')
+    const ws = new FakeWs('x')
+    render(<TerminalView id="t1" termFactory={() => term} wsFactory={() => ws} />)
+    act(() => ws.open())
+    expect(focus).not.toHaveBeenCalled()
   })
 
   it('fecha o socket e descarta o terminal ao desmontar', () => {

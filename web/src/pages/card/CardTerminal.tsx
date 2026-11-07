@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { forCard, isLive, useTerminals } from '../../api/terminals'
 import { agentInfo } from '../../ui/agents'
-import { TerminalView } from '../../ui/TerminalView'
+import { LazyTerminalView } from '../../ui/LazyTerminalView'
 import { h2, muted, panel } from './shared'
 
 export const TERMINAL_ANCHOR = 'terminal'
@@ -29,7 +29,7 @@ export function CardTerminal({ cardKey, focusId }: { cardKey: string; focusId?: 
         </span>
       </div>
       <div style={{ height: 460 }}>
-        <TerminalView key={current.id} id={current.id} readonly={!isLive(current)} />
+        <LazyTerminalView key={current.id} id={current.id} readonly={!isLive(current)} />
       </div>
     </section>
   )

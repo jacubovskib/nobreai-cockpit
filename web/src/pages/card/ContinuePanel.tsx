@@ -31,7 +31,7 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
       post<{ terminal_id?: string }>(`/api/cards/${cardKey}/continue`, { agent, mode, prompt_slug: effectiveSlug, ...(force ? { force: true } : {}) }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['card', cardKey] })
-      if (mode === BACKGROUND_MODE && res?.terminal_id) {
+      if (res?.terminal_id) {
         qc.invalidateQueries({ queryKey: ['terminals'] })
         onTerminal?.(res.terminal_id)
       }
@@ -71,7 +71,7 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...muted }}>
         Abrir em
         <select style={input} value={mode} onChange={(e) => setMode(e.target.value)}>
-          <option value={PLATFORM_MODE}>Padrão da plataforma: nova janela do terminal</option>
+          <option value={PLATFORM_MODE}>Padrão da plataforma (definido em Configuração)</option>
           <option value="tmux" disabled>Sessão tmux (em breve)</option>
           <option value={BACKGROUND_MODE}>Em segundo plano, com saída aqui na interface</option>
         </select>
@@ -90,9 +90,11 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
           </button>
         </div>
       )}
-      {start.isSuccess && <p role="status" style={{ ...muted, margin: 0 }}>{mode === BACKGROUND_MODE ? 'Agente iniciado em segundo plano; o terminal está neste card.' : 'Terminal aberto.'}</p>}
+      {start.isSuccess && <p role="status" style={{ ...muted, margin: 0 }}>{start.data?.terminal_id ? 'Agente iniciado em segundo plano — terminal abaixo.' : 'Terminal aberto.'}</p>}
       <p style={{ ...muted, margin: 0 }}>
-        Abre uma nova janela do terminal no diretório do projeto, no branch do card, com o pacote de retomada como contexto. A sessão atual, se houver, não é encerrada.
+        {mode === BACKGROUND_MODE
+          ? 'Inicia o agente em segundo plano, no diretório do projeto, no branch do card, com o pacote de retomada como contexto. A saída aparece no painel Terminal deste card. A sessão atual, se houver, não é encerrada.'
+          : 'Segue o modo padrão da Configuração: abre uma nova janela do terminal ou inicia em segundo plano, no diretório do projeto, no branch do card, com o pacote de retomada como contexto. A sessão atual, se houver, não é encerrada.'}
       </p>
     </section>
   )

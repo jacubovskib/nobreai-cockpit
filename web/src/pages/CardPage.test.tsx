@@ -156,9 +156,20 @@ describe('ContinuePanel', () => {
     const fn = mock({ ...base, '/api/cards/NAC-42': detail, '/api/terminals': [term], 'POST /api/cards/NAC-42/continue': { terminal_id: 'tt1' } })
     wrap(<CardPage />)
     expect(await screen.findByRole('heading', { name: 'Terminal' })).toBeInTheDocument()
-    expect(screen.getByTestId('tv')).toHaveTextContent('tt1')
+    expect(await screen.findByTestId('tv')).toHaveTextContent('tt1')
     fireEvent.change(await screen.findByLabelText('Abrir em'), { target: { value: 'background' } })
     fireEvent.click(screen.getByRole('button', { name: /Iniciar Claude Code neste card/ }))
     await waitFor(() => expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')[0]).toMatchObject({ mode: 'background' }))
+  })
+
+  it('modo da plataforma que devolve terminal_id foca o painel Terminal', async () => {
+    const scroll = vi.fn()
+    Element.prototype.scrollIntoView = scroll
+    const term = { id: 'tt1', card_key: 'NAC-42', agent: 'claude', origin: 'plataforma', title: '', pid: 1, started_at: '2026-11-05T10:00:00Z', ended_at: null, exit_code: null, cols: 80, rows: 24, clients: 0 }
+    mock({ ...base, '/api/cards/NAC-42': detail, '/api/terminals': [term], 'POST /api/cards/NAC-42/continue': { terminal_id: 'tt1' } })
+    wrap(<CardPage />)
+    fireEvent.click(await screen.findByRole('button', { name: /Iniciar Claude Code neste card/ }))
+    expect(await screen.findByText('Agente iniciado em segundo plano — terminal abaixo.')).toBeInTheDocument()
+    await waitFor(() => expect(scroll).toHaveBeenCalled())
   })
 })

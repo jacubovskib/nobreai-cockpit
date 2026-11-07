@@ -1,7 +1,7 @@
 import { Link, useSearchParams } from 'react-router-dom'
 import { isLive, useTerminals, type TerminalInfo } from '../api/terminals'
 import { agentInfo } from '../ui/agents'
-import { TerminalView } from '../ui/TerminalView'
+import { LazyTerminalView } from '../ui/LazyTerminalView'
 import { minutesSince } from './board'
 
 const th: React.CSSProperties = { textAlign: 'left', fontWeight: 500, fontSize: 12, color: 'var(--text-2)', padding: '6px 10px' }
@@ -65,9 +65,12 @@ export function Terminals() {
           </table>
         </div>
       )}
+      {!isPending && !isError && selected && !current && (
+        <p role="status" style={{ margin: 0, color: 'var(--text-2)' }}>Este terminal não existe mais (encerrado e removido).</p>
+      )}
       {current && (
         <div style={{ height: 'max(420px, calc(100vh - 360px))' }}>
-          <TerminalView key={current.id} id={current.id} readonly={!isLive(current)} />
+          <LazyTerminalView key={current.id} id={current.id} readonly={!isLive(current)} autoFocus />
         </div>
       )}
     </div>

@@ -66,6 +66,15 @@ describe('Config', () => {
     expect(body.where_stopped_ttl_min).toBe(15)
   })
 
+  it('permite escolher e salvar o modo segundo plano', async () => {
+    const fn = mock(routes)
+    wrap(<Config />)
+    fireEvent.change(await screen.findByLabelText(/abrir o agente em/), { target: { value: 'background' } })
+    const section = screen.getByRole('region', { name: /pronto para handoff/ })
+    fireEvent.click(within(section).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')[0].launch_mode).toBe('background'))
+  })
+
   it('limites enviam só pause|warn por agente', async () => {
     const fn = mock(routes)
     wrap(<Config />)
