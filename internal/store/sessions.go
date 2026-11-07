@@ -137,6 +137,11 @@ func (s *Store) SessionsForCard(cardID int64) ([]domain.Session, error) {
 	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions WHERE card_id=? ORDER BY julianday(started_at), id`, cardID)
 }
 
+// RecentSessions lista as sessões mais recentes (por início), da mais nova para a mais antiga.
+func (s *Store) RecentSessions(limit int) ([]domain.Session, error) {
+	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions ORDER BY julianday(started_at) DESC, id DESC LIMIT ?`, limit)
+}
+
 // moveCardTx aplica a transição ao card dentro da transação.
 func moveCardTx(tx *sql.Tx, cardID int64, ev domain.Transition) error {
 	var cur domain.Column
@@ -152,8 +157,10 @@ func moveCardTx(tx *sql.Tx, cardID int64, ev domain.Transition) error {
 }
 
 // AttachSession liga a sessão ao card, move o card para em_andamento e copia
-// para o card os eventos já capturados da sessão. Se outra sessão viva é dona
-// do card devolve ErrCardBusy, a menos que force (a outra é desligada).
+// para o card os eventos já capturados da sessão. Se a sessão já terminou, o
+// card vai para pausado (nunca em_andamento sem dono vivo). Se outra sessão
+// viva é dona do card devolve ErrCardBusy, a menos que force (a outra é
+// desligada).
 func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -161,8 +168,8 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	}
 	defer tx.Rollback()
 
-	var exists int
-	if err := tx.QueryRow(`SELECT 1 FROM sessions WHERE id=?`, sessionID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+	var ended sql.NullString
+	if err := tx.QueryRow(`SELECT ended_at FROM sessions WHERE id=?`, sessionID).Scan(&ended); errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
@@ -194,6 +201,12 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	}
 	if err := moveCardTx(tx, cardID, domain.SessionAttached); err != nil {
 		return err
+	}
+	if ended.Valid {
+		// Sessão já encerrada não é dona viva: o card fica pausado.
+		if err := moveCardTx(tx, cardID, domain.SessionEnded); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

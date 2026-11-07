@@ -7,127 +7,127 @@ import (
 )
 
 type Project struct {
-	ID      int64
-	Name    string
-	Path    string
-	Capture bool
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Capture bool   `json:"capture"`
 }
 
 type Card struct {
-	ID             int64
-	Key            string
-	Title          string
-	Goal           string
-	DoneWhen       string
-	WhereStopped   string
-	WhereStoppedAt *time.Time
-	HowToTest      string
-	Branch         string
-	ProjectID      int64
-	Column         Column
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID             int64      `json:"id"`
+	Key            string     `json:"key"`
+	Title          string     `json:"title"`
+	Goal           string     `json:"goal"`
+	DoneWhen       string     `json:"done_when"`
+	WhereStopped   string     `json:"where_stopped"`
+	WhereStoppedAt *time.Time `json:"where_stopped_at"`
+	HowToTest      string     `json:"how_to_test"`
+	Branch         string     `json:"branch"`
+	ProjectID      int64      `json:"project_id"`
+	Column         Column     `json:"column"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type Session struct {
-	ID                string
-	Agent             string
-	ProviderSessionID string
-	CardID            *int64
-	ProjectID         *int64
-	PID               int
-	Cwd               string
-	Branch            string
-	GitHead           string
-	Model             string
-	TranscriptPath    string
-	FullCapture       bool
-	StartedAt         time.Time
-	LastEventAt       time.Time
-	EndedAt           *time.Time
-	EndReason         string
+	ID                string     `json:"id"`
+	Agent             string     `json:"agent"`
+	ProviderSessionID string     `json:"provider_session_id"`
+	CardID            *int64     `json:"card_id"`
+	ProjectID         *int64     `json:"project_id"`
+	PID               int        `json:"pid"`
+	Cwd               string     `json:"cwd"`
+	Branch            string     `json:"branch"`
+	GitHead           string     `json:"git_head"`
+	Model             string     `json:"model"`
+	TranscriptPath    string     `json:"transcript_path"`
+	FullCapture       bool       `json:"full_capture"`
+	StartedAt         time.Time  `json:"started_at"`
+	LastEventAt       time.Time  `json:"last_event_at"`
+	EndedAt           *time.Time `json:"ended_at"`
+	EndReason         string     `json:"end_reason"`
 }
 
 type Event struct {
-	ID        int64
-	SessionID string
-	CardID    *int64
-	Kind      string
-	Data      json.RawMessage
-	At        time.Time
+	ID        int64           `json:"id"`
+	SessionID string          `json:"session_id"`
+	CardID    *int64          `json:"card_id"`
+	Kind      string          `json:"kind"`
+	Data      json.RawMessage `json:"data"`
+	At        time.Time       `json:"at"`
 }
 
 type Decision struct {
-	ID        int64
-	CardID    int64
-	What      string
-	Why       string
-	SessionID string
-	At        time.Time
+	ID        int64     `json:"id"`
+	CardID    int64     `json:"card_id"`
+	What      string    `json:"what"`
+	Why       string    `json:"why"`
+	SessionID string    `json:"session_id"`
+	At        time.Time `json:"at"`
 }
 
 type EssentialFile struct {
-	ID     int64
-	CardID int64
-	Path   string
-	Lines  string
-	Why    string
+	ID     int64  `json:"id"`
+	CardID int64  `json:"card_id"`
+	Path   string `json:"path"`
+	Lines  string `json:"lines"`
+	Why    string `json:"why"`
 }
 
 type Todo struct {
-	ID        int64
-	CardID    int64
-	Text      string
-	Done      bool
-	SessionID string
+	ID        int64  `json:"id"`
+	CardID    int64  `json:"card_id"`
+	Text      string `json:"text"`
+	Done      bool   `json:"done"`
+	SessionID string `json:"session_id"`
 }
 
 type Question struct {
-	ID        int64
-	CardID    int64
-	Text      string
-	Answer    string
-	SessionID string
+	ID        int64  `json:"id"`
+	CardID    int64  `json:"card_id"`
+	Text      string `json:"text"`
+	Answer    string `json:"answer"`
+	SessionID string `json:"session_id"`
 }
 
 type UsageRow struct {
-	SessionID  string
-	MessageID  string
-	Model      string
-	Input      int64
-	Output     int64
-	CacheWrite int64
-	CacheRead  int64
-	At         time.Time
+	SessionID  string    `json:"session_id"`
+	MessageID  string    `json:"message_id"`
+	Model      string    `json:"model"`
+	Input      int64     `json:"input"`
+	Output     int64     `json:"output"`
+	CacheWrite int64     `json:"cache_write"`
+	CacheRead  int64     `json:"cache_read"`
+	At         time.Time `json:"at"`
 }
 
 type Price struct {
-	Model          string
-	InputPerM      float64
-	OutputPerM     float64
-	CacheWritePerM float64
-	CacheReadPerM  float64
+	Model          string  `json:"model"`
+	InputPerM      float64 `json:"input_per_m"`
+	OutputPerM     float64 `json:"output_per_m"`
+	CacheWritePerM float64 `json:"cache_write_per_m"`
+	CacheReadPerM  float64 `json:"cache_read_per_m"`
 }
 
 // Limit define limites de gasto por agente. Action é "pause" ou "warn".
 type Limit struct {
-	Agent    string
-	DailyUSD float64
-	CardUSD  float64
-	WarnPct  int
-	Action   string
+	Agent    string  `json:"agent"`
+	DailyUSD float64 `json:"daily_usd"`
+	CardUSD  float64 `json:"card_usd"`
+	WarnPct  int     `json:"warn_pct"`
+	Action   string  `json:"action"`
 }
 
 type Prompt struct {
-	ID               int64
-	Name             string
-	Slug             string
-	Tag              string
-	Description      string
-	Body             string
-	Agents           []string
-	ProjectID        *int64
-	IsDefaultHandoff bool
-	Uses             int
-	LastUsedAt       *time.Time
+	ID               int64      `json:"id"`
+	Name             string     `json:"name"`
+	Slug             string     `json:"slug"`
+	Tag              string     `json:"tag"`
+	Description      string     `json:"description"`
+	Body             string     `json:"body"`
+	Agents           []string   `json:"agents"`
+	ProjectID        *int64     `json:"project_id"`
+	IsDefaultHandoff bool       `json:"is_default_handoff"`
+	Uses             int        `json:"uses"`
+	LastUsedAt       *time.Time `json:"last_used_at"`
 }

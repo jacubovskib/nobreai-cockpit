@@ -128,3 +128,22 @@ func TestProjectCRUD(t *testing.T) {
 		t.Fatalf("list = %+v", l)
 	}
 }
+
+func TestGetCardByID(t *testing.T) {
+	s := newTestStore(t)
+	p, err := s.CreateProject("api", "/w/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.CreateCard(domain.Card{Title: "t", ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetCardByID(c.ID)
+	if err != nil || got.Key != c.Key {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if _, err := s.GetCardByID(999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}

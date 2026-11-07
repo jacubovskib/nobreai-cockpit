@@ -96,13 +96,16 @@ type TotalsFilter struct {
 }
 
 type Total struct {
-	Key                                  string
-	Agent                                string
-	Day                                  string
-	Sessions                             int
-	Input, Output, CacheWrite, CacheRead int64
-	CostUSD                              float64
-	Unpriced                             bool
+	Key        string  `json:"key"`
+	Agent      string  `json:"agent"`
+	Day        string  `json:"day"`
+	Sessions   int     `json:"sessions"`
+	Input      int64   `json:"input"`
+	Output     int64   `json:"output"`
+	CacheWrite int64   `json:"cache_write"`
+	CacheRead  int64   `json:"cache_read"`
+	CostUSD    float64 `json:"cost_usd"`
+	Unpriced   bool    `json:"unpriced"`
 }
 
 // Totals agrega o uso por grupo; o custo é calculado em Go (usage.Cost) com a

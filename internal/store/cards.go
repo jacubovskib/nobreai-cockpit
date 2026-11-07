@@ -103,6 +103,15 @@ func (s *Store) GetCard(key string) (domain.Card, error) {
 	return c, err
 }
 
+// GetCardByID busca um card pelo id (ErrNotFound se não existir).
+func (s *Store) GetCardByID(id int64) (domain.Card, error) {
+	c, err := scanCard(s.DB.QueryRow(`SELECT `+cardCols+` FROM cards WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
+
 // ListCards lista cards por id, com filtros opcionais.
 func (s *Store) ListCards(f CardFilter) ([]domain.Card, error) {
 	q := `SELECT ` + cardCols + ` FROM cards WHERE 1=1`

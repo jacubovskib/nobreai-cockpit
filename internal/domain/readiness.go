@@ -4,10 +4,10 @@ import "time"
 
 // Content reúne o conteúdo estruturado de um card.
 type Content struct {
-	Decisions []Decision
-	Files     []EssentialFile
-	Todos     []Todo
-	Questions []Question
+	Decisions []Decision      `json:"decisions"`
+	Files     []EssentialFile `json:"files"`
+	Todos     []Todo          `json:"todos"`
+	Questions []Question      `json:"questions"`
 }
 
 // Settings são as preferências do usuário, persistidas na tabela settings.
@@ -41,16 +41,16 @@ func DefaultSettings() Settings {
 }
 
 type ReadinessItem struct {
-	Rule  string
-	Label string
-	OK    bool
+	Rule  string `json:"rule"`
+	Label string `json:"label"`
+	OK    bool   `json:"ok"`
 }
 
 type ReadinessResult struct {
-	Items []ReadinessItem
-	Met   int
-	Total int
-	Ready bool
+	Items []ReadinessItem `json:"items"`
+	Met   int             `json:"met"`
+	Total int             `json:"total"`
+	Ready bool            `json:"ready"`
 }
 
 var readinessRules = []struct{ key, label string }{

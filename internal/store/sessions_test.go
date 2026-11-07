@@ -244,3 +244,49 @@ func TestLiveTouchRemindForCard(t *testing.T) {
 		t.Fatalf("for card = %+v, %v", for_card, err)
 	}
 }
+
+func TestAttachEndedSessionLeavesCardPaused(t *testing.T) {
+	s := newTestStore(t)
+	c := seedCard(t, s, domain.Backlog)
+	if err := s.StartSession(newSession("claude:old", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddEvent(domain.Event{SessionID: "claude:old", Kind: domain.EvFileEdit, Data: json.RawMessage(`{"path":"a.go"}`), At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EndSession("claude:old", "exit", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AttachSession("claude:old", c.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetCard(c.Key); got.Column != domain.Pausado {
+		t.Fatalf("column = %s, want pausado", got.Column)
+	}
+	if x, _ := s.GetSession("claude:old"); x.CardID == nil || *x.CardID != c.ID {
+		t.Fatalf("session card = %v", x.CardID)
+	}
+	evs, _ := s.RecentEvents(10)
+	if len(evs) != 1 || evs[0].CardID == nil || *evs[0].CardID != c.ID {
+		t.Fatalf("evs = %+v", evs)
+	}
+}
+
+func TestRecentSessions(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Now().UTC().Add(-time.Hour)
+	for i, id := range []string{"claude:1", "claude:2", "claude:3"} {
+		x := newSession(id, i+1)
+		x.StartedAt = base.Add(time.Duration(i) * time.Minute)
+		if err := s.StartSession(x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.RecentSessions(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "claude:3" || got[1].ID != "claude:2" {
+		t.Fatalf("got %+v", got)
+	}
+}
