@@ -11,12 +11,13 @@ const AGENT_OPTIONS = [
   { id: 'kiro', enabled: false },
 ]
 const PLATFORM_MODE = 'platform'
+const BACKGROUND_MODE = 'background'
 
 const NO_PROMPT = 'nenhum'
 
 // `enabled` liga o botão (Claude Code no piloto). Sessão viva no card volta
 // 409; a mensagem aparece em linha com "Forçar mesmo assim", que reenvia com force.
-export function ContinuePanel({ cardKey, enabled = false }: { cardKey: string; enabled?: boolean }) {
+export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKey: string; enabled?: boolean; onTerminal?: (id: string) => void }) {
   const qc = useQueryClient()
   const prompts = usePrompts()
   const [agent, setAgent] = useState('claude')
@@ -27,8 +28,14 @@ export function ContinuePanel({ cardKey, enabled = false }: { cardKey: string; e
   const name = agentInfo(agent).name
   const start = useMutation({
     mutationFn: (force: boolean) =>
-      post(`/api/cards/${cardKey}/continue`, { agent, mode, prompt_slug: effectiveSlug, ...(force ? { force: true } : {}) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['card', cardKey] }),
+      post<{ terminal_id?: string }>(`/api/cards/${cardKey}/continue`, { agent, mode, prompt_slug: effectiveSlug, ...(force ? { force: true } : {}) }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['card', cardKey] })
+      if (mode === BACKGROUND_MODE && res?.terminal_id) {
+        qc.invalidateQueries({ queryKey: ['terminals'] })
+        onTerminal?.(res.terminal_id)
+      }
+    },
   })
   const liveConflict = start.error instanceof ApiError && start.error.status === 409 && (start.error.body as { code?: string } | null)?.code === 'live_session'
   return (
@@ -66,7 +73,7 @@ export function ContinuePanel({ cardKey, enabled = false }: { cardKey: string; e
         <select style={input} value={mode} onChange={(e) => setMode(e.target.value)}>
           <option value={PLATFORM_MODE}>Padrão da plataforma: nova janela do terminal</option>
           <option value="tmux" disabled>Sessão tmux (em breve)</option>
-          <option value="background" disabled>Em segundo plano, com saída aqui na interface (em breve)</option>
+          <option value={BACKGROUND_MODE}>Em segundo plano, com saída aqui na interface</option>
         </select>
       </label>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -83,7 +90,7 @@ export function ContinuePanel({ cardKey, enabled = false }: { cardKey: string; e
           </button>
         </div>
       )}
-      {start.isSuccess && <p role="status" style={{ ...muted, margin: 0 }}>Terminal aberto.</p>}
+      {start.isSuccess && <p role="status" style={{ ...muted, margin: 0 }}>{mode === BACKGROUND_MODE ? 'Agente iniciado em segundo plano; o terminal está neste card.' : 'Terminal aberto.'}</p>}
       <p style={{ ...muted, margin: 0 }}>
         Abre uma nova janela do terminal no diretório do projeto, no branch do card, com o pacote de retomada como contexto. A sessão atual, se houver, não é encerrada.
       </p>

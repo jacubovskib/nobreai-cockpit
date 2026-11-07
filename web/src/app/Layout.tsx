@@ -23,6 +23,10 @@ const NAV: { to: string; label: string; end?: boolean; icon: ReactNode }[] = [
     icon: <svg {...svgProps}><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></svg>,
   },
   {
+    to: '/terminals', label: 'Terminais',
+    icon: <svg {...svgProps}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 9l3 3-3 3M12 15h5" /></svg>,
+  },
+  {
     to: '/prompts', label: 'Prompts',
     icon: <svg {...svgProps}><path d="M4 5h16v11H10l-6 4z" /><path d="M8 9h8M8 12h5" /></svg>,
   },

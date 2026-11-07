@@ -8,6 +8,7 @@ import { CardPage } from '../pages/CardPage'
 import { Analytics } from '../pages/Analytics'
 import { Config } from '../pages/Config'
 import { Prompts } from '../pages/Prompts'
+import { Terminals } from '../pages/Terminals'
 
 export function AppRoutes() {
   return (
@@ -17,6 +18,7 @@ export function AppRoutes() {
         <Route path="board" element={<Board />} />
         <Route path="cards" element={<CardsList />} />
         <Route path="cards/:key" element={<CardPage />} />
+        <Route path="terminals" element={<Terminals />} />
         <Route path="prompts" element={<Prompts />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="config" element={<Config />} />

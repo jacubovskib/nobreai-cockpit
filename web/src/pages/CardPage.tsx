@@ -9,6 +9,7 @@ import { Money } from '../ui/Money'
 import { StatusBadge } from '../ui/StatusBadge'
 import { formatTokens } from '../ui/Tokens'
 import { minutesSince, plural } from './board'
+import { CardTerminal } from './card/CardTerminal'
 import { CliPanel } from './card/CliPanel'
 import { ContinuePanel } from './card/ContinuePanel'
 import { Decisions } from './card/Decisions'
@@ -31,6 +32,7 @@ export function CardPage() {
   const limits = useLimits()
   const projects = useProjects()
   const [preview, setPreview] = useState(false)
+  const [focusTerminal, setFocusTerminal] = useState('')
   const approve = useMutation({
     mutationFn: () => patch(`/api/cards/${key}`, { column: 'concluido' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['card', key] }),
@@ -88,6 +90,7 @@ export function CardPage() {
       </header>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <div style={{ flex: '2 1 480px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <CardTerminal cardKey={c.key} focusId={focusTerminal} />
           <WhereStopped card={c} />
           <Goal card={c} />
           <Todos card={c} />
@@ -97,7 +100,7 @@ export function CardPage() {
           <Questions card={c} />
         </div>
         <aside aria-label="Handoff" style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <ContinuePanel cardKey={c.key} enabled />
+          <ContinuePanel cardKey={c.key} enabled onTerminal={setFocusTerminal} />
           <CliPanel cardKey={c.key} previewOpen={preview} onTogglePreview={() => setPreview(!preview)} />
           <ReadinessPanel readiness={c.readiness} />
           <LimitPanel card={c} limits={limits.data ?? []} currency={currency} rate={rate} />

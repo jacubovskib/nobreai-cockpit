@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useOverview, useSettings } from '../api/queries'
+import { forCard, isLive, useTerminals } from '../api/terminals'
 import { patch, post } from '../api/client'
 import type { ActiveSession, AgentSpend, Alert, Card, DomainEvent, SessionWithUsage, Total } from '../api/types'
 import { agentInfo } from '../ui/agents'
@@ -51,7 +52,7 @@ function AlertRow({ alert, onPause, pausing }: { alert: Alert; onPause: (key: st
   )
 }
 
-function ActiveCard({ s }: { s: ActiveSession }) {
+function ActiveCard({ s, terminalId }: { s: ActiveSession; terminalId?: string }) {
   const mins = minutesSince(s.started_at)
   return (
     <article style={{ ...panel, gap: 14 }}>
@@ -80,6 +81,9 @@ function ActiveCard({ s }: { s: ActiveSession }) {
         </Link>
       ) : (
         <span style={{ color: 'var(--text-2)' }}>sem card</span>
+      )}
+      {terminalId && (
+        <div><Link to={`/terminals?id=${encodeURIComponent(terminalId)}`} style={btn}>Ver terminal</Link></div>
       )}
       {s.last_activity && (
         <div className="mono" style={{ padding: '10px 12px', borderRadius: 8, background: '#0F1116', fontSize: 12.5, color: '#C3C8D2' }}>{s.last_activity}</div>
@@ -210,6 +214,7 @@ function eventText(e: DomainEvent): string {
 export function ControlRoom() {
   const { data, isPending, isError } = useOverview()
   const settings = useSettings().data
+  const terminals = useTerminals().data
   const qc = useQueryClient()
   const [error, setError] = useState('')
   const pause = useMutation({
@@ -278,7 +283,7 @@ export function ControlRoom() {
         <section aria-labelledby="ativos-t" style={{ flex: '3 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <h2 id="ativos-t" style={h2}>Agentes rodando agora</h2>
           {active.length === 0 && <p style={{ margin: 0, color: 'var(--text-2)' }}>Nenhum agente rodando agora.</p>}
-          {active.map((s) => <ActiveCard key={s.id} s={s} />)}
+          {active.map((s) => <ActiveCard key={s.id} s={s} terminalId={s.card && !s.pid_dead_at ? forCard(terminals, s.card.key).find(isLive)?.id : undefined} />)}
         </section>
 
         <div style={{ flex: '2 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>

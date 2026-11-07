@@ -5,6 +5,8 @@ import { CardPage } from './CardPage'
 import { ContinuePanel } from './card/ContinuePanel'
 import type { CardDetail } from '../api/types'
 
+vi.mock('../ui/TerminalView', () => ({ TerminalView: ({ id }: { id: string }) => <div data-testid="tv">{id}</div> }))
+
 const tot = (o: object = {}) => ({ key: '', agent: '', day: '', sessions: 1, input: 820000, output: 121000, cache_write: 100000, cache_read: 41000, cost_usd: 4.82, unpriced: false, ...o })
 const sess = { id: 's1', agent: 'claude', started_at: '2026-11-05T10:00:00Z', last_event_at: '2026-11-05T10:40:00Z', ended_at: null, usage: tot(), unpriced: false }
 const detail = {
@@ -147,5 +149,16 @@ describe('ContinuePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Iniciar Claude Code neste card' }))
     await waitFor(() => expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')).toHaveLength(1))
     expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')[0].prompt_slug).toBe('nenhum')
+  })
+
+  it('Continuar em segundo plano envia mode=background e mostra o terminal do card', async () => {
+    const term = { id: 'tt1', card_key: 'NAC-42', agent: 'claude', origin: 'plataforma', title: '', pid: 1, started_at: '2026-11-05T10:00:00Z', ended_at: null, exit_code: null, cols: 80, rows: 24, clients: 0 }
+    const fn = mock({ ...base, '/api/cards/NAC-42': detail, '/api/terminals': [term], 'POST /api/cards/NAC-42/continue': { terminal_id: 'tt1' } })
+    wrap(<CardPage />)
+    expect(await screen.findByRole('heading', { name: 'Terminal' })).toBeInTheDocument()
+    expect(screen.getByTestId('tv')).toHaveTextContent('tt1')
+    fireEvent.change(await screen.findByLabelText('Abrir em'), { target: { value: 'background' } })
+    fireEvent.click(screen.getByRole('button', { name: /Iniciar Claude Code neste card/ }))
+    await waitFor(() => expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')[0]).toMatchObject({ mode: 'background' }))
   })
 })
