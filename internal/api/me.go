@@ -1,0 +1,295 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/resume"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
+)
+
+// Rotas do agente: a sessão é a sessão viva do processo informado em
+// X-Nobre-Agent-PID (o CLI `nobre` descobre o PID do agente ancestral).
+
+const (
+	agentPIDHeader = "X-Nobre-Agent-PID"
+	msgNoSession   = "nenhuma sessão de agente encontrada para este processo"
+	msgNoCard      = `Esta sessão ainda não tem card. Use nobre start "<título>" ou nobre resume <KEY>.`
+	msgNoProject   = "Este repositório não está cadastrado no NobreAI Cockpit. Peça ao usuário para cadastrar (nobre project add); não cadastre por conta própria."
+)
+
+func (s *server) meRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/me/start", s.withSession(s.meStart))
+	mux.HandleFunc("POST /api/me/resume", s.withSession(s.meResume))
+	mux.HandleFunc("GET /api/me/status", s.withSession(s.meStatus))
+	mux.HandleFunc("POST /api/me/note", s.withSessionCard(s.meNote))
+	mux.HandleFunc("POST /api/me/decide", s.withSessionCard(s.meContent(s.addDecision)))
+	mux.HandleFunc("POST /api/me/file", s.withSessionCard(s.meContent(s.addFile)))
+	mux.HandleFunc("POST /api/me/todo", s.withSessionCard(s.meContent(s.addTodo)))
+	mux.HandleFunc("POST /api/me/ask", s.withSessionCard(s.meContent(s.addQuestion)))
+	mux.HandleFunc("POST /api/me/todo-done", s.withSessionCard(s.meTodoDone))
+	mux.HandleFunc("POST /api/me/test", s.withSessionCard(s.meTest))
+	mux.HandleFunc("POST /api/me/done", s.withSessionCard(s.meDone))
+}
+
+type sessionHandler func(http.ResponseWriter, *http.Request, domain.Session)
+type sessionCardHandler func(http.ResponseWriter, *http.Request, domain.Session, domain.Card)
+
+func (s *server) withSession(h sessionHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pid, err := strconv.Atoi(r.Header.Get(agentPIDHeader))
+		if err != nil || pid <= 0 {
+			writeError(w, http.StatusBadRequest, "cabeçalho "+agentPIDHeader+" ausente ou inválido")
+			return
+		}
+		sess, err := s.st.SessionByPID(pid)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if sess == nil {
+			writeError(w, http.StatusNotFound, msgNoSession)
+			return
+		}
+		h(w, r, *sess)
+	}
+}
+
+func (s *server) withSessionCard(h sessionCardHandler) http.HandlerFunc {
+	return s.withSession(func(w http.ResponseWriter, r *http.Request, sess domain.Session) {
+		c, ok := s.sessionCard(w, sess)
+		if ok {
+			h(w, r, sess, c)
+		}
+	})
+}
+
+// sessionCard devolve o card da sessão ou responde 409.
+func (s *server) sessionCard(w http.ResponseWriter, sess domain.Session) (domain.Card, bool) {
+	if sess.CardID == nil {
+		writeError(w, http.StatusConflict, msgNoCard)
+		return domain.Card{}, false
+	}
+	c, err := s.st.GetCardByID(*sess.CardID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusConflict, msgNoCard)
+		return c, false
+	}
+	if err != nil {
+		writeStoreError(w, err, "")
+		return c, false
+	}
+	return c, true
+}
+
+// meContent adapta um handler de conteúdo do card para a sessão do agente.
+func (s *server) meContent(h func(http.ResponseWriter, *http.Request, domain.Card, string)) sessionCardHandler {
+	return func(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+		h(w, r, c, sess.ID)
+	}
+}
+
+// recordEvent grava um evento da sessão (no card atual dela) e atualiza a
+// última atividade. Sem sessão (escrita do humano) não faz nada. Falha aqui
+// não desfaz a escrita principal: só é registrada no log.
+func (s *server) recordEvent(sessionID, kind string, data map[string]any) {
+	if sessionID == "" {
+		return
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("evento %s: %v", kind, err)
+		return
+	}
+	now := s.now()
+	if err := s.st.AddEvent(domain.Event{SessionID: sessionID, Kind: kind, Data: b, At: now}); err != nil {
+		log.Printf("evento %s da sessão %s: %v", kind, sessionID, err)
+		return
+	}
+	if err := s.st.TouchSession(sessionID, now); err != nil {
+		log.Printf("atualizar sessão %s: %v", sessionID, err)
+	}
+	s.publish("sessions")
+}
+
+func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Session) {
+	var in struct {
+		Title    string `json:"title"`
+		Goal     string `json:"goal"`
+		DoneWhen string `json:"done_when"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		writeError(w, http.StatusBadRequest, "título obrigatório")
+		return
+	}
+	var projectID int64
+	if sess.ProjectID != nil {
+		projectID = *sess.ProjectID
+	} else {
+		p, err := s.st.ProjectForPath(sess.Cwd)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if p == nil {
+			writeError(w, http.StatusConflict, msgNoProject)
+			return
+		}
+		projectID = p.ID
+	}
+	c, err := s.st.CreateCardAndAttach(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
+		Branch: sess.Branch, ProjectID: projectID}, sess.ID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	s.publish("cards", "sessions")
+	s.writeCard(w, http.StatusCreated, c.Key)
+}
+
+func (s *server) meResume(w http.ResponseWriter, r *http.Request, sess domain.Session) {
+	var in struct {
+		Key   string `json:"key"`
+		Force bool   `json:"force"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if in.Key == "" {
+		writeError(w, http.StatusBadRequest, "chave do card obrigatória")
+		return
+	}
+	if err := s.st.AttachSession(sess.ID, in.Key, in.Force); err != nil {
+		if errors.Is(err, store.ErrCardBusy) {
+			writeError(w, http.StatusConflict, busyMessage(in.Key))
+			return
+		}
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	s.publish("cards", "sessions")
+	c, err := s.st.GetCard(in.Key)
+	if err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	// A base do diff é a sessão anterior: a desta chamada acabou de entrar.
+	md, err := resume.ForCard(s.st, s.deps.Git, c, sess.ID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"key": c.Key, "markdown": md})
+}
+
+func (s *server) meStatus(w http.ResponseWriter, r *http.Request, sess domain.Session) {
+	out := struct {
+		Session domain.Session `json:"session"`
+		Card    *CardDetail    `json:"card"`
+	}{Session: sess}
+	if sess.CardID != nil {
+		c, ok := s.sessionCard(w, sess)
+		if !ok {
+			return
+		}
+		d, err := s.cardDetail(c)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		out.Card = &d
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) meNote(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		Text string `json:"text"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		writeError(w, http.StatusBadRequest, "texto obrigatório")
+		return
+	}
+	if err := s.st.SetWhereStopped(c.ID, in.Text, s.now()); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	s.recordEvent(sess.ID, domain.EvNote, map[string]any{"text": in.Text})
+	s.publish("cards")
+	s.writeCard(w, http.StatusOK, c.Key)
+}
+
+func (s *server) meTodoDone(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		ID int64 `json:"id"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	ct, err := s.st.CardContent(c.ID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	found := false
+	for _, t := range ct.Todos {
+		found = found || t.ID == in.ID
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "pendência não encontrada neste card")
+		return
+	}
+	if err := s.st.SetTodoDone(in.ID, true); err != nil {
+		writeStoreError(w, err, "pendência não encontrada")
+		return
+	}
+	s.recordEvent(sess.ID, domain.EvTodo, map[string]any{"id": in.ID, "done": true})
+	s.publish("cards")
+	writeJSON(w, http.StatusOK, map[string]any{"id": in.ID, "done": true})
+}
+
+func (s *server) meTest(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		Text string `json:"text"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		writeError(w, http.StatusBadRequest, "texto obrigatório")
+		return
+	}
+	c.HowToTest = in.Text
+	if err := s.st.UpdateCard(c); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	s.recordEvent(sess.ID, domain.EvHowToTest, map[string]any{"text": in.Text})
+	s.publish("cards")
+	s.writeCard(w, http.StatusOK, c.Key)
+}
+
+// meDone aplica a transição AgentDone (em_andamento → revisao) e registra o
+// evento done (mesmo se o card já não estava em andamento).
+func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	if next := domain.NextColumn(c.Column, domain.AgentDone); next != c.Column {
+		if err := s.st.MoveCard(c.Key, next); err != nil {
+			writeStoreError(w, err, msgCardNotFound)
+			return
+		}
+		s.publish("cards")
+	}
+	s.recordEvent(sess.ID, domain.EvDone, map[string]any{})
+	s.writeCard(w, http.StatusOK, c.Key)
+}

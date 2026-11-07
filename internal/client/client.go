@@ -1,0 +1,195 @@
+// Package client é o cliente HTTP do nobred usado pelo CLI `nobre`.
+package client
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/proc"
+)
+
+// Timeout é o prazo de cada chamada.
+const Timeout = 2 * time.Second
+
+// AgentPIDHeader identifica o processo do agente nas rotas /api/me.
+const AgentPIDHeader = "X-Nobre-Agent-PID"
+
+// Client fala com o nobred. PID é o processo do agente (0 = desconhecido).
+type Client struct {
+	base string
+	hc   *http.Client
+	PID  int
+}
+
+// New cria um cliente para addr (host:porta). O PID do agente vem de
+// NOBRE_AGENT_PID ou da árvore de processos (DetectAgentPID).
+func New(addr string) *Client {
+	return &Client{base: "http://" + addr, hc: &http.Client{Timeout: Timeout}, PID: DetectAgentPID()}
+}
+
+// DetectAgentPID: NOBRE_AGENT_PID tem prioridade; senão sobe a árvore de
+// processos a partir do pai atual procurando os nomes de todos os adaptadores.
+// Não achar devolve 0.
+func DetectAgentPID() int {
+	if v := os.Getenv("NOBRE_AGENT_PID"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	var names []string
+	for _, a := range []adapter.Adapter{claude.New(nil, adapter.Deps{})} {
+		names = append(names, a.ProcessNames()...)
+	}
+	pid, err := proc.FindAgentAncestor("/proc", os.Getppid(), names)
+	if err != nil {
+		return 0
+	}
+	return pid
+}
+
+// APIError é uma resposta de erro do daemon.
+type APIError struct {
+	Status  int
+	Message string
+}
+
+func (e *APIError) Error() string { return e.Message }
+
+// Do chama a API: in vira o corpo JSON (se não nil) e a resposta 2xx é
+// decodificada em out (se não nil).
+func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {
+	var body io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+	if err != nil {
+		return err
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.PID > 0 {
+		req.Header.Set(AgentPIDHeader, strconv.Itoa(c.PID))
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("não consegui falar com o nobred em %s (ele está rodando?): %w", req.URL.Host, errors.Unwrap(err))
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		var e struct {
+			Error string `json:"error"`
+		}
+		msg := http.StatusText(resp.StatusCode)
+		if json.Unmarshal(data, &e) == nil && e.Error != "" {
+			msg = e.Error
+		}
+		return &APIError{Status: resp.StatusCode, Message: msg}
+	}
+	if out != nil {
+		return json.Unmarshal(data, out)
+	}
+	return nil
+}
+
+// Hook envia um HookCall ao adaptador do agente.
+func (c *Client) Hook(ctx context.Context, agent string, call adapter.HookCall) (adapter.HookReply, error) {
+	var r adapter.HookReply
+	err := c.Do(ctx, "POST", "/api/hooks/"+url.PathEscape(agent), call, &r)
+	return r, err
+}
+
+// StatusCard é o card do agente em `nobre status`.
+type StatusCard struct {
+	domain.Card
+	Readiness domain.ReadinessResult `json:"readiness"`
+}
+
+// Status é a resposta de GET /api/me/status.
+type Status struct {
+	Session domain.Session `json:"session"`
+	Card    *StatusCard    `json:"card"`
+}
+
+// Status devolve a sessão do agente e o card ligado a ela (nil se não houver).
+func (c *Client) Status(ctx context.Context) (Status, error) {
+	var s Status
+	return s, c.Do(ctx, "GET", "/api/me/status", nil, &s)
+}
+
+// Start cria um card e liga a sessão a ele.
+func (c *Client) Start(ctx context.Context, title, goal, doneWhen string) (domain.Card, error) {
+	var card domain.Card
+	err := c.Do(ctx, "POST", "/api/me/start", map[string]string{"title": title, "goal": goal, "done_when": doneWhen}, &card)
+	return card, err
+}
+
+// Resume liga a sessão ao card e devolve o pacote em markdown.
+func (c *Client) Resume(ctx context.Context, key string, force bool) (string, error) {
+	var out struct {
+		Markdown string `json:"markdown"`
+	}
+	err := c.Do(ctx, "POST", "/api/me/resume", map[string]any{"key": key, "force": force}, &out)
+	return out.Markdown, err
+}
+
+// Me faz uma escrita simples numa rota /api/me/<action>.
+func (c *Client) Me(ctx context.Context, action string, body any) error {
+	return c.Do(ctx, "POST", "/api/me/"+action, body, nil)
+}
+
+// AddProject cadastra um projeto.
+func (c *Client) AddProject(ctx context.Context, name, path string) (domain.Project, error) {
+	var p domain.Project
+	err := c.Do(ctx, "POST", "/api/projects", map[string]string{"name": name, "path": path}, &p)
+	return p, err
+}
+
+// Projects lista os projetos.
+func (c *Client) Projects(ctx context.Context) ([]domain.Project, error) {
+	var ps []domain.Project
+	return ps, c.Do(ctx, "GET", "/api/projects", nil, &ps)
+}
+
+// Prompts lista os prompts.
+func (c *Client) Prompts(ctx context.Context) ([]domain.Prompt, error) {
+	var ps []domain.Prompt
+	return ps, c.Do(ctx, "GET", "/api/prompts", nil, &ps)
+}
+
+// RenderPrompt renderiza o prompt (com as variáveis do card, se informado) e marca o uso.
+func (c *Client) RenderPrompt(ctx context.Context, slug, card string) (string, error) {
+	var out struct {
+		Text string `json:"text"`
+	}
+	err := c.Do(ctx, "POST", "/api/prompts/"+url.PathEscape(slug)+"/render", map[string]any{"card": card, "use": true}, &out)
+	return out.Text, err
+}
+
+// SavePrompt cria um prompt.
+func (c *Client) SavePrompt(ctx context.Context, p domain.Prompt) (domain.Prompt, error) {
+	var out domain.Prompt
+	err := c.Do(ctx, "POST", "/api/prompts", p, &out)
+	return out, err
+}

@@ -1,0 +1,362 @@
+package pty
+
+import (
+	"bytes"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func waitDone(t *testing.T, tm *Terminal) {
+	t.Helper()
+	select {
+	case <-tm.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("terminal não encerrou")
+	}
+}
+
+func eventually(t *testing.T, what string, f func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if f() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timeout esperando: %s", what)
+}
+
+func sh(script string) StartSpec {
+	return StartSpec{Argv: []string{"/bin/sh", "-c", script}, Origin: "plataforma"}
+}
+
+func TestStartEchoesOutput(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, err := m.Start(sh("printf oi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ch, cancel := tm.Subscribe()
+	defer cancel()
+	waitDone(t, tm)
+	snap, _, _ := tm.Subscribe()
+	if !strings.Contains(string(snap), "oi") {
+		t.Fatalf("snapshot = %q", snap)
+	}
+	in := tm.Info()
+	if in.ExitCode == nil || *in.ExitCode != 0 || in.EndedAt == nil {
+		t.Fatalf("info = %+v", in)
+	}
+	if !strings.HasPrefix(in.ID, "t-") || len(in.ID) != 10 {
+		t.Fatalf("id = %q", in.ID)
+	}
+	for range ch { // canal precisa fechar no fim
+	}
+}
+
+func TestExitCodePropagates(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, _ := m.Start(sh("exit 7"))
+	waitDone(t, tm)
+	if c := tm.Info().ExitCode; c == nil || *c != 7 {
+		t.Fatalf("exit = %v", c)
+	}
+}
+
+func TestInputReachesProcess(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, err := m.Start(StartSpec{Argv: []string{"cat"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tm.Write([]byte("abc\n")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "abc na saída", func() bool {
+		return bytes.Contains(tm.ring.Snapshot(), []byte("abc"))
+	})
+	if err := m.Kill(tm.Info().ID); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, tm)
+}
+
+func TestSlowSubscriberDropped(t *testing.T) {
+	m := NewManager(Options{RingSize: 1024, SubLimit: 64 << 10})
+	defer m.Close()
+	// escreve 2 MiB de uma vez, sem esperar ninguém ler
+	tm, err := m.Start(sh("head -c 2097152 /dev/zero | tr '\\0' x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, slow, cancel := tm.Subscribe() // nunca lê
+	defer cancel()
+	waitDone(t, tm) // o processo não travou
+	got := 0
+	for b := range slow { // fecha depois de no máximo um bloco já entregue
+		got += len(b)
+	}
+	if got > 64<<10 {
+		t.Fatalf("assinante lento recebeu %d bytes além do limite", got)
+	}
+	if n := tm.Info().Clients; n != 0 {
+		t.Fatalf("clients = %d", n)
+	}
+}
+
+func TestSubscriberLimitIsBytesNotChunks(t *testing.T) {
+	// Muitos pedaços pequenos abaixo do limite em bytes não desconectam.
+	m := NewManager(Options{SubLimit: 4 << 20})
+	defer m.Close()
+	tm, err := m.Start(sh("sleep 0.3; i=0; while [ $i -lt 600 ]; do printf 'linha %d\\n' $i; i=$((i+1)); sleep 0.001; done"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ch, cancel := tm.Subscribe()
+	defer cancel()
+	waitDone(t, tm) // ninguém leu enquanto o processo escrevia
+	var out bytes.Buffer
+	for b := range ch {
+		out.Write(b)
+	}
+	if !strings.Contains(out.String(), "linha 599") {
+		t.Fatalf("assinante foi desconectado: %d bytes", out.Len())
+	}
+}
+
+func TestEndReason(t *testing.T) {
+	m := NewManager(Options{})
+	own, _ := m.Start(sh("exit 0"))
+	waitDone(t, own)
+	killed, _ := m.Start(StartSpec{Argv: []string{"cat"}})
+	_ = m.Kill(killed.Info().ID)
+	waitDone(t, killed)
+	daemon, _ := m.Start(StartSpec{Argv: []string{"cat"}})
+	m.Close()
+	waitDone(t, daemon)
+	for tm, want := range map[*Terminal]string{own: "agent", killed: "killed", daemon: "daemon"} {
+		if got := tm.Info().EndReason; got != want {
+			t.Fatalf("motivo = %q, quero %q", got, want)
+		}
+	}
+	m.Close() // idempotente
+}
+
+func TestCloseWaitsForHolders(t *testing.T) {
+	m := NewManager(Options{})
+	tm, _ := m.Start(StartSpec{Argv: []string{"cat"}})
+	release, ok := m.Hold()
+	if !ok {
+		t.Fatal("Hold recusado antes de Close")
+	}
+	released := make(chan struct{})
+	go func() { <-tm.Done(); time.Sleep(200 * time.Millisecond); close(released); release() }()
+	m.Close()
+	select {
+	case <-released:
+	default:
+		t.Fatal("Close voltou antes de o cliente entregar a mensagem de fim")
+	}
+	if _, ok := m.Hold(); ok {
+		t.Fatal("Hold depois de Close deveria falhar")
+	}
+}
+
+func TestResizeApplies(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, err := m.Start(sh("sleep 0.3; stty size"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tm.Resize(100, 40); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, tm)
+	if got := string(tm.ring.Snapshot()); !strings.Contains(got, "40 100") {
+		t.Fatalf("saída = %q", got)
+	}
+	if in := tm.Info(); in.Cols != 100 || in.Rows != 40 {
+		t.Fatalf("info = %+v", in)
+	}
+}
+
+func TestMaxLive(t *testing.T) {
+	m := NewManager(Options{MaxLive: 1})
+	defer m.Close()
+	if _, err := m.Start(StartSpec{Argv: []string{"cat"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Start(StartSpec{Argv: []string{"cat"}}); err != ErrTooMany {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestEndedDoesNotCountAsLive(t *testing.T) {
+	m := NewManager(Options{MaxLive: 1})
+	defer m.Close()
+	tm, _ := m.Start(sh("true"))
+	waitDone(t, tm)
+	if _, err := m.Start(sh("true")); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRetentionPrunes(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	m := NewManager(Options{Now: clock})
+	defer m.Close()
+	tm, _ := m.Start(sh("true"))
+	waitDone(t, tm)
+	mu.Lock()
+	now = now.Add(29 * time.Minute)
+	mu.Unlock()
+	if len(m.List()) != 1 {
+		t.Fatal("deveria ainda estar listado aos 29 min")
+	}
+	mu.Lock()
+	now = now.Add(2 * time.Minute)
+	mu.Unlock()
+	if l := m.List(); len(l) != 0 {
+		t.Fatalf("deveria ter sumido aos 31 min: %+v", l)
+	}
+	if _, ok := m.Get(tm.Info().ID); ok {
+		t.Fatal("Get ainda acha terminal descartado")
+	}
+}
+
+func TestKillEscalatesToSIGKILL(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, err := m.Start(sh("trap '' TERM; while :; do sleep 1; done"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond) // deixa o trap instalar
+	start := time.Now()
+	if err := m.Kill(tm.Info().ID); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, tm)
+	if d := time.Since(start); d < 2*time.Second {
+		t.Fatalf("morreu cedo demais (%v): SIGTERM deveria ser ignorado", d)
+	}
+}
+
+func TestKillUnknown(t *testing.T) {
+	m := NewManager(Options{})
+	if err := m.Kill("t-nope"); err != ErrNotFound {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCloseKillsAll(t *testing.T) {
+	runtime.GC()
+	before := runtime.NumGoroutine()
+	m := NewManager(Options{})
+	var tms []*Terminal
+	for i := 0; i < 3; i++ {
+		tm, err := m.Start(StartSpec{Argv: []string{"cat"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, _ = tm.Subscribe()
+		tms = append(tms, tm)
+	}
+	m.Close()
+	for _, tm := range tms {
+		waitDone(t, tm)
+		if tm.Info().ExitCode == nil {
+			t.Fatal("sem exit code")
+		}
+	}
+	eventually(t, "goroutines voltarem ao patamar", func() bool {
+		return runtime.NumGoroutine() <= before
+	})
+}
+
+func TestStartAfterCloseReturnsErrEnded(t *testing.T) {
+	m := NewManager(Options{})
+	m.Close()
+	if _, err := m.Start(sh("true")); err != ErrEnded {
+		t.Fatalf("err = %v, quero ErrEnded", err)
+	}
+}
+
+func TestSignalExitCode(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, err := m.Start(sh("kill -9 $$"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, tm)
+	if c := tm.Info().ExitCode; c == nil || *c != 137 {
+		t.Fatalf("exit = %v, quero 137", c)
+	}
+}
+
+func TestGrandchildHoldingSlaveDoesNotKeepTerminalLive(t *testing.T) {
+	m := NewManager(Options{})
+	start := time.Now()
+	tm, err := m.Start(sh("setsid sleep 8 & sleep 0.2; exit 0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-tm.Done():
+	case <-time.After(6 * time.Second):
+		t.Fatal("Done não disparou com neto segurando o PTY")
+	}
+	if d := time.Since(start); d > 4*time.Second {
+		t.Fatalf("Done após %v, esperava ~2,2 s", d)
+	}
+	cs := time.Now()
+	m.Close()
+	if d := time.Since(cs); d > 3*time.Second {
+		t.Fatalf("Close levou %v", d)
+	}
+}
+
+func TestWriteToProcessNotReadingStdinTimesOut(t *testing.T) {
+	m := NewManager(Options{WriteTimeout: 500 * time.Millisecond})
+	defer m.Close()
+	tm, err := m.Start(sh("stty raw -echo; echo pronto; sleep 30"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "modo raw", func() bool {
+		snap, _, cancel := tm.Subscribe()
+		cancel()
+		return strings.Contains(string(snap), "pronto")
+	})
+	errc := make(chan error, 1)
+	go func() { errc <- tm.Write(bytes.Repeat([]byte("a"), 4<<20)) }()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("Write deveria falhar por prazo")
+		}
+	case <-time.After(9 * time.Second):
+		t.Fatal("Write bloqueou além do prazo")
+	}
+}
+
+func TestResizeAfterEndReturnsErrEnded(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, _ := m.Start(sh("true"))
+	waitDone(t, tm)
+	if err := tm.Resize(10, 10); err != ErrEnded {
+		t.Fatalf("err = %v", err)
+	}
+}

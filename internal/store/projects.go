@@ -1,0 +1,78 @@
+package store
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
+)
+
+// CreateProject cadastra um projeto (captura ligada por padrão).
+func (s *Store) CreateProject(name, path string) (domain.Project, error) {
+	res, err := s.DB.Exec(`INSERT INTO projects(name, path) VALUES (?, ?)`, name, path)
+	if err != nil {
+		return domain.Project{}, fmt.Errorf("criar projeto: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return domain.Project{}, err
+	}
+	return domain.Project{ID: id, Name: name, Path: path, Capture: true}, nil
+}
+
+// ListProjects lista os projetos por id.
+func (s *Store) ListProjects() ([]domain.Project, error) {
+	rows, err := s.DB.Query(`SELECT id, name, path, capture FROM projects ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Project
+	for rows.Next() {
+		var p domain.Project
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// UpdateProject atualiza nome, caminho e captura.
+func (s *Store) UpdateProject(p domain.Project) error {
+	res, err := s.DB.Exec(`UPDATE projects SET name=?, path=?, capture=? WHERE id=?`, p.Name, p.Path, p.Capture, p.ID)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
+}
+
+// DeleteProject remove o projeto.
+func (s *Store) DeleteProject(id int64) error {
+	res, err := s.DB.Exec(`DELETE FROM projects WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
+}
+
+// ProjectForPath retorna o projeto cujo path é o prefixo mais longo de cwd
+// (respeitando limite de diretório), ou nil se nenhum casar.
+func (s *Store) ProjectForPath(cwd string) (*domain.Project, error) {
+	ps, err := s.ListProjects()
+	if err != nil {
+		return nil, err
+	}
+	var best *domain.Project
+	for i := range ps {
+		p := ps[i]
+		root := strings.TrimRight(p.Path, "/")
+		if cwd != root && !strings.HasPrefix(cwd, root+"/") {
+			continue
+		}
+		if best == nil || len(p.Path) > len(best.Path) {
+			best = &ps[i]
+		}
+	}
+	return best, nil
+}
