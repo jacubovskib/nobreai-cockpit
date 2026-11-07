@@ -286,14 +286,17 @@ func TestHandoffEndToEnd(t *testing.T) {
 	e.expectTotal("sessão A", det.Sessions[0].Usage, 20, 420, 2000, 32000, costA)
 
 	// --- Handoff pela UI: "Continuar com Claude Code" ---
-	if code, b := e.api("POST", "/api/cards/NAC-1/continue", map[string]any{"agent": "claude", "mode": "terminal"}); code != 200 {
+	if code, b := e.api("POST", "/api/cards/NAC-1/continue", map[string]any{"agent": "claude", "mode": "terminal", "prompt_slug": "retomar-card"}); code != 200 {
 		t.Fatalf("continue = %d %s", code, b)
 	}
 	if len(e.launch.calls) != 1 {
 		t.Fatalf("lançamentos = %d", len(e.launch.calls))
 	}
 	script := e.launch.calls[0][len(e.launch.calls[0])-1]
-	for _, want := range []string{"cd '" + e.project + "'", "NOBRE_RESUME='NAC-1'", "'claude' '--' "} {
+	for _, want := range []string{"cd '" + e.project + "'", "NOBRE_RESUME='NAC-1'", "'claude' '--' ",
+		// Prompt inicial padrão renderizado (o que o painel da UI envia).
+		"Você está continuando o card NAC-1 (Refresh de token OAuth).",
+		"falta tratar o callback expirado"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script do terminal sem %q:\n%s", want, script)
 		}
@@ -328,6 +331,17 @@ func TestHandoffEndToEnd(t *testing.T) {
 	must(t, err)
 	if st.Card == nil || st.Card.Key != "NAC-1" {
 		t.Fatalf("status de B = %+v", st)
+	}
+
+	// Com sessão viva, mover à mão para fora e de volta a em andamento é aceito.
+	if code, b := e.api("PATCH", "/api/cards/NAC-1", map[string]string{"column": "pausado"}); code != 200 {
+		t.Fatalf("PATCH pausado = %d %s", code, b)
+	}
+	if code, b := e.api("PATCH", "/api/cards/NAC-1", map[string]string{"column": "em_andamento"}); code != 200 {
+		t.Fatalf("PATCH em_andamento com sessão viva = %d %s", code, b)
+	}
+	if got := e.column("NAC-1"); got != "em_andamento" {
+		t.Fatalf("após PATCH com sessão viva: coluna = %q", got)
 	}
 
 	e.hook(200, sessB, "Stop", map[string]any{"stop_hook_active": false}, nil)
@@ -369,6 +383,9 @@ func TestHandoffEndToEnd(t *testing.T) {
 	b := e.board()["NAC-1"]
 	if b.Live || b.PIDDeadAt == nil {
 		t.Fatalf("PID morto na carência: live=%v pid_dead_at=%v", b.Live, b.PIDDeadAt)
+	}
+	if b.Column != "em_andamento" {
+		t.Fatalf("dentro da carência o card segue em andamento, veio %q", b.Column)
 	}
 	e.tick(16 * time.Minute) // passa da carência de 15 min
 	reconcile()
