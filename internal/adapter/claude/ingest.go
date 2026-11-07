@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"log"
+	"runtime/debug"
 	"sync"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -20,6 +21,12 @@ func (a *Adapter) ingestAsync(sessionID, path string) {
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
+		// Um pânico aqui não pode derrubar o daemon.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("hook claude: pânico ao ler o transcript da sessão %s: %v\n%s", sessionID, r, debug.Stack())
+			}
+		}()
 		mu, _ := a.ingest.LoadOrStore(sessionID, &sync.Mutex{})
 		mu.(*sync.Mutex).Lock()
 		defer mu.(*sync.Mutex).Unlock()
@@ -29,45 +36,35 @@ func (a *Adapter) ingestAsync(sessionID, path string) {
 	}()
 }
 
-// readTranscripts grava o uso novo do transcript principal (offset em
-// sessions.transcript_offset) e dos subagentes (offset por arquivo). As
+// readTranscripts grava o uso novo do transcript principal e dos subagentes.
+// O offset de cada arquivo fica em transcript_offsets, por (sessão, caminho):
+// se o transcript_path da sessão muda, o arquivo novo é lido do começo. As
 // linhas carregam o sessionId do Claude Code: passam a usar o ID da sessão do
 // Cockpit. Transcript que ainda não existe é ignorado.
 func (a *Adapter) readTranscripts(sessionID, mainPath string) error {
-	off, err := a.st.TranscriptOffset(sessionID)
-	if err != nil {
-		return err
-	}
-	rows, next, err := a.readFile(sessionID, mainPath, off)
-	if err != nil {
-		return err
-	}
-	if next != off {
-		if err := a.st.SetTranscriptOffset(sessionID, next); err != nil {
-			return err
-		}
-	}
-	changed := len(rows) > 0
-	if changed {
-		if err := a.st.SetSessionModel(sessionID, rows[len(rows)-1].Model); err != nil {
-			return err
-		}
-	}
-	for _, sub := range usage.SubagentTranscripts(mainPath) {
-		off, err := a.st.FileOffset(sessionID, sub)
+	changed := false
+	for i, path := range append([]string{mainPath}, usage.SubagentTranscripts(mainPath)...) {
+		off, err := a.st.FileOffset(sessionID, path)
 		if err != nil {
 			return err
 		}
-		subRows, next, err := a.readFile(sessionID, sub, off)
+		rows, next, err := a.readFile(sessionID, path, off)
 		if err != nil {
 			return err
 		}
 		if next != off {
-			if err := a.st.SetFileOffset(sessionID, sub, next); err != nil {
+			if err := a.st.SetFileOffset(sessionID, path, next); err != nil {
 				return err
 			}
 		}
-		changed = changed || len(subRows) > 0
+		if i == 0 && len(rows) > 0 {
+			// O modelo da sessão é o do transcript principal (subagentes
+			// podem usar outro).
+			if err := a.st.SetSessionModel(sessionID, rows[len(rows)-1].Model); err != nil {
+				return err
+			}
+		}
+		changed = changed || len(rows) > 0
 	}
 	if changed {
 		a.publish("usage")

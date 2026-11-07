@@ -175,7 +175,7 @@ func (s *server) renderBody(w http.ResponseWriter, body, cardKey string) (string
 			writeStoreError(w, err, "")
 			return "", false
 		}
-		pkg, err := s.resumeMarkdown(d)
+		pkg, err := resume.ForCard(s.st, s.deps.Git, c, "")
 		if err != nil {
 			writeStoreError(w, err, "")
 			return "", false

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -249,12 +250,7 @@ func (s *server) cardResume(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
-	d, err := s.cardDetail(c)
-	if err != nil {
-		writeStoreError(w, err, "")
-		return
-	}
-	md, err := s.resumeMarkdown(d)
+	md, err := resume.ForCard(s.st, s.deps.Git, c, "")
 	if err != nil {
 		writeStoreError(w, err, "")
 		return

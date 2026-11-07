@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
-	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -92,34 +91,6 @@ func (s *server) readiness(c domain.Card, ct domain.Content, live bool) (domain.
 	r := domain.Readiness(c, ct, live, lastEdit, set, s.now())
 	r.Items = nonNil(r.Items)
 	return r, nil
-}
-
-// resumeMarkdown monta o pacote de retomada; o diff é desde o HEAD da sessão
-// mais recente, no diretório do projeto.
-func (s *server) resumeMarkdown(d CardDetail) (string, error) {
-	var sessions []domain.Session
-	var totals []store.Total
-	for _, x := range d.Sessions {
-		sessions = append(sessions, x.Session)
-		if x.Usage.Key != "" {
-			totals = append(totals, x.Usage)
-		}
-	}
-	diff := ""
-	if s.deps.Git != nil {
-		p, err := s.projectByID(d.ProjectID)
-		if err != nil {
-			return "", err
-		}
-		if p != nil && p.Path != "" {
-			since := ""
-			if n := len(sessions); n > 0 {
-				since = sessions[n-1].GitHead
-			}
-			diff = s.deps.Git.DiffStat(p.Path, since)
-		}
-	}
-	return resume.Build(d.Card, d.Content, sessions, totals, diff), nil
 }
 
 // owns diz se a sessão está ligada ao card agora (e não só no histórico dele).

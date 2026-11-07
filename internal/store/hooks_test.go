@@ -181,15 +181,6 @@ func TestTranscriptOffsets(t *testing.T) {
 	if err := s.StartSession(x); err != nil {
 		t.Fatal(err)
 	}
-	if off, err := s.TranscriptOffset(x.ID); err != nil || off != 0 {
-		t.Fatalf("%d %v", off, err)
-	}
-	if err := s.SetTranscriptOffset(x.ID, 42); err != nil {
-		t.Fatal(err)
-	}
-	if off, _ := s.TranscriptOffset(x.ID); off != 42 {
-		t.Fatalf("off = %d", off)
-	}
 	if off, err := s.FileOffset(x.ID, "/t/agent-1.jsonl"); err != nil || off != 0 {
 		t.Fatalf("%d %v", off, err)
 	}

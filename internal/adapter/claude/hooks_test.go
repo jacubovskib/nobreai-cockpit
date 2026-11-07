@@ -224,7 +224,7 @@ func TestSessionStartInjectsPausedCards(t *testing.T) {
 	if strings.Contains(ctx, "NAC-2") || strings.Contains(ctx, "NAC-3") {
 		t.Fatalf("contexto com card de outro branch/coluna:\n%s", ctx)
 	}
-	for _, want := range []string{"nobre start", "nobre resume", "nobre note", "várias etapas"} {
+	for _, want := range []string{"nobre start", "nobre resume", "nobre note", `nobre ask "<pergunta>"`, "várias etapas"} {
 		if !strings.Contains(ctx, want) {
 			t.Fatalf("contexto sem %q:\n%s", want, ctx)
 		}
@@ -287,12 +287,13 @@ func TestPostToolUseEditRecordsFile(t *testing.T) {
 		edits = append(edits, eventPath(t, ev))
 	}
 	slices.Sort(edits)
-	want := []string{"/w/api/auth/oauth.go", "/w/api/auth/refresh.go", "/w/api/auth/token.go", "/w/api/notas/analise.ipynb"}
+	// Dentro do projeto: caminho relativo à raiz (casa com os arquivos essenciais).
+	want := []string{"auth/oauth.go", "auth/refresh.go", "auth/token.go", "notas/analise.ipynb"}
 	if !slices.Equal(edits, want) {
 		t.Fatalf("file_edit = %v", edits)
 	}
 	reads := e.events(t, domain.EvFileRead)
-	if len(reads) != 1 || eventPath(t, reads[0]) != "/w/api/auth/oauth_test.go" {
+	if len(reads) != 1 || eventPath(t, reads[0]) != "auth/oauth_test.go" {
 		t.Fatalf("file_read = %+v", reads)
 	}
 	cmds := e.events(t, domain.EvCommand)
@@ -301,6 +302,28 @@ func TestPostToolUseEditRecordsFile(t *testing.T) {
 	}
 	if e.call(t, "post_tool_use_edit").Stdout != "" {
 		t.Fatal("PostToolUse não deve responder nada")
+	}
+}
+
+func TestFilePathsOutsideProjectStayAbsolute(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	// cwd num subdiretório: a raiz continua sendo a do projeto.
+	sub := with("cwd", "/w/api/auth")
+	e.call(t, "post_tool_use_edit", sub)
+	e.call(t, "post_tool_use_edit", sub, with("tool_input", map[string]any{"file_path": "/etc/hosts"}))
+	e.call(t, "post_tool_use_edit", sub, with("tool_input", map[string]any{"file_path": "/w/api-outro/x.go"}))
+	e.call(t, "post_tool_use_read", sub, with("tool_input", map[string]any{"file_path": "/home/u/notas.md"}))
+	var edits []string
+	for _, ev := range e.events(t, domain.EvFileEdit) {
+		edits = append(edits, eventPath(t, ev))
+	}
+	slices.Sort(edits)
+	if want := []string{"/etc/hosts", "/w/api-outro/x.go", "auth/oauth.go"}; !slices.Equal(edits, want) {
+		t.Fatalf("file_edit = %v", edits)
+	}
+	if reads := e.events(t, domain.EvFileRead); len(reads) != 1 || eventPath(t, reads[0]) != "/home/u/notas.md" {
+		t.Fatalf("file_read = %+v", reads)
 	}
 }
 
@@ -649,7 +672,7 @@ func TestStopReadsUsage(t *testing.T) {
 	if x.Model != "claude-opus-5-5" {
 		t.Fatalf("model = %q", x.Model)
 	}
-	if off, _ := e.st.TranscriptOffset(sessID); off == 0 {
+	if off, _ := e.st.FileOffset(sessID, e.transcript); off == 0 {
 		t.Fatal("offset do principal não gravado")
 	}
 
@@ -670,6 +693,40 @@ func TestStopReadsUsage(t *testing.T) {
 	if off, _ := e.st.FileOffset(sessID, sub); off == 0 {
 		t.Fatal("offset do subagente não gravado")
 	}
+}
+
+func TestTranscriptOffsetIsPerPath(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	e.call(t, "stop")
+	e.a.Wait()
+	// Outro transcript (maior que o primeiro) para a mesma sessão: é lido do
+	// começo, não do offset do anterior.
+	other := filepath.Join(t.TempDir(), "outro.jsonl")
+	var lines []string
+	for _, id := range []string{"msg_b1", "msg_b2", "msg_b3", "msg_b4", "msg_b5", "msg_b6", "msg_b7", "msg_b8"} {
+		lines = append(lines, `{"type":"assistant","sessionId":"x","timestamp":"2026-11-07T12:05:00Z","message":{"id":"`+id+`","model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"padding":"`+strings.Repeat("p", 200)+`"}`)
+	}
+	if err := os.WriteFile(other, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.call(t, "stop", with("transcript_path", other))
+	e.a.Wait()
+	ts, _ := e.st.Totals(store.TotalsFilter{GroupBy: "session"})
+	if len(ts) != 1 || ts[0].Input != 12+8+50+8*1000 {
+		t.Fatalf("totais = %+v", ts)
+	}
+	first, _ := e.st.FileOffset(sessID, e.transcript)
+	second, _ := e.st.FileOffset(sessID, other)
+	if first == 0 || second == 0 || first == second {
+		t.Fatalf("offsets = %d, %d", first, second)
+	}
+}
+
+func TestIngestPanicIsRecovered(t *testing.T) {
+	a := New(nil, adapter.Deps{}) // store nil: a leitura entra em pânico
+	a.ingestAsync("claude:x", "/qualquer.jsonl")
+	a.Wait() // o daemon segue de pé
 }
 
 func TestMissingTranscriptIsIgnored(t *testing.T) {

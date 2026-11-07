@@ -39,18 +39,8 @@ func (s *Store) SetTranscriptOffset(sessionID string, off int64) error {
 	return err
 }
 
-// TranscriptOffset devolve até onde o transcript principal da sessão já foi lido.
-func (s *Store) TranscriptOffset(sessionID string) (int64, error) {
-	var off int64
-	err := s.DB.QueryRow(`SELECT transcript_offset FROM sessions WHERE id=?`, sessionID).Scan(&off)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrNotFound
-	}
-	return off, err
-}
-
-// FileOffset devolve até onde o transcript path (de subagente) da sessão já
-// foi lido; 0 se nunca foi.
+// FileOffset devolve até onde o transcript path da sessão (principal ou de
+// subagente) já foi lido; 0 se nunca foi.
 func (s *Store) FileOffset(sessionID, path string) (int64, error) {
 	var off int64
 	err := s.DB.QueryRow(`SELECT offset FROM transcript_offsets WHERE session_id=? AND path=?`, sessionID, path).Scan(&off)
@@ -60,7 +50,7 @@ func (s *Store) FileOffset(sessionID, path string) (int64, error) {
 	return off, err
 }
 
-// SetFileOffset guarda até onde o transcript path (de subagente) da sessão já foi lido.
+// SetFileOffset guarda até onde o transcript path da sessão já foi lido.
 func (s *Store) SetFileOffset(sessionID, path string, off int64) error {
 	_, err := s.DB.Exec(`INSERT INTO transcript_offsets(session_id, path, offset) VALUES (?,?,?)
 		ON CONFLICT(session_id, path) DO UPDATE SET offset=excluded.offset`, sessionID, path, off)

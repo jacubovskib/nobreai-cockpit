@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -184,12 +185,8 @@ func (s *server) meResume(w http.ResponseWriter, r *http.Request, sess domain.Se
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
-	d, err := s.cardDetail(c)
-	if err != nil {
-		writeStoreError(w, err, "")
-		return
-	}
-	md, err := s.resumeMarkdown(d)
+	// A base do diff é a sessão anterior: a desta chamada acabou de entrar.
+	md, err := resume.ForCard(s.st, s.deps.Git, c, sess.ID)
 	if err != nil {
 		writeStoreError(w, err, "")
 		return

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -89,7 +90,7 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 		return a.preToolUse(sess, p, now)
 	case "PostToolUse":
 		if sess.FullCapture {
-			a.postToolUse(sess, p, now)
+			return adapter.HookReply{}, a.postToolUse(sess, p, now)
 		}
 	case "Stop":
 		reply, err := a.stop(sess, p, now)
@@ -171,21 +172,26 @@ func (a *Adapter) event(sessionID, kind string, data map[string]any, at time.Tim
 	a.publish("sessions")
 }
 
-func (a *Adapter) postToolUse(sess domain.Session, p payload, now time.Time) {
+func (a *Adapter) postToolUse(sess domain.Session, p payload, now time.Time) error {
 	in := p.input()
 	switch p.ToolName {
-	case "Read":
-		if in.FilePath != "" {
-			a.event(sess.ID, domain.EvFileRead, map[string]any{"path": in.FilePath}, now)
-		}
-	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+	case "Read", "Edit", "Write", "MultiEdit", "NotebookEdit":
 		path := in.FilePath
 		if path == "" {
 			path = in.NotebookPath
 		}
-		if path != "" {
-			a.event(sess.ID, domain.EvFileEdit, map[string]any{"path": path}, now)
+		if path == "" {
+			return nil
 		}
+		path, err := a.projectRelative(sess, path)
+		if err != nil {
+			return err
+		}
+		kind := domain.EvFileEdit
+		if p.ToolName == "Read" {
+			kind = domain.EvFileRead
+		}
+		a.event(sess.ID, kind, map[string]any{"path": path}, now)
 	case "Bash":
 		data := map[string]any{"command": in.Command}
 		if code, ok := exitCode(p.ToolResponse); ok {
@@ -193,6 +199,31 @@ func (a *Adapter) postToolUse(sess domain.Session, p payload, now time.Time) {
 		}
 		a.event(sess.ID, domain.EvCommand, data, now)
 	}
+	return nil
+}
+
+// projectRelative devolve o caminho relativo à raiz do projeto da sessão
+// quando o arquivo está dentro dela (casa com os arquivos essenciais, que o
+// agente registra relativos); fora do projeto, fica absoluto.
+func (a *Adapter) projectRelative(sess domain.Session, path string) (string, error) {
+	if sess.ProjectID == nil || !filepath.IsAbs(path) {
+		return path, nil
+	}
+	projects, err := a.st.ListProjects()
+	if err != nil {
+		return "", err
+	}
+	for _, pr := range projects {
+		if pr.ID != *sess.ProjectID {
+			continue
+		}
+		root := filepath.Clean(pr.Path)
+		clean := filepath.Clean(path)
+		if rel, err := filepath.Rel(root, clean); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
+			return rel, nil
+		}
+	}
+	return path, nil
 }
 
 // exitCode lê o código de saída do tool_response do Bash, se vier (o Claude

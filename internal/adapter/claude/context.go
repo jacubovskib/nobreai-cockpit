@@ -16,7 +16,7 @@ import (
 // card (spec 6.0) e os comandos nobre.
 const instructions = `NobreAI Cockpit: esta sessão é registrada no board.
 Crie um card com nobre start "<título>" quando começar algo que precisa de histórico: tarefa de várias etapas, mudanças em vários arquivos ou trabalho que outro agente pode continuar. Se o usuário pedir um card, crie; se citar uma chave NAC-, use nobre resume <KEY>. Perguntas rápidas não viram card.
-Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
+Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
 
 // resumeEnv é a variável de ambiente com que a UI abre o agente para
 // continuar um card.
@@ -114,39 +114,8 @@ func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domai
 // oneLine junta as linhas do texto (o "onde parei" vai numa linha da lista).
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// resumePackage monta o pacote de retomada do card. "Desde a última sessão" é
-// o diff no diretório do projeto desde o HEAD da sessão anterior mais recente
-// (a atual, que acabou de entrar no card, não conta).
+// resumePackage monta o pacote de retomada; a sessão atual, que acabou de
+// entrar no card, não serve de base para o diff.
 func (a *Adapter) resumePackage(c domain.Card, currentSession string) (string, error) {
-	ct, err := a.st.CardContent(c.ID)
-	if err != nil {
-		return "", err
-	}
-	sessions, err := a.st.SessionsForCard(c.ID)
-	if err != nil {
-		return "", err
-	}
-	totals, err := a.st.Totals(store.TotalsFilter{GroupBy: "session", CardID: &c.ID})
-	if err != nil {
-		return "", err
-	}
-	diff := ""
-	if a.deps.Git != nil {
-		projects, err := a.st.ListProjects()
-		if err != nil {
-			return "", err
-		}
-		since := ""
-		for _, x := range sessions {
-			if x.ID != currentSession && x.GitHead != "" {
-				since = x.GitHead // ordenadas por início: fica a mais recente
-			}
-		}
-		for _, p := range projects {
-			if p.ID == c.ProjectID && p.Path != "" {
-				diff = a.deps.Git.DiffStat(p.Path, since)
-			}
-		}
-	}
-	return resume.Build(c, ct, sessions, totals, diff), nil
+	return resume.ForCard(a.st, a.deps.Git, c, currentSession)
 }
