@@ -12,7 +12,7 @@ type overviewResp struct {
 	Active []struct {
 		ID           string     `json:"id"`
 		PIDDeadAt    *time.Time `json:"pid_dead_at"`
-		LastActivity string `json:"last_activity"`
+		LastActivity string     `json:"last_activity"`
 		Card         *struct {
 			Key string `json:"key"`
 		} `json:"card"`
