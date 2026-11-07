@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	cpty "github.com/creack/pty"
 )
 
@@ -19,6 +21,7 @@ const (
 	defaultMaxLive   = 20
 	defaultRetention = 30 * time.Minute
 	subBuffer        = 256
+	writeTimeout     = 5 * time.Second
 	killGrace        = 3 * time.Second
 	drainGrace       = 2 * time.Second
 )
@@ -130,6 +133,12 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	if err != nil {
 		return nil, err
 	}
+	ptmx, err = pollable(ptmx)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, err
+	}
 	title := spec.CardKey
 	if title == "" {
 		title = spec.Agent
@@ -150,6 +159,24 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	m.wg.Add(1)
 	go func() { defer m.wg.Done(); t.run() }()
 	return t, nil
+}
+
+// pollable recria o master em modo não bloqueante: assim Close interrompe o
+// leitor e Write aceita prazo. (As ioctls do creack/pty chamam Fd(), que deixa
+// o arquivo bloqueante; por isso o redimensionamento usa SyscallConn.)
+func pollable(f *os.File) (*os.File, error) {
+	nfd, err := unix.FcntlInt(f.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	name := f.Name()
+	_ = f.Close()
+	if err := syscall.SetNonblock(nfd, true); err != nil {
+		_ = syscall.Close(nfd)
+		return nil, err
+	}
+	return os.NewFile(uintptr(nfd), name), nil
 }
 
 func newID() string {
@@ -251,6 +278,7 @@ type Terminal struct {
 	subs map[*sub]struct{}
 	// ptmxClosed (sob mu) evita Setsize concorrente com o Close do ptmx.
 	ptmxClosed bool
+	wmu        sync.Mutex // serializa Write (prazo por escrita)
 }
 
 func (t *Terminal) ended() bool {
@@ -362,6 +390,9 @@ func (t *Terminal) Write(p []byte) error {
 	if t.ended() {
 		return ErrEnded
 	}
+	t.wmu.Lock()
+	defer t.wmu.Unlock()
+	_ = t.ptmx.SetWriteDeadline(time.Now().Add(writeTimeout))
 	_, err := t.ptmx.Write(p)
 	return err
 }
@@ -376,8 +407,18 @@ func (t *Terminal) Resize(cols, rows uint16) error {
 	if t.ptmxClosed {
 		return ErrEnded
 	}
-	if err := cpty.Setsize(t.ptmx, &cpty.Winsize{Cols: cols, Rows: rows}); err != nil {
+	rc, err := t.ptmx.SyscallConn()
+	if err != nil {
 		return err
+	}
+	var ierr error
+	if err := rc.Control(func(fd uintptr) {
+		ierr = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &unix.Winsize{Col: cols, Row: rows})
+	}); err != nil {
+		return err
+	}
+	if ierr != nil {
+		return ierr
 	}
 	t.info.Cols, t.info.Rows = cols, rows
 	return nil

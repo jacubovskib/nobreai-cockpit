@@ -16,7 +16,7 @@
 - WebSocket: além do `localOnly` (Host e RemoteAddr loopback), exigir `Origin` igual a `http://127.0.0.1:<porta>` ou `http://localhost:<porta>`, ou ausente (cliente CLI). Origem diferente → 403. Browsers permitem WebSocket entre sites, então sem essa checagem qualquer página poderia digitar no terminal do agente.
 - Buffer circular de saída: 2 MiB por terminal (quem conecta depois recebe o histórico recente).
 - Terminal encerrado continua listado por 30 min (para ver a saída final) e depois é descartado. Máximo de 20 terminais vivos; acima disso, 409 "limite de terminais atingido".
-- O processo do agente no PTY é filho do `nobred`, em sessão própria (`Setsid`); `KillMode=process` (já na unit) mantém os agentes vivos num restart do daemon, mas o PTY não sobrevive ao restart: depois de um restart o terminal aparece como "desconectado" e o agente segue órfão. Documentar.
+- O processo do agente no PTY é filho do `nobred`, em sessão própria (`Setsid`). Terminais da plataforma (Continuar em segundo plano e `nobre run`) são encerrados quando o `nobred` para ou reinicia (o master do PTY fecha e o kernel envia SIGHUP; o shutdown envia SIGTERM antes). Para sessões que precisam sobreviver a um restart, use Continuar no terminal externo.
 - O nome do processo do agente continua `claude` (caminho absoluto sem resolver symlink), para a identificação da sessão pelos hooks funcionar.
 
 ## Review Focus

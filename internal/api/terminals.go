@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -93,7 +94,7 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, msgNoAgentBin)
 		return
 	}
-	tm, err := s.deps.Terminals.Start(pty.StartSpec{
+	tm, err := s.startTerminal(pty.StartSpec{
 		Argv: append([]string{bin}, in.Args...), Dir: in.Dir, Env: s.terminalEnv(),
 		Cols: in.Cols, Rows: in.Rows, CardKey: in.CardKey, Agent: in.Agent, Origin: in.Origin,
 	})
@@ -105,12 +106,22 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "não consegui iniciar o terminal: "+err.Error())
 		return
 	}
+	writeJSON(w, http.StatusCreated, tm.Info())
+}
+
+// startTerminal inicia o terminal no Manager e publica "terminals" ao criar e
+// ao encerrar. Quem inicia terminais (API, Continuar em segundo plano) usa-o.
+func (s *server) startTerminal(spec pty.StartSpec) (*pty.Terminal, error) {
+	tm, err := s.deps.Terminals.Start(spec)
+	if err != nil {
+		return nil, err
+	}
 	s.publish("terminals")
 	go func() {
 		<-tm.Done()
 		s.publish("terminals")
 	}()
-	writeJSON(w, http.StatusCreated, tm.Info())
+	return tm, nil
 }
 
 // terminalEnv é o ambiente do daemon com o PATH de sessão e TERM do xterm.
@@ -164,13 +175,13 @@ type wsExit struct {
 // entrada, texto JSON {"type":"resize","cols","rows"}. ?readonly=1 ignora
 // entrada e resize. Só uma goroutine escreve no socket.
 func (s *server) terminalWS(w http.ResponseWriter, r *http.Request) {
+	if !wsOriginOK(r) {
+		writeError(w, http.StatusForbidden, "origem não permitida")
+		return
+	}
 	tm, ok := s.deps.Terminals.Get(r.PathValue("id"))
 	if !ok {
 		writeError(w, http.StatusNotFound, msgTerminalMissing)
-		return
-	}
-	if !wsOriginOK(r) {
-		writeError(w, http.StatusForbidden, "origem não permitida")
 		return
 	}
 	readonly := r.URL.Query().Get("readonly") == "1"
@@ -211,7 +222,9 @@ func (s *server) terminalWS(w http.ResponseWriter, r *http.Request) {
 			}
 			if json.Unmarshal(data, &m) == nil && m.Type == "resize" &&
 				m.Cols > 0 && m.Rows > 0 && m.Cols <= maxTermDim && m.Rows <= maxTermDim {
-				_ = tm.Resize(m.Cols, m.Rows)
+				if err := tm.Resize(m.Cols, m.Rows); err != nil && !errors.Is(err, pty.ErrEnded) {
+					log.Printf("terminal %s: resize: %v", tm.Info().ID, err)
+				}
 			}
 		}
 	}()

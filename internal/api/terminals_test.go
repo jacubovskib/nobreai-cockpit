@@ -217,13 +217,73 @@ func TestTerminalWSReadonlyIgnoresInput(t *testing.T) {
 	ctx := context.Background()
 	_ = ro.Write(ctx, websocket.MessageBinary, []byte("proibido\n"))
 	_ = ro.Write(ctx, websocket.MessageText, []byte(`{"type":"resize","cols":50,"rows":10}`))
+	// Mensagens de um mesmo socket são tratadas em ordem; a entrada do rw
+	// abaixo só prova algo depois que o sinal "liberado" ecoar. Um segundo
+	// round-trip pelo rw garante que o readonly já foi processado.
 	_ = rw.Write(ctx, websocket.MessageBinary, []byte("liberado\n"))
-	out, _ := readUntil(t, rw, func(o string) bool { return strings.Contains(o, "liberado") })
-	if strings.Contains(out, "proibido") {
-		t.Fatalf("entrada do readonly chegou: %q", out)
+	readUntil(t, rw, func(o string) bool { return strings.Contains(o, "liberado") })
+	_ = rw.Write(ctx, websocket.MessageBinary, []byte("fim\n"))
+	out, _ := readUntil(t, rw, func(o string) bool { return strings.Contains(o, "fim") })
+	snap, _, cancel := mustTerm(t, e, info.ID).Subscribe()
+	cancel()
+	if strings.Contains(string(snap), "proibido") || strings.Contains(out, "proibido") {
+		t.Fatalf("entrada do readonly chegou: %q", snap)
 	}
 	if in := e.mgr.List()[0]; in.Cols == 50 {
 		t.Fatalf("resize do readonly aplicado: %+v", in)
+	}
+}
+
+func mustTerm(t *testing.T, e *termEnv, id string) *pty.Terminal {
+	t.Helper()
+	tm, ok := e.mgr.Get(id)
+	if !ok {
+		t.Fatal("terminal sumiu")
+	}
+	return tm
+}
+
+func TestTerminalWSEndedTerminal(t *testing.T) {
+	e := newTermEnv(t, "/bin/sh")
+	_, info := e.create(t, map[string]any{"args": []string{"-c", "printf antes; exit 2"}})
+	select {
+	case <-mustTerm(t, e, info.ID).Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("não encerrou")
+	}
+	c, _, err := e.dial(t, info.ID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	var texts []string
+	var rerr error
+	for {
+		typ, data, err := c.Read(context.Background())
+		if err != nil {
+			rerr = err
+			break
+		}
+		if typ == websocket.MessageBinary {
+			out.Write(data)
+		} else {
+			texts = append(texts, string(data))
+		}
+	}
+	if !strings.Contains(out.String(), "antes") || len(texts) != 2 ||
+		!strings.Contains(texts[0], `"type":"info"`) || texts[1] != `{"type":"exit","code":2}` {
+		t.Fatalf("out=%q texts=%v", out.String(), texts)
+	}
+	if websocket.CloseStatus(rerr) != websocket.StatusNormalClosure {
+		t.Fatalf("fechamento = %v", rerr)
+	}
+}
+
+func TestTerminalWSForeignOriginBeforeLookup(t *testing.T) {
+	e := newTermEnv(t, "/bin/cat")
+	_, resp, err := e.dial(t, "t-naoexiste", "", http.Header{"Origin": {"http://evil.example"}})
+	if err == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("err=%v resp=%v", err, resp)
 	}
 }
 

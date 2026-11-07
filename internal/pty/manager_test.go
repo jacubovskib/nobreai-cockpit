@@ -247,3 +247,59 @@ func TestSignalExitCode(t *testing.T) {
 		t.Fatalf("exit = %v, quero 137", c)
 	}
 }
+
+func TestGrandchildHoldingSlaveDoesNotKeepTerminalLive(t *testing.T) {
+	m := NewManager(Options{})
+	start := time.Now()
+	tm, err := m.Start(sh("setsid sleep 8 & sleep 0.2; exit 0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-tm.Done():
+	case <-time.After(6 * time.Second):
+		t.Fatal("Done não disparou com neto segurando o PTY")
+	}
+	if d := time.Since(start); d > 4*time.Second {
+		t.Fatalf("Done após %v, esperava ~2,2 s", d)
+	}
+	cs := time.Now()
+	m.Close()
+	if d := time.Since(cs); d > 3*time.Second {
+		t.Fatalf("Close levou %v", d)
+	}
+}
+
+func TestWriteToProcessNotReadingStdinTimesOut(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, err := m.Start(sh("stty raw -echo; echo pronto; sleep 30"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "modo raw", func() bool {
+		snap, _, cancel := tm.Subscribe()
+		cancel()
+		return strings.Contains(string(snap), "pronto")
+	})
+	errc := make(chan error, 1)
+	go func() { errc <- tm.Write(bytes.Repeat([]byte("a"), 4<<20)) }()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("Write deveria falhar por prazo")
+		}
+	case <-time.After(9 * time.Second):
+		t.Fatal("Write bloqueou além do prazo")
+	}
+}
+
+func TestResizeAfterEndReturnsErrEnded(t *testing.T) {
+	m := NewManager(Options{})
+	defer m.Close()
+	tm, _ := m.Start(sh("true"))
+	waitDone(t, tm)
+	if err := tm.Resize(10, 10); err != ErrEnded {
+		t.Fatalf("err = %v", err)
+	}
+}
