@@ -32,7 +32,10 @@ func TestLimitStatus(t *testing.T) {
 	// Ontem não conta no dia, mas conta no card.
 	spend(t, st, x.ID, 5, now.Add(-30*time.Hour))
 
-	ls := LimitStatus(st, "claude", &c.ID, now)
+	ls, err := LimitStatus(st, "claude", &c.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ls.Pct != 82 || !ls.Warn || ls.Over || ls.AgentDailyUSD != 10 || ls.Action != "pause" {
 		t.Fatalf("8,20: %+v", ls)
 	}
@@ -41,7 +44,9 @@ func TestLimitStatus(t *testing.T) {
 	}
 
 	spend(t, st, x.ID, 1.80, now.Add(-2*time.Hour))
-	ls = LimitStatus(st, "claude", nil, now)
+	if ls, err = LimitStatus(st, "claude", nil, now); err != nil {
+		t.Fatal(err)
+	}
 	if !ls.Over || ls.Pct != 100 {
 		t.Fatalf("10,00: %+v", ls)
 	}
@@ -50,12 +55,14 @@ func TestLimitStatus(t *testing.T) {
 	if err := st.PutLimit(domain.Limit{Agent: "claude", WarnPct: 80, Action: "warn"}); err != nil {
 		t.Fatal(err)
 	}
-	ls = LimitStatus(st, "claude", &c.ID, now)
+	if ls, err = LimitStatus(st, "claude", &c.ID, now); err != nil {
+		t.Fatal(err)
+	}
 	if ls.Pct != 0 || ls.Warn || ls.Over {
 		t.Fatalf("sem limite: %+v", ls)
 	}
 	// Agente sem linha de limite também.
-	if ls = LimitStatus(st, "kiro", nil, now); ls.Over || ls.Warn {
+	if ls, err = LimitStatus(st, "kiro", nil, now); err != nil || ls.Over || ls.Warn {
 		t.Fatalf("kiro: %+v", ls)
 	}
 }

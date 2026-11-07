@@ -139,6 +139,12 @@ func (s *Store) MarkPIDDead(id string, at time.Time) error {
 	return nil
 }
 
+// ClearPIDDead limpa pid_dead_at (o PID voltou a existir).
+func (s *Store) ClearPIDDead(id string) error {
+	_, err := s.DB.Exec(`UPDATE sessions SET pid_dead_at=NULL WHERE id=? AND pid_dead_at IS NOT NULL`, id)
+	return err
+}
+
 // MarkReminded marca que a sessão já recebeu o lembrete de handoff.
 func (s *Store) MarkReminded(id string) error {
 	res, err := s.DB.Exec(`UPDATE sessions SET reminded=1 WHERE id=?`, id)

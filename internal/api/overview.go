@@ -243,7 +243,10 @@ func (s *server) buildOverview() (Overview, error) {
 	for _, l := range limits {
 		t.DailyLimitUSD += l.DailyUSD
 		seen[l.Agent] = true
-		ls := board.LimitStatus(s.st, l.Agent, nil, now)
+		ls, err := board.LimitStatus(s.st, l.Agent, nil, now)
+		if err != nil {
+			return o, err
+		}
 		t.PerAgent = append(t.PerAgent, AgentSpend{Agent: l.Agent, SpentUSD: ls.AgentSpentUSD, DailyUSD: l.DailyUSD,
 			Pct: ls.Pct, WarnPct: l.WarnPct, Unpriced: spent[l.Agent].Unpriced})
 		if ls.Warn || ls.Over {

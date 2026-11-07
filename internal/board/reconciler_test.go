@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,4 +142,56 @@ func TestRunReconcilerPublishesAndStops(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunReconciler não parou")
 	}
+}
+
+func TestReconcileRevivedPIDResetsGrace(t *testing.T) {
+	st := newStore(t)
+	c, x := liveCard(t, st, 4242)
+	set := domain.DefaultSettings()
+	if _, err := Reconcile(st, fakeProc(t), t0, set); err != nil {
+		t.Fatal(err)
+	}
+	// PID volta: estado de morte some.
+	changed, err := Reconcile(st, fakeProc(t, 4242), t0.Add(5*time.Minute), set)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if got, _ := st.GetSession(x.ID); got.PIDDeadAt != nil {
+		t.Fatalf("pid_dead_at = %v", got.PIDDeadAt)
+	}
+	// Nova morte em +20 min reinicia a carência: +30 min ainda não encerra, +36 sim.
+	root := fakeProc(t)
+	if _, err := Reconcile(st, root, t0.Add(20*time.Minute), set); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reconcile(st, root, t0.Add(30*time.Minute), set); err != nil || column(t, st, c.Key) != domain.EmAndamento {
+		t.Fatalf("encerrou cedo (err=%v)", err)
+	}
+	if _, err := Reconcile(st, root, t0.Add(36*time.Minute), set); err != nil || column(t, st, c.Key) != domain.Pausado {
+		t.Fatalf("não encerrou (err=%v)", err)
+	}
+}
+
+func TestReconcileContinuesPastSessionError(t *testing.T) {
+	st := newStore(t)
+	c, _ := liveCard(t, st, 4242) // claude:1, falha ao marcar
+	bad := domain.Session{ID: "bad", Agent: "claude", PID: 4343, StartedAt: t0.Add(-time.Hour), LastEventAt: t0}
+	if err := st.StartSession(bad); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.Exec(`CREATE TRIGGER boom BEFORE UPDATE OF pid_dead_at ON sessions WHEN NEW.id='bad'
+		BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := Reconcile(st, fakeProc(t), t0, domain.DefaultSettings())
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+	if !changed {
+		t.Fatal("changed deveria refletir a sessão que mudou")
+	}
+	if got, _ := st.GetSession("claude:1"); got.PIDDeadAt == nil {
+		t.Fatal("sessão boa não foi processada")
+	}
+	_ = c
 }

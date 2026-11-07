@@ -33,46 +33,53 @@ func DayBounds(now time.Time) (from, to time.Time) {
 
 // LimitStatus calcula o estado dos limites do agente hoje e, se cardID não for
 // nil, do card (gasto acumulado do card, sem recorte de dia). Erros de leitura
-// resultam em estado vazio (sem aviso), nunca em bloqueio.
-func LimitStatus(st *store.Store, agent string, cardID *int64, now time.Time) LimitState {
+// são propagados.
+func LimitStatus(st *store.Store, agent string, cardID *int64, now time.Time) (LimitState, error) {
 	var ls LimitState
 	limits, err := st.ListLimits()
 	if err != nil {
-		return ls
+		return ls, err
 	}
 	for _, l := range limits {
-		if l.Agent == agent {
-			ls.AgentDailyUSD, ls.CardUSD, ls.Action = l.DailyUSD, l.CardUSD, l.Action
-			from, to := DayBounds(now)
-			if ts, err := st.Totals(store.TotalsFilter{From: from, To: to, GroupBy: "agent"}); err == nil {
-				for _, t := range ts {
-					if t.Key == agent {
-						ls.AgentSpentUSD = t.CostUSD
-					}
-				}
-			}
-			if l.DailyUSD > 0 {
-				// +1e-9 absorve o erro binário (8,2/10*100 = 81,99999…).
-				ls.Pct = int(math.Floor(ls.AgentSpentUSD*100/l.DailyUSD + 1e-9))
-				ls.Over = ls.AgentSpentUSD >= l.DailyUSD-1e-9
-				ls.Warn = !ls.Over && ls.Pct >= l.WarnPct
-			}
-			if cardID != nil && l.CardUSD > 0 {
-				if c, err := st.GetCardByID(*cardID); err == nil {
-					if ts, err := st.Totals(store.TotalsFilter{GroupBy: "card"}); err == nil {
-						for _, t := range ts {
-							if t.Key == c.Key {
-								ls.CardSpentUSD = t.CostUSD
-							}
-						}
-					}
-					if ls.CardSpentUSD >= l.CardUSD-1e-9 {
-						ls.Over = true
-					}
-				}
-			}
-			break
+		if l.Agent != agent {
+			continue
 		}
+		ls.AgentDailyUSD, ls.CardUSD, ls.Action = l.DailyUSD, l.CardUSD, l.Action
+		from, to := DayBounds(now)
+		ts, err := st.Totals(store.TotalsFilter{From: from, To: to, GroupBy: "agent"})
+		if err != nil {
+			return ls, err
+		}
+		for _, t := range ts {
+			if t.Key == agent {
+				ls.AgentSpentUSD = t.CostUSD
+			}
+		}
+		if l.DailyUSD > 0 {
+			// +1e-9 absorve o erro binário (8,2/10*100 = 81,99999…).
+			ls.Pct = int(math.Floor(ls.AgentSpentUSD*100/l.DailyUSD + 1e-9))
+			ls.Over = ls.AgentSpentUSD >= l.DailyUSD-1e-9
+			ls.Warn = !ls.Over && ls.Pct >= l.WarnPct
+		}
+		if cardID != nil && l.CardUSD > 0 {
+			c, err := st.GetCardByID(*cardID)
+			if err != nil {
+				return ls, err
+			}
+			cts, err := st.Totals(store.TotalsFilter{GroupBy: "card"})
+			if err != nil {
+				return ls, err
+			}
+			for _, t := range cts {
+				if t.Key == c.Key {
+					ls.CardSpentUSD = t.CostUSD
+				}
+			}
+			if ls.CardSpentUSD >= l.CardUSD-1e-9 {
+				ls.Over = true
+			}
+		}
+		break
 	}
-	return ls
+	return ls, nil
 }
