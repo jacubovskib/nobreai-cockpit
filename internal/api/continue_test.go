@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -46,7 +47,13 @@ func continueAPI(t *testing.T, g *fakeGit) (*testAPI, *fakeLauncher) {
 	ad := claude.New(st, adapter.Deps{Now: func() time.Time { return testNow }})
 	l := &fakeLauncher{}
 	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub,
-		Adapters: map[string]adapter.Adapter{"claude": ad}, Launcher: l, Git: g})}
+		Adapters: map[string]adapter.Adapter{"claude": ad}, Launcher: l, Git: g,
+		ResolveTerminal: func(n string) (string, error) {
+			if n == "x-terminal-emulator" {
+				return "/usr/bin/terminator", nil
+			}
+			return "", errors.New("não achei")
+		}})}
 	p, err := st.CreateProject("api", "/w/api")
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +93,10 @@ func TestContinueRefusesLiveSessionUnlessForced(t *testing.T) {
 	if got != "NAC-1 está com uma sessão viva de Claude Code. Encerre-a ou use forçar." {
 		t.Fatalf("erro = %q", got)
 	}
+	rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"agent": "claude"}, 0)
+	if decode[map[string]string](t, rec)["code"] != "live_session" {
+		t.Fatalf("faltou code: %s", rec.Body)
+	}
 	if len(l.calls) != 0 {
 		t.Fatal("lançou apesar da sessão viva")
 	}
@@ -112,8 +123,9 @@ func TestContinueStartsWithEnv(t *testing.T) {
 	}
 	argv := l.calls[0]
 	last := argv[len(argv)-1]
-	if argv[0] != "x-terminal-emulator" || argv[1] != "-e" ||
-		!strings.Contains(last, "cd '/w/api'") || !strings.Contains(last, "NOBRE_RESUME='NAC-1'") || !strings.Contains(last, "exec 'claude'") {
+	if argv[0] != "/usr/bin/terminator" || argv[1] != "-e" || len(argv) != 3 ||
+		!strings.Contains(last, "cd ") || !strings.Contains(last, "/w/api") ||
+		!strings.Contains(last, "NOBRE_RESUME") || !strings.Contains(last, "NAC-1") || !strings.Contains(last, "'claude'") || strings.Contains(last, "exec") {
 		t.Fatalf("argv = %q", argv)
 	}
 	p, err := a.st.GetPrompt("retomar-card")
@@ -177,5 +189,36 @@ func TestPutSettingsValidatesLaunch(t *testing.T) {
 	}
 	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"terminal_cmd": []string{"/usr/bin/gnome-terminal", "--"}}, 0); rec.Code != 200 {
 		t.Fatalf("ok = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestContinueValidatesPromptBeforeCheckout(t *testing.T) {
+	g := &fakeGit{branch: "main", clean: true}
+	a, l := continueAPI(t, g)
+	if rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"prompt_slug": "nao-existe"}, 0); rec.Code != 404 {
+		t.Fatalf("slug inexistente = %d %s", rec.Code, rec.Body)
+	}
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "ruim", Slug: "ruim", Body: "{{ var.nada }}"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"prompt_slug": "ruim"}, 0); rec.Code != 422 {
+		t.Fatalf("variável desconhecida = %d %s", rec.Code, rec.Body)
+	}
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "grande", Slug: "grande", Body: strings.Repeat("x", 101<<10)}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"prompt_slug": "grande"}, 0)
+	if rec.Code != 422 || !strings.Contains(rec.Body.String(), "grande demais") {
+		t.Fatalf("grande = %d %s", rec.Code, rec.Body)
+	}
+	if len(g.checkouts) != 0 || len(l.calls) != 0 {
+		t.Fatalf("checkout %v / lançamentos %d antes de validar", g.checkouts, len(l.calls))
+	}
+}
+
+func TestPromptSlugNenhumReserved(t *testing.T) {
+	a := newTestAPI(t)
+	if rec := a.do(t, "POST", "/api/prompts", map[string]any{"name": "x", "slug": "nenhum", "body": "b"}, 0); rec.Code != 400 {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
 	}
 }

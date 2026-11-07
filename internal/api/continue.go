@@ -2,7 +2,9 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net/http"
+	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
@@ -16,6 +18,9 @@ const (
 	// slugNone é o "prompt" que só entrega o pacote de retomada (via
 	// NOBRE_RESUME e SessionStart), sem texto renderizado.
 	slugNone = "nenhum"
+	// maxPromptBytes limita o prompt inicial, que viaja na linha de comando.
+	maxPromptBytes  = 100 << 10
+	msgPromptTooBig = `prompt grande demais para abrir no terminal; use "Nenhum"`
 )
 
 // continueCard: POST /api/cards/{key}/continue {agent, mode, prompt_slug, force}
@@ -81,13 +86,12 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if live {
-			writeError(w, http.StatusConflict, c.Key+" está com uma sessão viva de "+s.liveAgent(c)+". Encerre-a ou use forçar.")
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": c.Key + " está com uma sessão viva de " + s.liveAgent(c) + ". Encerre-a ou use forçar.",
+				"code":  "live_session",
+			})
 			return
 		}
-	}
-	if err := s.checkoutCardBranch(c, p.Path); err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
 	}
 	initial := "Continue o card " + c.Key + "."
 	usedSlug := ""
@@ -116,17 +120,30 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 			usedSlug = pr.Slug
 		}
 	}
-	argv := launch.TerminalArgv(set.TerminalCmd, p.Path, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(initial))
+	if len(initial) > maxPromptBytes || strings.ContainsRune(initial, 0) {
+		writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
+		return
+	}
+	if err := s.checkoutCardBranch(c, p.Path); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	resolve := s.deps.ResolveTerminal
+	if resolve == nil {
+		resolve = launch.ResolveBinary
+	}
+	argv := launch.TerminalArgvWith(resolve, set.TerminalCmd, p.Path, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(initial))
 	if err := s.deps.Launcher.Start(argv); err != nil {
 		writeError(w, http.StatusInternalServerError, "não consegui abrir o terminal: "+err.Error())
 		return
 	}
 	if usedSlug != "" {
+		// O terminal já abriu: falha ao registrar o uso só é logada.
 		if err := s.st.MarkPromptUsed(usedSlug, s.now()); err != nil {
-			writeStoreError(w, err, msgPromptNotFound)
-			return
+			log.Printf("continue: registrar uso do prompt %s: %v", usedSlug, err)
+		} else {
+			s.publish("prompts")
 		}
-		s.publish("prompts")
 	}
 	s.publish("cards")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

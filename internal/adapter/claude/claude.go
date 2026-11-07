@@ -40,7 +40,8 @@ func (a *Adapter) Name() string { return "claude" }
 func (a *Adapter) ProcessNames() []string { return []string{"claude"} }
 
 func (a *Adapter) LaunchCommand(initialPrompt string) []string {
-	return []string{"claude", initialPrompt}
+	// "--" evita que um prompt começando com "-" seja lido como opção.
+	return []string{"claude", "--", initialPrompt}
 }
 
 // Wait espera as leituras de transcript em andamento (desligamento e testes).

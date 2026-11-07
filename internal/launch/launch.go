@@ -3,7 +3,9 @@ package launch
 
 import (
 	"fmt"
+	"log"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -36,7 +38,11 @@ func (Exec) Start(argv []string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("launch: %s terminou com erro: %v", argv[0], err)
+		}
+	}()
 	return nil
 }
 
@@ -45,11 +51,26 @@ func quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// TerminalArgv monta o argv que abre o agente num terminal: terminalCmd mais
-// um único argumento "cd <dir> && K=V … exec <agente>". Diretório e variáveis
-// vão dentro do comando porque o terminator e o gnome-terminal reaproveitam
-// uma instância já aberta via DBus e descartam o cwd e o env de quem chamou.
-func TerminalArgv(terminalCmd []string, dir string, env map[string]string, agentArgv []string) []string {
+// Resolver resolve o comando do terminal para o caminho real do binário.
+type Resolver func(name string) (string, error)
+
+// ResolveBinary acha name no PATH e segue os symlinks (x-terminal-emulator →
+// /usr/bin/terminator, por exemplo).
+func ResolveBinary(name string) (string, error) {
+	p, err := exec.LookPath(name)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = real
+	}
+	return p, nil
+}
+
+// Script monta o comando de shell que roda o agente: entra em dir, define as
+// variáveis e roda o agente (sem exec, para a janela avisar quando ele sai
+// com erro, ou quando o cd falha, e esperar Enter antes de fechar).
+func Script(dir string, env map[string]string, agentArgv []string) string {
 	keys := make([]string, 0, len(env))
 	for k := range env {
 		keys = append(keys, k)
@@ -59,10 +80,41 @@ func TerminalArgv(terminalCmd []string, dir string, env map[string]string, agent
 	for _, k := range keys {
 		parts = append(parts, k+"="+quote(env[k]))
 	}
-	parts = append(parts, "exec")
 	for _, a := range agentArgv {
 		parts = append(parts, quote(a))
 	}
-	out := append([]string{}, terminalCmd...)
-	return append(out, strings.Join(parts, " "))
+	return strings.Join(parts, " ") + `; s=$?; if [ $s -ne 0 ]; then printf '%s\n' "NobreAI Cockpit: o agente saiu com código $s (Enter fecha)"; read -r _; fi`
+}
+
+// TerminalArgv monta o argv que abre o agente num terminal (ResolveBinary).
+func TerminalArgv(terminalCmd []string, dir string, env map[string]string, agentArgv []string) []string {
+	return TerminalArgvWith(ResolveBinary, terminalCmd, dir, env, agentArgv)
+}
+
+// TerminalArgvWith resolve terminalCmd[0] e, pelo nome do binário, usa o
+// formato de execução de comando do terminal: terminator aceita -e com uma
+// string (rodada por $SHELL -c, também na partida a frio); gnome-terminal usa
+// "-- sh -c"; konsole, xterm, xfce4-terminal, alacritty e kitty usam
+// "-e sh -c". Desconhecido: terminalCmd + o script como último argumento.
+// Diretório e variáveis vão dentro do script porque o terminator e o
+// gnome-terminal reaproveitam uma instância aberta via DBus e descartam o
+// cwd e o env de quem chamou.
+func TerminalArgvWith(resolve Resolver, terminalCmd []string, dir string, env map[string]string, agentArgv []string) []string {
+	script := Script(dir, env, agentArgv)
+	if len(terminalCmd) > 0 {
+		if bin, err := resolve(terminalCmd[0]); err == nil {
+			base := filepath.Base(bin)
+			switch {
+			case base == "terminator":
+				// O terminator roda a string com $SHELL -c; sh -c explícito
+				// vale mesmo se o shell do usuário for fish etc.
+				return []string{bin, "-e", "/bin/sh -c " + quote(script)}
+			case strings.HasPrefix(base, "gnome-terminal"):
+				return []string{bin, "--", "/bin/sh", "-c", script}
+			case base == "konsole", base == "xterm", base == "xfce4-terminal", base == "alacritty", base == "kitty":
+				return []string{bin, "-e", "/bin/sh", "-c", script}
+			}
+		}
+	}
+	return append(append([]string{}, terminalCmd...), script)
 }

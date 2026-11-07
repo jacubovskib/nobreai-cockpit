@@ -28,6 +28,8 @@ type Deps struct {
 	Adapters map[string]adapter.Adapter
 	Launcher launch.Launcher
 	Git      gitinfo.GitInfo
+	// ResolveTerminal resolve o binário do terminal (nil = launch.ResolveBinary).
+	ResolveTerminal launch.Resolver
 	// Hub é compartilhado com quem mais publica mudanças (adaptadores,
 	// reconciliação); o dono deve chamar Hub.Close no desligamento.
 	Hub *Hub

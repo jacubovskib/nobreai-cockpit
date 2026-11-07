@@ -30,7 +30,7 @@ export function ContinuePanel({ cardKey, enabled = false }: { cardKey: string; e
       post(`/api/cards/${cardKey}/continue`, { agent, mode, prompt_slug: effectiveSlug, ...(force ? { force: true } : {}) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['card', cardKey] }),
   })
-  const liveConflict = start.error instanceof ApiError && start.error.status === 409 && start.error.message.includes('sessão viva')
+  const liveConflict = start.error instanceof ApiError && start.error.status === 409 && (start.error.body as { code?: string } | null)?.code === 'live_session'
   return (
     <section aria-labelledby="cont-t" style={panel}>
       <h2 id="cont-t" style={h2}>Continuar com outro agente</h2>

@@ -130,7 +130,7 @@ describe('ContinuePanel', () => {
   })
 
   it('oferece Forçar mesmo assim após o 409 de sessão viva', async () => {
-    const fn = mock({ ...base, 'POST /api/cards/NAC-42/continue': { status: 409, body: { error: 'NAC-42 está com uma sessão viva de Claude Code. Encerre-a ou use forçar.' } } })
+    const fn = mock({ ...base, 'POST /api/cards/NAC-42/continue': { status: 409, body: { error: 'NAC-42 está com uma sessão viva de Claude Code. Encerre-a ou use forçar.', code: 'live_session' } } })
     wrap(<ContinuePanel cardKey="NAC-42" enabled />)
     await screen.findByRole('option', { name: 'Retomar card (padrão)' })
     fireEvent.click(screen.getByRole('button', { name: 'Iniciar Claude Code neste card' }))

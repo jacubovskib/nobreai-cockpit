@@ -145,6 +145,8 @@ func (c *cli) setup(args []string) error {
 	return nil
 }
 
+const sessionEnvVars = "DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS"
+
 func (c *cli) setupService(d *setupDeps, dry bool, l *checklist) {
 	if d.NobredBin == "" {
 		l.bad("Serviço do daemon: não achei o nobred (coloque-o ao lado do nobre ou no PATH)")
@@ -159,6 +161,7 @@ func (c *cli) setupService(d *setupDeps, dry bool, l *checklist) {
 		} else {
 			l.ok("[dry-run] Gravaria %s (ExecStart=%s)", unit, d.NobredBin)
 		}
+		l.ok("[dry-run] Rodaria: systemctl --user import-environment %s", sessionEnvVars)
 		l.ok("[dry-run] Rodaria: systemctl --user daemon-reload")
 		l.ok("[dry-run] Rodaria: systemctl --user enable --now nobred")
 		return
@@ -174,6 +177,10 @@ func (c *cli) setupService(d *setupDeps, dry bool, l *checklist) {
 		return
 	} else {
 		l.ok("Unidade gravada em %s", unit)
+	}
+	// O daemon precisa do ambiente gráfico para abrir janelas de terminal.
+	if err := d.Run("systemctl", append([]string{"--user", "import-environment"}, strings.Fields(sessionEnvVars)...)...); err != nil {
+		l.bad("systemctl --user import-environment: %v", err)
 	}
 	for _, args := range [][]string{{"--user", "daemon-reload"}, {"--user", "enable", "--now", "nobred"}} {
 		if err := d.Run("systemctl", args...); err != nil {

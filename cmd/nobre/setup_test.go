@@ -85,8 +85,10 @@ func TestSetupInstallsEverythingAndRegistersProject(t *testing.T) {
 	if !strings.Contains(string(unit), "ExecStart=/opt/x/bin/nobred\n") || !strings.Contains(string(unit), "Restart=on-failure") {
 		t.Fatalf("unit: %s", unit)
 	}
-	if len(e.ran) != 2 || strings.Join(e.ran[0], " ") != "systemctl --user daemon-reload" ||
-		strings.Join(e.ran[1], " ") != "systemctl --user enable --now nobred" {
+	if len(e.ran) != 3 ||
+		strings.Join(e.ran[0], " ") != "systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS" ||
+		strings.Join(e.ran[1], " ") != "systemctl --user daemon-reload" ||
+		strings.Join(e.ran[2], " ") != "systemctl --user enable --now nobred" {
 		t.Fatalf("ran = %v", e.ran)
 	}
 	if posted["path"] != e.repo {
@@ -183,7 +185,7 @@ func TestSetupRestartsDaemonWhenUnitChanged(t *testing.T) {
 	}
 	e.ran = nil
 	e.run(t, "127.0.0.1:1", "", cwd)
-	if len(e.ran) != 2 {
+	if len(e.ran) != 3 {
 		t.Fatalf("unidade igual: %v", e.ran)
 	}
 	e.ran = nil

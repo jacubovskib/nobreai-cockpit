@@ -37,6 +37,8 @@ func validatePrompt(p domain.Prompt) string {
 	switch {
 	case strings.TrimSpace(p.Name) == "":
 		return "nome obrigatório"
+	case p.Slug == slugNone:
+		return `o slug "nenhum" é reservado`
 	case !validSlug.MatchString(p.Slug):
 		return "slug inválido (use letras minúsculas, números e hífen)"
 	}

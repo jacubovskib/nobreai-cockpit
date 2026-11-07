@@ -743,7 +743,7 @@ func TestAdapterIdentity(t *testing.T) {
 	a := New(nil, adapter.Deps{})
 	var _ adapter.Adapter = a
 	if a.Name() != "claude" || !slices.Equal(a.ProcessNames(), []string{"claude"}) ||
-		!slices.Equal(a.LaunchCommand("oi"), []string{"claude", "oi"}) {
+		!slices.Equal(a.LaunchCommand("oi"), []string{"claude", "--", "oi"}) {
 		t.Fatal("identidade do adaptador")
 	}
 }
