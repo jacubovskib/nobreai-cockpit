@@ -14,6 +14,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
+	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -39,6 +40,8 @@ type Deps struct {
 	// Hub é compartilhado com quem mais publica mudanças (adaptadores,
 	// reconciliação); o dono deve chamar Hub.Close no desligamento.
 	Hub *Hub
+	// Terminals gerencia os terminais (PTY) da plataforma; nil = rotas respondem 503.
+	Terminals *pty.Manager
 }
 
 type server struct {
@@ -70,6 +73,7 @@ func New(st *store.Store, deps Deps) http.Handler {
 	s.hookRoutes(mux)
 	s.agentRoutes(mux)
 	s.worktreeRoutes(mux)
+	s.terminalRoutes(mux)
 	mux.Handle("/", spaHandler(distFS()))
 	return localOnly(mux)
 }

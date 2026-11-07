@@ -11,6 +11,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
+	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -57,17 +58,25 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	if mode == "" || mode == "platform" {
 		mode = set.LaunchMode
 	}
-	if mode != "terminal" {
+	background := mode == "background"
+	if mode != "terminal" && !background {
 		writeError(w, http.StatusBadRequest, msgModeUnavailable)
 		return
 	}
-	if msg := validateLaunch(set.LaunchMode, set.TerminalCmd); msg != "" {
-		writeError(w, http.StatusInternalServerError, "configuração do terminal inválida: "+msg)
-		return
-	}
-	if s.deps.Launcher == nil {
-		writeError(w, http.StatusServiceUnavailable, "lançador indisponível")
-		return
+	if background {
+		if s.deps.Terminals == nil {
+			writeError(w, http.StatusServiceUnavailable, msgNoTerminals)
+			return
+		}
+	} else {
+		if msg := validateLaunch(set.LaunchMode, set.TerminalCmd); msg != "" {
+			writeError(w, http.StatusInternalServerError, "configuração do terminal inválida: "+msg)
+			return
+		}
+		if s.deps.Launcher == nil {
+			writeError(w, http.StatusServiceUnavailable, "lançador indisponível")
+			return
+		}
 	}
 	// Caminho absoluto: o terminal e o systemd não têm ~/.local/bin no PATH.
 	bin := ad.Binary()
@@ -136,18 +145,18 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
 		return
 	}
-	resolve := s.deps.ResolveTerminal
-	if resolve == nil {
-		resolve = launch.ResolveBinary
-	}
-	path := s.deps.SessionPATH
-	if path == "" {
-		path = os.Getenv("PATH")
-	}
 	// Branch do card aberto num worktree ligado: o agente abre lá, sem
 	// checkout no principal (o git recusaria o branch já aberto).
 	dir, inWorktree := s.cardWorktreeDir(c, p.Path)
-	argv := launch.TerminalArgvWith(resolve, set.TerminalCmd, path, dir, map[string]string{"NOBRE_RESUME": c.Key}, ad.LaunchCommand(bin, initial))
+	cmd := ad.LaunchCommand(bin, initial)
+	argv := cmd
+	if !background {
+		resolve := s.deps.ResolveTerminal
+		if resolve == nil {
+			resolve = launch.ResolveBinary
+		}
+		argv = launch.TerminalArgvWith(resolve, set.TerminalCmd, s.sessionPATH(), dir, map[string]string{"NOBRE_RESUME": c.Key}, cmd)
+	}
 	for _, a := range argv {
 		if len(a) >= maxArgBytes { // MAX_ARG_STRLEN do Linux é 131072
 			writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
@@ -160,7 +169,22 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.deps.Launcher.Start(argv); err != nil {
+	terminalID := ""
+	if background {
+		tm, err := s.startTerminal(pty.StartSpec{
+			Argv: argv, Dir: dir, Env: setEnv(s.terminalEnv(), "NOBRE_RESUME", c.Key),
+			CardKey: c.Key, Agent: in.Agent, Origin: termOriginPlatform,
+		})
+		switch {
+		case errors.Is(err, pty.ErrTooMany):
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		case err != nil:
+			writeError(w, http.StatusInternalServerError, "não consegui iniciar o terminal: "+err.Error())
+			return
+		}
+		terminalID = tm.Info().ID
+	} else if err := s.deps.Launcher.Start(argv); err != nil {
 		writeError(w, http.StatusInternalServerError, "não consegui abrir o terminal: "+err.Error())
 		return
 	}
@@ -173,7 +197,19 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.publish("cards")
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	resp := map[string]any{"ok": true}
+	if terminalID != "" {
+		resp["terminal_id"] = terminalID
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// sessionPATH é o PATH das sessões abertas pelo daemon (terminal ou PTY).
+func (s *server) sessionPATH() string {
+	if s.deps.SessionPATH != "" {
+		return s.deps.SessionPATH
+	}
+	return os.Getenv("PATH")
 }
 
 // cardWorktreeDir devolve onde abrir o agente: o diretório do projeto dentro

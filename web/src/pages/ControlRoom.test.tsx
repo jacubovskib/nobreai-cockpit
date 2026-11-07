@@ -95,6 +95,24 @@ describe('ControlRoom', () => {
     expect(screen.queryByText(/Ao vivo/)).not.toBeInTheDocument()
   })
 
+  it('Ver terminal casa a sessão pelo pid e, sem pid igual, pelo card', async () => {
+    const sess = (id: string, pid: number, key: string | null) => ({
+      id, agent: 'claude', model: 'opus', pid, started_at: new Date().toISOString(), pid_dead_at: null, ended_at: null,
+      card: key ? { key, title: key } : null, last_activity: '', session_usage: total, card_totals: total, readiness: null,
+    })
+    const term = (id: string, pid: number, card_key: string) => ({ id, card_key, agent: 'claude', origin: 'nobre run', title: '', pid, started_at: new Date().toISOString(), ended_at: null, exit_code: null, cols: 80, rows: 24, clients: 1 })
+    mock({
+      '/api/overview': { ...overview, alerts: [], active: [sess('a', 100, null), sess('b', 200, 'NAC-5'), sess('c', 300, 'NAC-6'), sess('d', 400, null)] },
+      '/api/settings': {},
+      // tD é do card NAC-5 mas pertence à sessão d (pid 400): não serve de fallback para b.
+      '/api/terminals': [term('tA', 100, ''), term('tD', 400, 'NAC-5'), term('tB', 999, 'NAC-5'), term('tC', 300, 'NAC-6')],
+    })
+    wrap(<ControlRoom />)
+    await waitFor(() => expect(screen.getAllByRole('link', { name: 'Ver terminal' })).toHaveLength(4))
+    const hrefs = screen.getAllByRole('link', { name: 'Ver terminal' }).map((l) => l.getAttribute('href'))
+    expect(hrefs).toEqual(['/terminals?id=tA', '/terminals?id=tB', '/terminals?id=tC', '/terminals?id=tD'])
+  })
+
   it('limite: texto segue a ação, marcador em warn_pct e "+ sem preço" no uso misto', async () => {
     const per_agent = [
       { agent: 'claude', spent_usd: 5, daily_usd: 10, pct: 50, warn_pct: 60, action: 'pause', unpriced: true },

@@ -276,7 +276,7 @@ function Handoff({ settings }: { settings: Settings }) {
           <select style={{ ...input, minHeight: 40 }} value={mode} onChange={(e) => setMode(e.target.value)}>
             <option value="terminal">Nova janela do terminal</option>
             <option value="tmux" disabled>Sessão tmux (em breve)</option>
-            <option value="background" disabled>Segundo plano, com saída na interface (em breve)</option>
+            <option value="background">Segundo plano, com saída na interface</option>
           </select>
         </label>
       </div>

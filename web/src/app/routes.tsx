@@ -10,6 +10,7 @@ import { Config } from '../pages/Config'
 import { Prompts } from '../pages/Prompts'
 import { Worktrees } from '../pages/Worktrees'
 import { WorktreeDetailPage } from '../pages/WorktreeDetail'
+import { Terminals } from '../pages/Terminals'
 
 export function AppRoutes() {
   return (
@@ -21,6 +22,7 @@ export function AppRoutes() {
         <Route path="cards/:key" element={<CardPage />} />
         <Route path="worktrees" element={<Worktrees />} />
         <Route path="worktrees/detalhe" element={<WorktreeDetailPage />} />
+        <Route path="terminals" element={<Terminals />} />
         <Route path="prompts" element={<Prompts />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="config" element={<Config />} />

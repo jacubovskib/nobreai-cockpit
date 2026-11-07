@@ -22,6 +22,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/demo"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
+	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/resources"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -115,6 +116,11 @@ func run(dbPath string, seedDemo bool) error {
 	// Recursos dos worktrees: processos a cada 5 s (só em memória) e disco
 	// medido em segundo plano, com cache de 10 min.
 	monitor := resources.Monitor{Sampler: resources.NewSampler("/proc", time.Now), Meter: resources.NewDiskMeter(10*time.Minute, time.Now)}
+	// Ordem no desligamento: o servidor HTTP para primeiro (Shutdown, no corpo
+	// de run), depois os terminais morrem (Close), depois o Wait do adaptador
+	// e por fim o banco.
+	terms := pty.NewManager(pty.Options{})
+	defer terms.Close()
 	handler := api.New(st, api.Deps{
 		Now:         time.Now,
 		ProcRoot:    "/proc",
@@ -124,6 +130,7 @@ func run(dbPath string, seedDemo bool) error {
 		Adapters:    map[string]adapter.Adapter{"claude": claudeAdapter},
 		SessionPATH: sessionPATH,
 		Resources:   monitor,
+		Terminals:   terms,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.

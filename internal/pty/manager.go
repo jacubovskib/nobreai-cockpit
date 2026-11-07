@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	cpty "github.com/creack/pty"
 )
 
@@ -18,9 +20,18 @@ const (
 	defaultRingSize  = 2 << 20
 	defaultMaxLive   = 20
 	defaultRetention = 30 * time.Minute
-	subBuffer        = 256
+	defaultSubLimit  = 4 << 20
+	defaultWriteTO   = 5 * time.Second
 	killGrace        = 3 * time.Second
 	drainGrace       = 2 * time.Second
+	holdGrace        = 2 * time.Second
+)
+
+// Motivos de encerramento (Info.EndReason).
+const (
+	EndAgent  = "agent"  // o processo terminou sozinho
+	EndKilled = "killed" // Kill (DELETE na API)
+	EndDaemon = "daemon" // Close no desligamento do nobred
 )
 
 var (
@@ -32,12 +43,16 @@ var (
 	ErrEnded = errors.New("terminal encerrado")
 )
 
-// Options configura o Manager; zero usa os padrões.
+// Options configura o Manager; zero usa os padrões. SubLimit é o máximo de
+// bytes pendentes por assinante (4 MiB); WriteTimeout, o prazo de cada
+// escrita de entrada (5 s).
 type Options struct {
-	RingSize  int
-	MaxLive   int
-	Retention time.Duration
-	Now       func() time.Time
+	RingSize     int
+	MaxLive      int
+	Retention    time.Duration
+	SubLimit     int
+	WriteTimeout time.Duration
+	Now          func() time.Time
 }
 
 // StartSpec descreve o processo a rodar no PTY. Origin: "plataforma" | "nobre run".
@@ -51,13 +66,20 @@ type StartSpec struct {
 
 // Info é a visão pública de um terminal.
 type Info struct {
-	ID, CardKey, Agent, Origin, Title string
-	PID                               int
-	StartedAt                         time.Time
-	EndedAt                           *time.Time
-	ExitCode                          *int
-	Cols, Rows                        uint16
-	Clients                           int
+	ID        string     `json:"id"`
+	CardKey   string     `json:"card_key"`
+	Agent     string     `json:"agent"`
+	Origin    string     `json:"origin"`
+	Title     string     `json:"title"`
+	PID       int        `json:"pid"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at"`
+	ExitCode  *int       `json:"exit_code"`
+	Cols      uint16     `json:"cols"`
+	Rows      uint16     `json:"rows"`
+	Clients   int        `json:"clients"`
+	// EndReason: "agent", "killed" ou "daemon" depois do fim; vazio enquanto vivo.
+	EndReason string `json:"end_reason,omitempty"`
 }
 
 // Manager mantém os terminais vivos e os recém-encerrados.
@@ -66,6 +88,10 @@ type Manager struct {
 	mu    sync.Mutex
 	terms map[string]*Terminal
 	wg    sync.WaitGroup
+	// holds são clientes entregando a mensagem de fim; Close espera por eles.
+	holds sync.WaitGroup
+	// closed é protegido por mu: depois de Close, Start devolve ErrEnded.
+	closed bool
 }
 
 // NewManager cria um Manager aplicando os padrões.
@@ -78,6 +104,12 @@ func NewManager(opts Options) *Manager {
 	}
 	if opts.Retention <= 0 {
 		opts.Retention = defaultRetention
+	}
+	if opts.SubLimit <= 0 {
+		opts.SubLimit = defaultSubLimit
+	}
+	if opts.WriteTimeout <= 0 {
+		opts.WriteTimeout = defaultWriteTO
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -98,6 +130,9 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, ErrEnded
+	}
 	m.pruneLocked()
 	live := 0
 	for _, t := range m.terms {
@@ -120,6 +155,12 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	if err != nil {
 		return nil, err
 	}
+	ptmx, err = pollable(ptmx)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, err
+	}
 	title := spec.CardKey
 	if title == "" {
 		title = spec.Agent
@@ -129,6 +170,7 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	}
 	t := &Terminal{
 		ptmx: ptmx, cmd: cmd, ring: NewRing(m.opts.RingSize), now: m.opts.Now,
+		subLimit: m.opts.SubLimit, writeTimeout: m.opts.WriteTimeout,
 		subs: map[*sub]struct{}{}, done: make(chan struct{}),
 		info: Info{
 			ID: newID(), CardKey: spec.CardKey, Agent: spec.Agent, Origin: spec.Origin,
@@ -140,6 +182,24 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	m.wg.Add(1)
 	go func() { defer m.wg.Done(); t.run() }()
 	return t, nil
+}
+
+// pollable recria o master em modo não bloqueante: assim Close interrompe o
+// leitor e Write aceita prazo. (As ioctls do creack/pty chamam Fd(), que deixa
+// o arquivo bloqueante; por isso o redimensionamento usa SyscallConn.)
+func pollable(f *os.File) (*os.File, error) {
+	nfd, err := unix.FcntlInt(f.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	name := f.Name()
+	_ = f.Close()
+	if err := syscall.SetNonblock(nfd, true); err != nil {
+		_ = syscall.Close(nfd)
+		return nil, err
+	}
+	return os.NewFile(uintptr(nfd), name), nil
 }
 
 func newID() string {
@@ -193,14 +253,19 @@ func (m *Manager) Kill(id string) error {
 	if !ok {
 		return ErrNotFound
 	}
-	m.kill(t)
+	m.kill(t, EndKilled)
 	return nil
 }
 
-func (m *Manager) kill(t *Terminal) {
+func (m *Manager) kill(t *Terminal, reason string) {
 	if t.ended() {
 		return
 	}
+	t.mu.Lock()
+	if t.reason == "" {
+		t.reason = reason
+	}
+	t.mu.Unlock()
 	_ = syscall.Kill(-t.info.PID, syscall.SIGTERM)
 	m.wg.Add(1)
 	go func() {
@@ -215,17 +280,56 @@ func (m *Manager) kill(t *Terminal) {
 	}()
 }
 
-// Close mata todos os terminais vivos e espera as goroutines terminarem.
+// Close mata todos os terminais vivos, espera as goroutines terminarem e dá
+// até 2 s para os clientes (Hold) entregarem a mensagem de fim. Idempotente.
 func (m *Manager) Close() {
 	m.mu.Lock()
+	m.closed = true
 	for _, t := range m.terms {
-		m.kill(t)
+		m.kill(t, EndDaemon)
 	}
 	m.mu.Unlock()
 	m.wg.Wait()
+	held := make(chan struct{})
+	go func() { m.holds.Wait(); close(held) }()
+	select {
+	case <-held:
+	case <-time.After(holdGrace):
+	}
 }
 
-type sub struct{ ch chan []byte }
+// Hold registra um cliente conectado (ex.: WebSocket) para Close esperá-lo
+// entregar a saída final; chame release ao terminar. ok=false depois de Close.
+func (m *Manager) Hold() (release func(), ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return func() {}, false
+	}
+	m.holds.Add(1)
+	var once sync.Once
+	return func() { once.Do(m.holds.Done) }, true
+}
+
+// sub é um assinante: a fila (bytes contados) fica sob Terminal.mu e uma
+// goroutine (pump) a entrega no canal out, sem nunca bloquear o leitor do PTY.
+type sub struct {
+	out      chan []byte
+	queue    [][]byte
+	pending  int
+	ended    bool          // entregar o resto e fechar out
+	wake     chan struct{} // cap 1
+	stop     chan struct{} // fechado ao cancelar ou desconectar por lentidão
+	stopOnce sync.Once
+}
+
+func (s *sub) halt() { s.stopOnce.Do(func() { close(s.stop) }) }
+func (s *sub) signal() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
 
 // Terminal é um processo rodando num PTY.
 type Terminal struct {
@@ -235,9 +339,16 @@ type Terminal struct {
 	now  func() time.Time
 	done chan struct{}
 
-	mu   sync.Mutex
-	info Info
-	subs map[*sub]struct{}
+	subLimit     int
+	writeTimeout time.Duration
+
+	mu     sync.Mutex
+	info   Info
+	reason string // motivo pedido por Kill/Close (sob mu)
+	subs   map[*sub]struct{}
+	// ptmxClosed (sob mu) evita Setsize concorrente com o Close do ptmx.
+	ptmxClosed bool
+	wmu        sync.Mutex // serializa Write (prazo por escrita)
 }
 
 func (t *Terminal) ended() bool {
@@ -273,69 +384,121 @@ func (t *Terminal) run() {
 	}()
 
 	werr := t.cmd.Wait()
-	code := t.cmd.ProcessState.ExitCode()
 	_ = werr
+	code := t.cmd.ProcessState.ExitCode()
+	if ws, ok := t.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		code = 128 + int(ws.Signal())
+	}
 
 	// Deixa o leitor esgotar o que sobrou; se um neto segurar o PTY, fecha à força.
 	select {
 	case <-readDone:
 	case <-time.After(drainGrace):
 	}
+	t.mu.Lock()
+	t.ptmxClosed = true
 	_ = t.ptmx.Close()
+	t.mu.Unlock()
 	<-readDone
 
 	end := t.now()
 	t.mu.Lock()
 	t.info.EndedAt = &end
 	t.info.ExitCode = &code
+	t.info.EndReason = t.reason
+	if t.info.EndReason == "" {
+		t.info.EndReason = EndAgent
+	}
 	for s := range t.subs {
-		close(s.ch)
+		s.ended = true
+		s.signal()
 	}
 	t.subs = map[*sub]struct{}{}
 	t.mu.Unlock()
 	close(t.done)
 }
 
-// publish grava no Ring e distribui sem bloquear; assinante cheio é desconectado.
+// publish grava no Ring e enfileira sem bloquear; assinante com mais que
+// SubLimit bytes pendentes é desconectado.
 func (t *Terminal) publish(p []byte) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.ring.Write(p)
-	if len(t.subs) == 0 {
-		return
-	}
 	for s := range t.subs {
-		c := append([]byte(nil), p...)
-		select {
-		case s.ch <- c:
-		default:
-			close(s.ch)
+		if s.pending+len(p) > t.subLimit {
 			delete(t.subs, s)
+			s.queue, s.pending = nil, 0
+			s.halt()
+			continue
+		}
+		s.queue = append(s.queue, append([]byte(nil), p...))
+		s.pending += len(p)
+		s.signal()
+	}
+}
+
+// pump entrega a fila do assinante em ordem; ao fim do terminal entrega o
+// resto e fecha out; ao cancelar ou desconectar fecha na hora.
+func (t *Terminal) pump(s *sub) {
+	defer close(s.out)
+	for {
+		t.mu.Lock()
+		select {
+		case <-s.stop:
+			t.mu.Unlock()
+			return
+		default:
+		}
+		var b []byte
+		have := len(s.queue) > 0
+		if have {
+			b = s.queue[0]
+			s.queue[0] = nil
+			s.queue = s.queue[1:]
+			s.pending -= len(b)
+		}
+		ended := s.ended
+		t.mu.Unlock()
+		if !have {
+			if ended {
+				return
+			}
+			select {
+			case <-s.wake:
+			case <-s.stop:
+				return
+			}
+			continue
+		}
+		select {
+		case s.out <- b:
+		case <-s.stop:
+			return
 		}
 	}
 }
 
 // Subscribe devolve o histórico recente e um canal com a saída nova. O canal
-// fecha quando o terminal encerra ou o assinante é lento demais.
+// fecha quando o terminal encerra (depois da saída final) ou quando o
+// assinante acumula mais que SubLimit bytes sem ler. Chame cancel ao sair.
 func (t *Terminal) Subscribe() ([]byte, <-chan []byte, func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	snap := t.ring.Snapshot()
-	s := &sub{ch: make(chan []byte, subBuffer)}
+	s := &sub{out: make(chan []byte), wake: make(chan struct{}, 1), stop: make(chan struct{})}
 	if t.info.EndedAt != nil {
-		close(s.ch)
-		return snap, s.ch, func() {}
+		close(s.out)
+		return snap, s.out, func() {}
 	}
 	t.subs[s] = struct{}{}
+	go t.pump(s)
 	cancel := func() {
 		t.mu.Lock()
-		defer t.mu.Unlock()
-		if _, ok := t.subs[s]; ok {
-			delete(t.subs, s)
-			close(s.ch)
-		}
+		delete(t.subs, s)
+		t.mu.Unlock()
+		s.halt()
 	}
-	return snap, s.ch, cancel
+	return snap, s.out, cancel
 }
 
 // Write envia entrada ao processo.
@@ -343,6 +506,9 @@ func (t *Terminal) Write(p []byte) error {
 	if t.ended() {
 		return ErrEnded
 	}
+	t.wmu.Lock()
+	defer t.wmu.Unlock()
+	_ = t.ptmx.SetWriteDeadline(time.Now().Add(t.writeTimeout))
 	_, err := t.ptmx.Write(p)
 	return err
 }
@@ -352,12 +518,25 @@ func (t *Terminal) Resize(cols, rows uint16) error {
 	if t.ended() {
 		return ErrEnded
 	}
-	if err := cpty.Setsize(t.ptmx, &cpty.Winsize{Cols: cols, Rows: rows}); err != nil {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.ptmxClosed {
+		return ErrEnded
+	}
+	rc, err := t.ptmx.SyscallConn()
+	if err != nil {
 		return err
 	}
-	t.mu.Lock()
+	var ierr error
+	if err := rc.Control(func(fd uintptr) {
+		ierr = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &unix.Winsize{Col: cols, Row: rows})
+	}); err != nil {
+		return err
+	}
+	if ierr != nil {
+		return ierr
+	}
 	t.info.Cols, t.info.Rows = cols, rows
-	t.mu.Unlock()
 	return nil
 }
 
