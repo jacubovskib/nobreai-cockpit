@@ -98,3 +98,19 @@ func TestSessionsWithUsage(t *testing.T) {
 		t.Fatalf("totals = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// Preço de cache em branco (null) fica desconhecido; 0 explícito fica 0.
+func TestPutPriceCacheNull(t *testing.T) {
+	a := newTestAPI(t)
+	rec := a.do(t, "PUT", "/api/prices", map[string]any{"model": "m", "input_per_m": 3, "output_per_m": 15, "cache_write_per_m": nil, "cache_read_per_m": 0}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[[]map[string]any](t, a.do(t, "GET", "/api/prices", nil, 0))
+	if len(got) != 1 || got[0]["cache_write_per_m"] != nil || got[0]["cache_read_per_m"] != float64(0) {
+		t.Fatalf("prices = %v", got)
+	}
+	if rec := a.do(t, "PUT", "/api/prices", map[string]any{"model": "m", "input_per_m": 3, "output_per_m": 15, "cache_read_per_m": -1}, 0); rec.Code != http.StatusBadRequest {
+		t.Fatalf("negativo = %d", rec.Code)
+	}
+}

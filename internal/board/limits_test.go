@@ -61,6 +61,13 @@ func TestLimitStatus(t *testing.T) {
 	if ls.Pct != 0 || ls.Warn || ls.Over {
 		t.Fatalf("sem limite: %+v", ls)
 	}
+	// WarnPct 0 sem gasto não deixa o agente em aviso.
+	if err := st.PutLimit(domain.Limit{Agent: "codex", DailyUSD: 10, WarnPct: 0, Action: "warn"}); err != nil {
+		t.Fatal(err)
+	}
+	if ls, err = LimitStatus(st, "codex", nil, now); err != nil || ls.Warn || ls.Over {
+		t.Fatalf("codex sem gasto, aviso 0%%: %+v %v", ls, err)
+	}
 	// Agente sem linha de limite também.
 	if ls, err = LimitStatus(st, "kiro", nil, now); err != nil || ls.Over || ls.Warn {
 		t.Fatalf("kiro: %+v", ls)

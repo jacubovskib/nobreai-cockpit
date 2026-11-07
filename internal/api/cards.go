@@ -10,7 +10,10 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
-const msgCardNotFound = "card não encontrado"
+const (
+	msgCardNotFound        = "card não encontrado"
+	msgInProgressNeedsLive = "Em andamento só com uma sessão viva — use Continuar com… ou nobre resume"
+)
 
 func (s *server) cardRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/cards", s.listCards)
@@ -158,6 +161,19 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		if !validColumn(*in.Column) {
 			writeError(w, http.StatusBadRequest, "coluna inválida")
 			return
+		}
+		// Em andamento é "uma sessão viva é dona do card": mover para lá à mão
+		// sem sessão viva deixaria o card preso, sem nada que o reconcilie.
+		if *in.Column == domain.EmAndamento && c.Column != domain.EmAndamento {
+			live, err := s.st.HasLiveSession(c.ID)
+			if err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+			if !live {
+				writeError(w, http.StatusConflict, msgInProgressNeedsLive)
+				return
+			}
 		}
 		c.Column = *in.Column
 	}

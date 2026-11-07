@@ -15,7 +15,9 @@ type CardDetail struct {
 	Sessions  []SessionWithUsage     `json:"sessions"`
 	Readiness domain.ReadinessResult `json:"readiness"`
 	Totals    store.Total            `json:"totals"`
-	Live      *domain.Session        `json:"live"`
+	// Live é a sessão viva dona do card (não encerrada e com processo
+	// existindo); nil se não houver.
+	Live *domain.Session `json:"live"`
 	// TouchedFiles são os arquivos lidos/editados (eventos dos hooks).
 	TouchedFiles []store.TouchedFile `json:"touched_files"`
 }
@@ -26,7 +28,11 @@ type CardSummary struct {
 	// Agent é o agente da sessão mais recente ("" se nunca houve sessão).
 	Agent        string `json:"agent"`
 	SessionCount int    `json:"session_count"`
-	Live         bool   `json:"live"`
+	// Live: uma sessão viva (não encerrada e com processo existindo) é dona do card.
+	Live bool `json:"live"`
+	// PIDDeadAt: sem sessão viva, quando o processo da sessão dona (ainda na
+	// carência, não encerrada) sumiu; mostrado como "processo encerrado há N min".
+	PIDDeadAt *time.Time `json:"pid_dead_at"`
 	// LastActivityAt é o último sinal de qualquer sessão do card (fim ou
 	// último evento), para "sem sessão há <n> min".
 	LastActivityAt *time.Time             `json:"last_activity_at"`
@@ -49,7 +55,8 @@ func (s *server) cardDetail(c domain.Card) (CardDetail, error) {
 	if err != nil {
 		return d, err
 	}
-	bySession, err := s.totalsBy("session")
+	// Uso de cada sessão só naquele card: o que ela gastou em outro card fica lá.
+	bySession, err := s.totalsWhere(store.TotalsFilter{GroupBy: "session", CardID: &c.ID})
 	if err != nil {
 		return d, err
 	}
@@ -65,7 +72,7 @@ func (s *server) cardDetail(c domain.Card) (CardDetail, error) {
 	d.Sessions = withUsage(sessions, bySession)
 	d.Totals = byCard[c.Key]
 	for i := range sessions {
-		if sessions[i].EndedAt == nil {
+		if owns(sessions[i], c.ID) && sessions[i].Live() {
 			d.Live = &sessions[i]
 		}
 	}
@@ -115,6 +122,9 @@ func (s *server) resumeMarkdown(d CardDetail) (string, error) {
 	return resume.Build(d.Card, d.Content, sessions, totals, diff), nil
 }
 
+// owns diz se a sessão está ligada ao card agora (e não só no histórico dele).
+func owns(x domain.Session, cardID int64) bool { return x.CardID != nil && *x.CardID == cardID }
+
 func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, error) {
 	sum := CardSummary{Card: c, Totals: totals}
 	sessions, err := s.st.SessionsForCard(c.ID)
@@ -124,8 +134,14 @@ func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, er
 	sum.SessionCount = len(sessions)
 	for _, x := range sessions {
 		sum.Agent = x.Agent
-		if x.EndedAt == nil {
+		if !owns(x, c.ID) {
+			// Sessão só no histórico: sua atividade agora é em outro card.
+			continue
+		}
+		if x.Live() {
 			sum.Live = true
+		} else if x.EndedAt == nil && x.PIDDeadAt != nil {
+			sum.PIDDeadAt = x.PIDDeadAt
 		}
 		last := x.LastEventAt
 		if x.EndedAt != nil && x.EndedAt.After(last) {
@@ -134,6 +150,9 @@ func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, er
 		if sum.LastActivityAt == nil || last.After(*sum.LastActivityAt) {
 			sum.LastActivityAt = &last
 		}
+	}
+	if sum.Live {
+		sum.PIDDeadAt = nil
 	}
 	ct, err := s.st.CardContent(c.ID)
 	if err != nil {

@@ -9,7 +9,9 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/usage"
 )
 
-// UpsertUsage grava as linhas de uso; a chave é (session_id, message_id).
+// UpsertUsage grava as linhas de uso; a chave é (session_id, message_id). O
+// card_id é o card da sessão no momento da ingestão e nunca é sobrescrito por
+// uma reingestão: o custo fica no card em que foi gasto.
 func (s *Store) UpsertUsage(rows []domain.UsageRow) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -17,11 +19,12 @@ func (s *Store) UpsertUsage(rows []domain.UsageRow) error {
 	}
 	defer tx.Rollback()
 	for _, r := range rows {
-		if _, err := tx.Exec(`INSERT INTO usage (session_id, message_id, model, input, output, cache_write, cache_read, at)
-			VALUES (?,?,?,?,?,?,?,?)
+		if _, err := tx.Exec(`INSERT INTO usage (session_id, card_id, message_id, model, input, output, cache_write, cache_read, at)
+			VALUES (?, (SELECT card_id FROM sessions WHERE id=?), ?,?,?,?,?,?,?)
 			ON CONFLICT(session_id, message_id) DO UPDATE SET model=excluded.model, input=excluded.input,
-			output=excluded.output, cache_write=excluded.cache_write, cache_read=excluded.cache_read, at=excluded.at`,
-			r.SessionID, r.MessageID, r.Model, r.Input, r.Output, r.CacheWrite, r.CacheRead, fmtTime(r.At)); err != nil {
+			output=excluded.output, cache_write=excluded.cache_write, cache_read=excluded.cache_read, at=excluded.at,
+			card_id=COALESCE(usage.card_id, excluded.card_id)`,
+			r.SessionID, r.SessionID, r.MessageID, r.Model, r.Input, r.Output, r.CacheWrite, r.CacheRead, fmtTime(r.At)); err != nil {
 			return err
 		}
 	}
@@ -89,10 +92,12 @@ func (s *Store) PutLimit(l domain.Limit) error {
 	return err
 }
 
-// TotalsFilter filtra usage.at em [From, To); zero em qualquer ponta = sem limite.
+// TotalsFilter filtra usage.at em [From, To); zero em qualquer ponta = sem
+// limite. CardID (opcional) restringe ao uso gasto naquele card.
 type TotalsFilter struct {
 	From, To time.Time
 	GroupBy  string // agent | card | session | day_agent | model
+	CardID   *int64
 }
 
 type Total struct {
@@ -109,7 +114,8 @@ type Total struct {
 }
 
 // Totals agrega o uso por grupo; o custo é calculado em Go (usage.Cost) com a
-// tabela de preços, de modo que a regra "sem preço" fica num só lugar.
+// tabela de preços, de modo que a regra "sem preço" fica num só lugar. O card
+// de cada linha é o gravado no uso (usage.card_id), não o card atual da sessão.
 func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 	switch f.GroupBy {
 	case "agent", "card", "session", "day_agent", "model":
@@ -126,8 +132,12 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 	}
 
 	q := `SELECT u.session_id, u.model, u.input, u.output, u.cache_write, u.cache_read, u.at, s.agent, COALESCE(c.key, '')
-		FROM usage u JOIN sessions s ON s.id = u.session_id LEFT JOIN cards c ON c.id = s.card_id WHERE 1=1`
+		FROM usage u JOIN sessions s ON s.id = u.session_id LEFT JOIN cards c ON c.id = u.card_id WHERE 1=1`
 	var args []any
+	if f.CardID != nil {
+		q += ` AND u.card_id = ?`
+		args = append(args, *f.CardID)
+	}
 	if !f.From.IsZero() {
 		q += ` AND julianday(u.at) >= julianday(?)`
 		args = append(args, fmtTime(f.From))

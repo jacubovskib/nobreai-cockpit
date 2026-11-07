@@ -51,6 +51,10 @@ type Session struct {
 	PIDDeadAt *time.Time `json:"pid_dead_at"`
 }
 
+// Live diz se a sessão está viva: não encerrada e com o processo do agente
+// existindo. Sessão com PIDDeadAt está na carência e já não é viva.
+func (x Session) Live() bool { return x.EndedAt == nil && x.PIDDeadAt == nil }
+
 type Event struct {
 	ID        int64           `json:"id"`
 	SessionID string          `json:"session_id"`
@@ -104,12 +108,15 @@ type UsageRow struct {
 	At         time.Time `json:"at"`
 }
 
+// Price é o preço de um modelo em USD por milhão de tokens. Os preços de cache
+// são opcionais: nil = desconhecido (uso com tokens de cache fica "sem preço");
+// 0 explícito = grátis.
 type Price struct {
-	Model          string  `json:"model"`
-	InputPerM      float64 `json:"input_per_m"`
-	OutputPerM     float64 `json:"output_per_m"`
-	CacheWritePerM float64 `json:"cache_write_per_m"`
-	CacheReadPerM  float64 `json:"cache_read_per_m"`
+	Model          string   `json:"model"`
+	InputPerM      float64  `json:"input_per_m"`
+	OutputPerM     float64  `json:"output_per_m"`
+	CacheWritePerM *float64 `json:"cache_write_per_m"`
+	CacheReadPerM  *float64 `json:"cache_read_per_m"`
 }
 
 // Limit define limites de gasto por agente. Action é "pause" ou "warn".

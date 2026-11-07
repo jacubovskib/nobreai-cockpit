@@ -25,7 +25,12 @@ func (s *server) usageRoutes(mux *http.ServeMux) {
 
 // totalsBy agrega todo o uso pelo grupo e indexa por Key.
 func (s *server) totalsBy(group string) (map[string]store.Total, error) {
-	ts, err := s.st.Totals(store.TotalsFilter{GroupBy: group})
+	return s.totalsWhere(store.TotalsFilter{GroupBy: group})
+}
+
+// totalsWhere agrega o uso com o filtro dado e indexa por Key.
+func (s *server) totalsWhere(f store.TotalsFilter) (map[string]store.Total, error) {
+	ts, err := s.st.Totals(f)
 	if err != nil {
 		return nil, err
 	}

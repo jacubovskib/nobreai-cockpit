@@ -121,7 +121,8 @@ func (s *server) putPrice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgPriceRequired)
 		return
 	}
-	if p.InputPerM < 0 || p.OutputPerM < 0 || p.CacheWritePerM < 0 || p.CacheReadPerM < 0 {
+	// Preço de cache ausente (null) = desconhecido; 0 = grátis.
+	if (p.CacheWritePerM != nil && *p.CacheWritePerM < 0) || (p.CacheReadPerM != nil && *p.CacheReadPerM < 0) {
 		writeError(w, http.StatusBadRequest, "preço não pode ser negativo")
 		return
 	}

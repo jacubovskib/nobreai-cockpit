@@ -10,7 +10,8 @@ import (
 
 type overviewResp struct {
 	Active []struct {
-		ID           string `json:"id"`
+		ID           string     `json:"id"`
+		PIDDeadAt    *time.Time `json:"pid_dead_at"`
 		LastActivity string `json:"last_activity"`
 		Card         *struct {
 			Key string `json:"key"`
@@ -30,6 +31,7 @@ type overviewResp struct {
 			Agent    string  `json:"agent"`
 			SpentUSD float64 `json:"spent_usd"`
 			DailyUSD float64 `json:"daily_usd"`
+			Action   string  `json:"action"`
 		} `json:"per_agent"`
 	} `json:"today"`
 	Alerts []struct {
@@ -39,7 +41,8 @@ type overviewResp struct {
 		Text    string `json:"text"`
 	} `json:"alerts"`
 	NoCard []struct {
-		ID string `json:"id"`
+		ID      string     `json:"id"`
+		EndedAt *time.Time `json:"ended_at"`
 	} `json:"no_card"`
 	Events []struct {
 		Kind string `json:"kind"`
@@ -116,21 +119,54 @@ func TestOverviewAlerts(t *testing.T) {
 		}
 	}
 
-	if len(o.Active) != 2 || o.Active[0].ID != "claude:1" || o.Active[0].Card == nil || o.Active[0].LastActivity != "Edit internal/auth/oauth.go" {
+	// claude:1 continua na lista (processo encerrado, na carência), marcada
+	// com pid_dead_at, mas não conta como viva.
+	if len(o.Active) != 2 || o.Active[0].ID != "claude:1" || o.Active[0].Card == nil || o.Active[0].LastActivity != "Edit internal/auth/oauth.go" ||
+		o.Active[0].PIDDeadAt == nil || o.Active[1].PIDDeadAt != nil {
 		t.Errorf("active = %+v", o.Active)
 	}
 	if len(o.NoCard) != 1 || o.NoCard[0].ID != "codex:1" {
 		t.Errorf("no_card = %+v", o.NoCard)
 	}
 	td := o.Today
-	if td.ActiveAgents != 2 || td.CardsInProgress != 1 || td.CardsWithoutLive != 0 || td.DailyLimitUSD != 10 || td.TokensInput != 8_200_005 || td.CostUSD < 8.19 || td.CostUSD > 8.21 {
+	if td.ActiveAgents != 1 || td.CardsInProgress != 1 || td.CardsWithoutLive != 1 || td.DailyLimitUSD != 10 || td.TokensInput != 8_200_005 || td.CostUSD < 8.19 || td.CostUSD > 8.21 {
 		t.Errorf("today = %+v", td)
 	}
-	if len(td.PerAgent) != 1 || td.PerAgent[0].Agent != "codex" || td.PerAgent[0].DailyUSD != 10 {
+	if len(td.PerAgent) != 1 || td.PerAgent[0].Agent != "codex" || td.PerAgent[0].DailyUSD != 10 || td.PerAgent[0].Action != "warn" {
 		t.Errorf("per_agent = %+v", td.PerAgent)
 	}
 	if len(o.Events) != 1 {
 		t.Errorf("events = %+v", o.Events)
+	}
+}
+
+// Sessões sem card encerradas nas últimas 24 h aparecem (com ended_at), para
+// permitir "Criar card desta sessão"; mais antigas ou com card, não.
+func TestOverviewNoCardIncludesRecentlyEnded(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	mk := func(id string, endedAgo time.Duration, card bool) {
+		x := domain.Session{ID: id, Agent: "claude", PID: 1, StartedAt: testNow.Add(-48 * time.Hour)}
+		if card {
+			x.CardID = &c.ID
+		}
+		if err := a.st.StartSession(x); err != nil {
+			t.Fatal(err)
+		}
+		if endedAgo > 0 {
+			if err := a.st.EndSession(id, "exit", testNow.Add(-endedAgo)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	mk("claude:open", 0, false)
+	mk("claude:recent", 2*time.Hour, false)
+	mk("claude:old", 30*time.Hour, false)
+	mk("claude:card", time.Hour, true)
+	o := decode[overviewResp](t, a.do(t, "GET", "/api/overview", nil, 0))
+	if len(o.NoCard) != 2 || o.NoCard[0].ID != "claude:open" || o.NoCard[0].EndedAt != nil ||
+		o.NoCard[1].ID != "claude:recent" || o.NoCard[1].EndedAt == nil {
+		t.Fatalf("no_card = %+v", o.NoCard)
 	}
 }
 

@@ -17,7 +17,7 @@ type LimitState struct {
 	CardSpentUSD  float64
 	CardUSD       float64
 	Pct           int
-	// Warn: o gasto diário atingiu warn_pct do limite sem estourá-lo.
+	// Warn: houve gasto hoje e ele atingiu warn_pct do limite sem estourá-lo.
 	Warn bool
 	// Over: o gasto diário atingiu o limite diário, ou o card atingiu o limite do card.
 	Over   bool
@@ -32,8 +32,9 @@ func DayBounds(now time.Time) (from, to time.Time) {
 }
 
 // LimitStatus calcula o estado dos limites do agente hoje e, se cardID não for
-// nil, do card (gasto acumulado do card, sem recorte de dia). Erros de leitura
-// são propagados.
+// nil, do card (gasto acumulado no card, sem recorte de dia: o uso gravado com
+// aquele card, mesmo de sessões que já saíram dele). Erros de leitura são
+// propagados.
 func LimitStatus(st *store.Store, agent string, cardID *int64, now time.Time) (LimitState, error) {
 	var ls LimitState
 	limits, err := st.ListLimits()
@@ -59,21 +60,15 @@ func LimitStatus(st *store.Store, agent string, cardID *int64, now time.Time) (L
 			// +1e-9 absorve o erro binário (8,2/10*100 = 81,99999…).
 			ls.Pct = int(math.Floor(ls.AgentSpentUSD*100/l.DailyUSD + 1e-9))
 			ls.Over = ls.AgentSpentUSD >= l.DailyUSD-1e-9
-			ls.Warn = !ls.Over && ls.Pct >= l.WarnPct
+			ls.Warn = !ls.Over && ls.AgentSpentUSD > 0 && ls.Pct >= l.WarnPct
 		}
 		if cardID != nil && l.CardUSD > 0 {
-			c, err := st.GetCardByID(*cardID)
-			if err != nil {
-				return ls, err
-			}
-			cts, err := st.Totals(store.TotalsFilter{GroupBy: "card"})
+			cts, err := st.Totals(store.TotalsFilter{GroupBy: "card", CardID: cardID})
 			if err != nil {
 				return ls, err
 			}
 			for _, t := range cts {
-				if t.Key == c.Key {
-					ls.CardSpentUSD = t.CostUSD
-				}
+				ls.CardSpentUSD += t.CostUSD
 			}
 			if ls.CardSpentUSD >= l.CardUSD-1e-9 {
 				ls.Over = true

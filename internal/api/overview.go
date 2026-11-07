@@ -15,14 +15,21 @@ import (
 
 // Overview alimenta a sala de controle.
 type Overview struct {
-	Active []ActiveSession    `json:"active"`
-	Today  TodayTotals        `json:"today"`
-	Alerts []Alert            `json:"alerts"`
+	Active []ActiveSession `json:"active"`
+	Today  TodayTotals     `json:"today"`
+	Alerts []Alert         `json:"alerts"`
+	// NoCard: sessões sem card não encerradas e as encerradas nas últimas 24 h
+	// (ended_at preenchido), para "Criar card desta sessão".
 	NoCard []SessionWithUsage `json:"no_card"`
 	Events []domain.Event     `json:"events"`
 }
 
-// ActiveSession é uma sessão viva com seu card, atividade recente e custos.
+// noCardWindow é até quando uma sessão sem card encerrada aparece em NoCard.
+const noCardWindow = 24 * time.Hour
+
+// ActiveSession é uma sessão não encerrada com seu card, atividade recente e
+// custos. Com pid_dead_at preenchido o processo já sumiu (carência antes de
+// encerrar): aparece como "processo encerrado há N min", não como viva.
 type ActiveSession struct {
 	domain.Session
 	Card         *domain.Card            `json:"card"`
@@ -33,19 +40,21 @@ type ActiveSession struct {
 }
 
 // AgentSpend é o gasto de hoje de um agente frente ao limite diário
-// (DailyUSD 0 = sem limite).
+// (DailyUSD 0 = sem limite). Action é a ação do limite em 100% ("pause" ou
+// "warn"; vazio sem limite configurado).
 type AgentSpend struct {
 	Agent    string  `json:"agent"`
 	SpentUSD float64 `json:"spent_usd"`
 	DailyUSD float64 `json:"daily_usd"`
 	Pct      int     `json:"pct"`
 	WarnPct  int     `json:"warn_pct"`
+	Action   string  `json:"action"`
 	Unpriced bool    `json:"unpriced"`
 }
 
 // TodayTotals são os indicadores do dia local (00:00 até 00:00 seguinte).
 type TodayTotals struct {
-	// ActiveAgents conta agentes distintos com sessão viva.
+	// ActiveAgents conta agentes distintos com sessão viva (processo existindo).
 	ActiveAgents     int `json:"active_agents"`
 	CardsInProgress  int `json:"cards_in_progress"`
 	CardsWithoutLive int `json:"cards_without_live_session"`
@@ -164,12 +173,15 @@ func (s *server) buildOverview() (Overview, error) {
 		return o, err
 	}
 
-	// Sessões vivas: ativas, sem card, e quais cards têm dono vivo.
+	// Sessões não encerradas: ativas, sem card, e quais cards têm dono vivo.
+	// Só conta como viva a sessão cujo processo existe (Session.Live).
 	o.Active, o.NoCard = []ActiveSession{}, []SessionWithUsage{}
 	liveCards := map[int64]bool{}
 	agents := map[string]bool{}
 	for _, x := range live {
-		agents[x.Agent] = true
+		if x.Live() {
+			agents[x.Agent] = true
+		}
 		if x.CardID == nil {
 			o.NoCard = append(o.NoCard, SessionWithUsage{Session: x, Usage: bySession[x.ID], Unpriced: bySession[x.ID].Unpriced})
 		}
@@ -180,7 +192,9 @@ func (s *server) buildOverview() (Overview, error) {
 			a.LastActivity = lastActivityText(*ev)
 		}
 		if x.CardID != nil {
-			liveCards[*x.CardID] = true
+			if x.Live() {
+				liveCards[*x.CardID] = true
+			}
 			if c, ok := byID[*x.CardID]; ok {
 				a.Card = &c
 				a.CardTotals = byCard[c.Key]
@@ -188,7 +202,7 @@ func (s *server) buildOverview() (Overview, error) {
 				if err != nil {
 					return o, err
 				}
-				rd, err := s.readiness(c, ct, true)
+				rd, err := s.readiness(c, ct, x.Live())
 				if err != nil {
 					return o, err
 				}
@@ -197,6 +211,11 @@ func (s *server) buildOverview() (Overview, error) {
 		}
 		o.Active = append(o.Active, a)
 	}
+	ended, err := s.st.EndedWithoutCardSince(now.Add(-noCardWindow))
+	if err != nil {
+		return o, err
+	}
+	o.NoCard = append(o.NoCard, withUsage(ended, bySession)...)
 
 	// Alertas, na ordem stale, limit_warn, incomplete, unpriced.
 	o.Alerts = []Alert{}
@@ -248,7 +267,7 @@ func (s *server) buildOverview() (Overview, error) {
 			return o, err
 		}
 		t.PerAgent = append(t.PerAgent, AgentSpend{Agent: l.Agent, SpentUSD: ls.AgentSpentUSD, DailyUSD: l.DailyUSD,
-			Pct: ls.Pct, WarnPct: l.WarnPct, Unpriced: spent[l.Agent].Unpriced})
+			Pct: ls.Pct, WarnPct: l.WarnPct, Action: l.Action, Unpriced: spent[l.Agent].Unpriced})
 		if ls.Warn || ls.Over {
 			o.Alerts = append(o.Alerts, Alert{Kind: "limit_warn", Agent: l.Agent,
 				Text: fmt.Sprintf("%s usou %d%% do limite diário (%s de %s).", agentName(l.Agent), ls.Pct, usd(ls.AgentSpentUSD), usd(l.DailyUSD))})

@@ -29,13 +29,15 @@ const (
 	kiro   = "auto"
 )
 
-// Preços só do banco de demonstração (USD por milhão de tokens); dão custos
-// na mesma ordem de grandeza do design.
+func perM(v float64) *float64 { return &v }
+
+// Preços só do banco de demonstração (USD por milhão de tokens), completos
+// (com cache); dão custos na mesma ordem de grandeza do design.
 var demoPrices = []domain.Price{
-	{Model: opus, InputPerM: 3.5, OutputPerM: 15, CacheWritePerM: 4.375, CacheReadPerM: 0.35},
-	{Model: sonnet, InputPerM: 3, OutputPerM: 15, CacheWritePerM: 3.75, CacheReadPerM: 0.3},
-	{Model: codex, InputPerM: 2.5, OutputPerM: 12, CacheReadPerM: 0.25},
-	{Model: kiro, InputPerM: 2, OutputPerM: 12, CacheReadPerM: 0.2},
+	{Model: opus, InputPerM: 3.5, OutputPerM: 15, CacheWritePerM: perM(4.375), CacheReadPerM: perM(0.35)},
+	{Model: sonnet, InputPerM: 3, OutputPerM: 15, CacheWritePerM: perM(3.75), CacheReadPerM: perM(0.3)},
+	{Model: codex, InputPerM: 2.5, OutputPerM: 12, CacheWritePerM: perM(3.125), CacheReadPerM: perM(0.25)},
+	{Model: kiro, InputPerM: 2, OutputPerM: 12, CacheWritePerM: perM(2.5), CacheReadPerM: perM(0.2)},
 }
 
 // Gasto diário por agente nos 7 dias do gráfico (do mais antigo até hoje).
@@ -221,7 +223,7 @@ func (s *seeder) cost(model string, in, out, cacheRead int64) float64 {
 func (s *seeder) tokensFor(model string, usd float64) (in, out, cac int64) {
 	p := s.prices[model]
 	ceil := func(v float64) int64 { return int64(math.Ceil(v)) } // nunca abaixo do alvo: 8,20 de 10,00 tem de dar 82%
-	return ceil(usd * 0.5e6 / p.InputPerM), ceil(usd * 0.4e6 / p.OutputPerM), ceil(usd * 0.1e6 / p.CacheReadPerM)
+	return ceil(usd * 0.5e6 / p.InputPerM), ceil(usd * 0.4e6 / p.OutputPerM), ceil(usd * 0.1e6 / *p.CacheReadPerM)
 }
 
 // cards cria os 11 cards do board; as sessões vêm em history (e hero para o

@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Content reúne o conteúdo estruturado de um card.
 type Content struct {
@@ -114,7 +117,7 @@ func Readiness(c Card, ct Content, live bool, lastEdit *time.Time, s Settings, n
 }
 
 func whereStoppedOK(c Card, live bool, lastEdit *time.Time, s Settings, now time.Time) bool {
-	if c.WhereStoppedAt == nil {
+	if c.WhereStoppedAt == nil || strings.TrimSpace(c.WhereStopped) == "" {
 		return false
 	}
 	if live {

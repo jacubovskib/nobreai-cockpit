@@ -41,27 +41,35 @@ func TestReadiness(t *testing.T) {
 		}
 	})
 	t.Run("sessão viva dentro do TTL", func(t *testing.T) {
-		c := Card{WhereStoppedAt: ago(10 * time.Minute)}
+		c := Card{WhereStopped: "aqui", WhereStoppedAt: ago(10 * time.Minute)}
 		if !byRule(Readiness(c, Content{}, true, nil, s, now), "where_stopped") {
 			t.Fatal("esperava OK")
 		}
 	})
 	t.Run("sessão viva fora do TTL", func(t *testing.T) {
-		c := Card{WhereStoppedAt: ago(20 * time.Minute)}
+		c := Card{WhereStopped: "aqui", WhereStoppedAt: ago(20 * time.Minute)}
 		if byRule(Readiness(c, Content{}, true, nil, s, now), "where_stopped") {
 			t.Fatal("esperava não OK")
 		}
 	})
 	t.Run("sem sessão, edição depois", func(t *testing.T) {
-		c := Card{WhereStoppedAt: at(t0)}
+		c := Card{WhereStopped: "aqui", WhereStoppedAt: at(t0)}
 		if byRule(Readiness(c, Content{}, false, at(t0.Add(time.Minute)), s, now), "where_stopped") {
 			t.Fatal("esperava não OK")
 		}
 	})
 	t.Run("sem sessão, edição antes", func(t *testing.T) {
-		c := Card{WhereStoppedAt: at(t0)}
+		c := Card{WhereStopped: "aqui", WhereStoppedAt: at(t0)}
 		if !byRule(Readiness(c, Content{}, false, at(t0.Add(-time.Minute)), s, now), "where_stopped") {
 			t.Fatal("esperava OK")
+		}
+	})
+	t.Run("onde parei em branco não conta, mesmo com data recente", func(t *testing.T) {
+		for _, text := range []string{"", "   \n"} {
+			c := Card{WhereStopped: text, WhereStoppedAt: ago(time.Minute)}
+			if byRule(Readiness(c, Content{}, true, nil, s, now), "where_stopped") {
+				t.Fatalf("%q: esperava não OK", text)
+			}
 		}
 	})
 	t.Run("sem WhereStoppedAt", func(t *testing.T) {

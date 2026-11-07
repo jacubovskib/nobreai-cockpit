@@ -12,6 +12,10 @@ import (
 // ErrCardBusy indica que outra sessão viva já é dona do card.
 var ErrCardBusy = errors.New("card já tem uma sessão viva")
 
+// liveCond é a regra de sessão viva: não encerrada e com o processo do agente
+// existindo (pid_dead_at marca o início da carência após o PID sumir).
+const liveCond = `ended_at IS NULL AND pid_dead_at IS NULL`
+
 const sessionCols = `id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, ended_at, end_reason, pid_dead_at`
 
 func scanSession(sc interface{ Scan(...any) error }) (domain.Session, error) {
@@ -154,14 +158,38 @@ func (s *Store) MarkReminded(id string) error {
 	return requireAffected(res)
 }
 
-// LiveSessions lista as sessões não encerradas, da mais antiga para a mais nova.
+// LiveSessions lista as sessões não encerradas (inclusive as com processo
+// morto, ainda na carência), da mais antiga para a mais nova. Para a regra de
+// "viva" use domain.Session.Live.
 func (s *Store) LiveSessions() ([]domain.Session, error) {
 	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions WHERE ended_at IS NULL ORDER BY julianday(started_at), id`)
 }
 
-// SessionsForCard lista as sessões ligadas ao card, da mais antiga para a mais nova.
+// SessionsForCard lista as sessões do card, da mais antiga para a mais nova:
+// as ligadas a ele agora e as que deixaram uso ou eventos nele (histórico de
+// uma sessão que trocou de card ou foi deslocada).
 func (s *Store) SessionsForCard(cardID int64) ([]domain.Session, error) {
-	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions WHERE card_id=? ORDER BY julianday(started_at), id`, cardID)
+	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
+		WHERE card_id=?
+			OR id IN (SELECT session_id FROM usage WHERE card_id=?)
+			OR id IN (SELECT session_id FROM events WHERE card_id=?)
+		ORDER BY julianday(started_at), id`, cardID, cardID, cardID)
+}
+
+// HasLiveSession diz se alguma sessão viva (não encerrada e com processo
+// existindo) é dona do card.
+func (s *Store) HasLiveSession(cardID int64) (bool, error) {
+	var n int
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM sessions WHERE card_id=? AND `+liveCond, cardID).Scan(&n)
+	return n > 0, err
+}
+
+// EndedWithoutCardSince lista as sessões sem card encerradas a partir de
+// since, da mais nova para a mais antiga.
+func (s *Store) EndedWithoutCardSince(since time.Time) ([]domain.Session, error) {
+	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
+		WHERE card_id IS NULL AND ended_at IS NOT NULL AND julianday(ended_at) >= julianday(?)
+		ORDER BY julianday(ended_at) DESC, id DESC`, fmtTime(since))
 }
 
 // RecentSessions lista as sessões mais recentes (por início), da mais nova para a mais antiga.
@@ -184,11 +212,13 @@ func moveCardTx(tx *sql.Tx, cardID int64, ev domain.Transition) error {
 }
 
 // AttachSession liga a sessão ao card, move o card para em_andamento e copia
-// para o card os eventos da sessão ainda sem card. Se a sessão já terminou, o
-// card vai para pausado (nunca em_andamento sem dono vivo). Se a sessão viva
-// estava em outro card e ele fica sem dono vivo, esse card também pausa. Se
-// outra sessão viva é dona do card devolve ErrCardBusy, a menos que force (a
-// outra é desligada).
+// para o card os eventos e o uso da sessão ainda sem card. Se a sessão já
+// terminou, o card vai para pausado (nunca em_andamento sem dono vivo). Se a
+// sessão viva estava em outro card e ele fica sem dono vivo, esse card também
+// pausa. Se outra sessão viva é dona do card devolve ErrCardBusy, a menos que
+// force (a outra é desligada). Sessão não encerrada cujo processo morreu não
+// é viva: não bloqueia e é desligada do card. Quem é desligado perde a posse,
+// mas seus eventos e uso continuam no card (histórico).
 func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -211,16 +241,21 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	}
 
 	var others int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE card_id=? AND ended_at IS NULL AND id<>?`, cardID, sessionID).Scan(&others); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE card_id=? AND `+liveCond+` AND id<>?`, cardID, sessionID).Scan(&others); err != nil {
 		return err
 	}
-	if others > 0 {
-		if !force {
-			return ErrCardBusy
-		}
-		if _, err := tx.Exec(`UPDATE sessions SET card_id=NULL WHERE card_id=? AND ended_at IS NULL AND id<>?`, cardID, sessionID); err != nil {
-			return err
-		}
+	if others > 0 && !force {
+		return ErrCardBusy
+	}
+	// Desliga as outras sessões não encerradas: com force, todas; sem force,
+	// só as de processo morto (senão o reconciliador, ao encerrá-las, pausaria
+	// o card da nova dona).
+	detach := `UPDATE sessions SET card_id=NULL WHERE card_id=? AND ended_at IS NULL AND id<>?`
+	if !force {
+		detach += ` AND pid_dead_at IS NOT NULL`
+	}
+	if _, err := tx.Exec(detach, cardID, sessionID); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`UPDATE sessions SET card_id=? WHERE id=?`, cardID, sessionID); err != nil {
 		return err
@@ -228,7 +263,7 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 	if prevCard.Valid && prevCard.Int64 != cardID && !ended.Valid {
 		// A sessão viva saiu do card anterior: sem outro dono vivo, ele pausa.
 		var live int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE card_id=? AND ended_at IS NULL`, prevCard.Int64).Scan(&live); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE card_id=? AND `+liveCond, prevCard.Int64).Scan(&live); err != nil {
 			return err
 		}
 		if live == 0 {
@@ -237,9 +272,12 @@ func (s *Store) AttachSession(sessionID, cardKey string, force bool) error {
 			}
 		}
 	}
-	// Só os eventos ainda sem card vêm junto: o que a sessão fez num card
-	// anterior continua no histórico dele.
+	// Só os eventos e o uso ainda sem card vêm junto: o que a sessão fez num
+	// card anterior continua no histórico (e no custo) dele.
 	if _, err := tx.Exec(`UPDATE events SET card_id=? WHERE session_id=? AND card_id IS NULL`, cardID, sessionID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE usage SET card_id=? WHERE session_id=? AND card_id IS NULL`, cardID, sessionID); err != nil {
 		return err
 	}
 	if err := moveCardTx(tx, cardID, domain.SessionAttached); err != nil {
