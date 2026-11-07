@@ -12,15 +12,15 @@ import (
 // ErrCardBusy indica que outra sessão viva já é dona do card.
 var ErrCardBusy = errors.New("card já tem uma sessão viva")
 
-const sessionCols = `id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, ended_at, end_reason`
+const sessionCols = `id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, ended_at, end_reason, pid_dead_at`
 
 func scanSession(sc interface{ Scan(...any) error }) (domain.Session, error) {
 	var x domain.Session
 	var cardID, projectID sql.NullInt64
 	var started, last string
-	var ended sql.NullString
+	var ended, dead sql.NullString
 	err := sc.Scan(&x.ID, &x.Agent, &x.ProviderSessionID, &cardID, &projectID, &x.PID, &x.Cwd, &x.Branch,
-		&x.GitHead, &x.Model, &x.TranscriptPath, &x.FullCapture, &started, &last, &ended, &x.EndReason)
+		&x.GitHead, &x.Model, &x.TranscriptPath, &x.FullCapture, &started, &last, &ended, &x.EndReason, &dead)
 	if err != nil {
 		return x, err
 	}
@@ -42,6 +42,13 @@ func scanSession(sc interface{ Scan(...any) error }) (domain.Session, error) {
 			return x, err
 		}
 		x.EndedAt = &t
+	}
+	if dead.Valid {
+		t, err := time.Parse(time.RFC3339Nano, dead.String)
+		if err != nil {
+			return x, err
+		}
+		x.PIDDeadAt = &t
 	}
 	return x, nil
 }
@@ -116,6 +123,20 @@ func (s *Store) TouchSession(id string, at time.Time) error {
 		return err
 	}
 	return requireAffected(res)
+}
+
+// MarkPIDDead registra que o PID da sessão sumiu. Só grava na primeira vez:
+// o instante original é o início da carência.
+func (s *Store) MarkPIDDead(id string, at time.Time) error {
+	res, err := s.DB.Exec(`UPDATE sessions SET pid_dead_at=? WHERE id=? AND pid_dead_at IS NULL`, fmtTime(at), id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		_, err := s.GetSession(id) // já marcada, ou inexistente
+		return err
+	}
+	return nil
 }
 
 // MarkReminded marca que a sessão já recebeu o lembrete de handoff.
@@ -297,4 +318,29 @@ func (s *Store) RecentEvents(limit int) ([]domain.Event, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// LastSessionEvent devolve o evento mais recente da sessão, ignorando
+// heartbeats; nil se não houver.
+func (s *Store) LastSessionEvent(sessionID string) (*domain.Event, error) {
+	var e domain.Event
+	var cardID sql.NullInt64
+	var data, at string
+	err := s.DB.QueryRow(`SELECT id, session_id, card_id, kind, data, at FROM events
+		WHERE session_id=? AND kind<>? ORDER BY id DESC LIMIT 1`, sessionID, domain.EvHeartbeat).
+		Scan(&e.ID, &e.SessionID, &cardID, &e.Kind, &data, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if cardID.Valid {
+		e.CardID = &cardID.Int64
+	}
+	e.Data = json.RawMessage(data)
+	if e.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
+		return nil, err
+	}
+	return &e, nil
 }

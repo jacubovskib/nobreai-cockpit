@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/api"
+	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -51,6 +52,17 @@ func run(dbPath string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Reconciliação a cada 30 s: encerra sessões de processos que morreram.
+	recDone := make(chan struct{})
+	go func() {
+		defer close(recDone)
+		board.RunReconciler(ctx, st, "/proc", 30*time.Second, time.Now,
+			func() { hub.Publish("cards"); hub.Publish("sessions") }, log.Printf)
+	}()
+	// Em qualquer retorno (inclusive falha precoce do servidor) o reconciliador
+	// para e termina antes de st.Close (defers rodam em ordem inversa).
+	defer func() { stop(); <-recDone }()
 
 	errc := make(chan error, 1)
 	go func() {

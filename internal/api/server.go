@@ -58,6 +58,7 @@ func New(st *store.Store, deps Deps) http.Handler {
 	s.configRoutes(mux)
 	s.promptRoutes(mux)
 	s.usageRoutes(mux)
+	s.overviewRoutes(mux)
 	return localOnly(mux)
 }
 

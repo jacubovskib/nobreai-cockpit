@@ -46,6 +46,9 @@ type Session struct {
 	LastEventAt       time.Time  `json:"last_event_at"`
 	EndedAt           *time.Time `json:"ended_at"`
 	EndReason         string     `json:"end_reason"`
+	// PIDDeadAt é quando a reconciliação notou que o PID não existe mais
+	// (início da carência antes de encerrar a sessão); nil = nunca notado.
+	PIDDeadAt *time.Time `json:"pid_dead_at"`
 }
 
 type Event struct {
