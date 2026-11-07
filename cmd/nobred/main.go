@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -57,10 +59,29 @@ func sameFile(a, b string) bool {
 	return errA == nil && errB == nil && aa == bb
 }
 
+// checkAddr recusa endereço de escuta que não seja loopback: o daemon nunca
+// fica exposto na rede.
+func checkAddr(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return fmt.Errorf("NOBRE_ADDR inválido: %q (use host:porta, ex.: %s)", addr, defaultAddr)
+	}
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.To4() != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("NOBRE_ADDR precisa ser um endereço local (127.0.0.0/8 ou localhost), recebido %q", addr)
+}
+
 func run(dbPath string, seedDemo bool) error {
 	addr := os.Getenv("NOBRE_ADDR")
 	if addr == "" {
 		addr = defaultAddr
+	}
+	if err := checkAddr(addr); err != nil {
+		return err
 	}
 	st, err := store.Open(dbPath)
 	if err != nil {

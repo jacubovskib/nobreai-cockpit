@@ -63,8 +63,12 @@ func New(st *store.Store, deps Deps) http.Handler {
 	return localOnly(mux)
 }
 
-// localOnly protege a API local contra DNS rebinding e CSRF:
-//   - Host precisa ser 127.0.0.1:<porta> ou localhost:<porta>, onde <porta> é
+// msgRemoteForbidden responde a conexões que não vêm da própria máquina.
+const msgRemoteForbidden = "acesso permitido só a partir desta máquina"
+
+// localOnly protege a API local contra acesso remoto, DNS rebinding e CSRF:
+//   - A conexão precisa vir de um endereço loopback (r.RemoteAddr).
+//   - Host precisa ser um IP 127.x.x.x:<porta> ou localhost:<porta>, onde <porta> é
 //     a porta em que o servidor escuta (lida de http.LocalAddrContextKey).
 //     Sem endereço local no contexto (handler chamado direto, como nos
 //     testes com httptest.NewRecorder) qualquer porta é aceita.
@@ -76,6 +80,10 @@ func New(st *store.Store, deps Deps) http.Handler {
 // chegue como 127.0.0.1:7420.
 func localOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackRemote(r.RemoteAddr) {
+			writeError(w, http.StatusForbidden, msgRemoteForbidden)
+			return
+		}
 		if !allowedHost(r) {
 			writeError(w, http.StatusForbidden, "host não permitido")
 			return
@@ -91,9 +99,30 @@ func localOnly(next http.Handler) http.Handler {
 	})
 }
 
+// loopbackRemote diz se o endereço remoto (host:porta) é loopback.
+func loopbackRemote(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// loopbackHost: "localhost" ou um IPv4 literal em 127.0.0.0/8 (NOBRE_ADDR pode
+// escolher qualquer um deles). Nome de outro domínio nunca passa, mesmo que
+// resolva para 127.0.0.1 (DNS rebinding).
+func loopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() != nil && ip.IsLoopback()
+}
+
 func allowedHost(r *http.Request) bool {
 	host, port, err := net.SplitHostPort(r.Host)
-	if err != nil || (host != "127.0.0.1" && host != "localhost") {
+	if err != nil || !loopbackHost(host) {
 		return false
 	}
 	if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
