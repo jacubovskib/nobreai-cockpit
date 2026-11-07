@@ -62,6 +62,14 @@ Siga `docs/piloto-checklist.md` (instala `nobre`/`nobred` em `~/.local/bin` e ro
 - A unit guarda o PATH do terminal onde o setup rodou (inclusive venv/nvm).
 - Outros menores estão no ledger local.
 
+## Depois do piloto (2026-11-07)
+
+Branch `feat/terminais` (a partir de `feat/piloto-integracao`):
+- **Terminais na plataforma** (`docs/plan-terminais.md`): o `nobred` roda o agente num pseudo-terminal e o transmite por WebSocket. Há a página "Terminais", o painel "Terminal" no card e "Ver terminal" na Sala de controle. O "Continuar" ganhou o modo "Em segundo plano, com saída aqui na interface". `nobre run claude` deixa a sessão visível ao mesmo tempo no terminal local e na plataforma: Ctrl+] solta sem matar, e fechar a janela encerra o agente. A interface abre em "Somente assistir" até você clicar em "Interagir". Terminais da plataforma são encerrados quando o `nobred` para ou reinicia.
+- **Worktrees** (NAC-1 a NAC-3, feitos pelo próprio agente durante o teste real): visualização dos worktrees ligados a agentes, recursos do sistema por worktree e página de detalhe. O "Continuar" abre o agente no worktree do branch do card, quando ele existir.
+
+Revisão por task, revisão final, correções e re-revisão aprovadas. Pontos menores adiados ficam no ledger local `.superpowers/sdd/plan-terminais/progress.md`.
+
 ## Plano 2 (fora do piloto)
 Adaptadores Codex e Kiro, modos tmux e segundo plano, "bloquear novas sessões", limites mensais, linha do tempo das sessões e último prompt no pacote, indicador "Retomadas sem perguntas", MCP, times.
 
