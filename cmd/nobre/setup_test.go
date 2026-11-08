@@ -112,8 +112,19 @@ func TestSetupStatusLineStepAndOptOut(t *testing.T) {
 	os.WriteFile(e.settings, []byte(`{"statusLine":{"type":"command","command":"echo oi"}}`), 0o600)
 	r := e.run(t, "127.0.0.1:1", "", t.TempDir())
 	b, _ := os.ReadFile(e.settings)
-	if r.code != 0 || !strings.Contains(string(b), `"command": "/opt/x/bin/nobre statusline | {\necho oi\n}"`) ||
+	if r.code != 0 || !strings.Contains(string(b), `"command": "{ /opt/x/bin/nobre statusline || cat; } | {\necho oi\n}"`) ||
 		!strings.Contains(string(b), `"refreshInterval": 60`) {
+		t.Fatalf("%+v\n%s", r, b)
+	}
+
+	// Original que não dá para embrulhar com segurança: recusa clara, hooks entram.
+	e = newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	os.WriteFile(e.settings, []byte(`{"statusLine":{"type":"command","command":"# só comentário"}}`), 0o600)
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir())
+	b, _ = os.ReadFile(e.settings)
+	if r.code != 1 || !strings.Contains(r.stdout, "! Status line do Claude Code: não consigo integrar esta status line com segurança: o comando só tem comentários") ||
+		!strings.Contains(string(b), `"command": "# só comentário"`) || !strings.Contains(string(b), "hook claude Stop") {
 		t.Fatalf("%+v\n%s", r, b)
 	}
 

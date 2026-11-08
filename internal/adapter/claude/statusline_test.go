@@ -41,7 +41,7 @@ func TestStatusLineWrapsExistingCommandAndRoundTrips(t *testing.T) {
 		t.Fatalf("rep=%+v err=%v", rep, err)
 	}
 	sl := readSL(t, p)
-	want := bin + " statusline | {\n" + userCmd + "\n}"
+	want := "{ " + bin + " statusline || cat; } | {\n" + userCmd + "\n}"
 	if sl["command"] != want || sl["type"] != "command" || sl["padding"] != float64(2) || sl["refreshInterval"] != float64(60) {
 		t.Fatalf("statusLine = %+v", sl)
 	}
@@ -70,12 +70,12 @@ func TestStatusLineIdempotentAndReinstallOtherPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readSL(t, p)["command"].(string)
-	if got != "'"+other+"' statusline | {\n"+userCmd+"\n}" || strings.Count(got, "statusline") != 1 {
+	if got != "{ '"+other+"' statusline || cat; } | {\n"+userCmd+"\n}" || strings.Count(got, "statusline") != 1 {
 		t.Fatalf("command = %q", got)
 	}
 	// E de volta, sem duplicar.
 	InstallStatusLine(p, bin)
-	if got := readSL(t, p)["command"]; got != bin+" statusline | {\n"+userCmd+"\n}" {
+	if got := readSL(t, p)["command"]; got != "{ "+bin+" statusline || cat; } | {\n"+userCmd+"\n}" {
 		t.Fatalf("command = %q", got)
 	}
 }
@@ -177,8 +177,9 @@ func TestStatusLineWrapperShapesRoundTrip(t *testing.T) {
 		if !ours || err != nil || sl.orig != orig || sl.bin != bin {
 			t.Errorf("%q: sl=%+v ours=%v err=%v (wrapped %q)", orig, sl, ours, err, w)
 		}
-		// Comentário só e "\\" final são degenerados: o grupo fica vazio / a
-		// continuação engole o "}". Não há forma que os salve; só o round-trip vale.
+		// Comentário só e "\\" final são degenerados (grupo vazio / a
+		// continuação engole o "}"): a instalação os recusa
+		// (TestStatusLineRefusesUnsafeOriginal); aqui só o round-trip vale.
 		if orig == "# só comentário" || strings.HasSuffix(orig, "\\") {
 			continue
 		}
@@ -186,18 +187,36 @@ func TestStatusLineWrapperShapesRoundTrip(t *testing.T) {
 			t.Errorf("%q: sintaxe inválida: %v %s", orig, err, out)
 		}
 	}
-	// Forma antiga ainda é reconhecida (e reinstalada na forma nova).
-	old := bin + " statusline | { echo hi ; }"
-	if sl, ours, err := parseStatusLine(old); !ours || err != nil || sl.orig != "echo hi" {
-		t.Fatalf("forma antiga: %+v %v %v", sl, ours, err)
+	// Formas antigas ainda são reconhecidas (e reinstaladas na forma nova).
+	for _, old := range []string{
+		bin + " statusline | { echo hi ; }",
+		bin + " statusline | {\necho hi\n}",
+	} {
+		if sl, ours, err := parseStatusLine(old); !ours || err != nil || sl.orig != "echo hi" || sl.bin != bin {
+			t.Fatalf("forma antiga %q: %+v %v %v", old, sl, ours, err)
+		}
+		p := slSettings(t, map[string]any{"type": "command", "command": old, "refreshInterval": 60})
+		InstallStatusLine(p, bin)
+		if got := readSL(t, p)["command"]; got != "{ "+bin+" statusline || cat; } | {\necho hi\n}" {
+			t.Fatalf("migrada: %q", got)
+		}
+		UninstallStatusLine(p, bin)
+		if got := readSL(t, p)["command"]; got != "echo hi" {
+			t.Fatalf("desinstalada: %q", got)
+		}
 	}
-	p := slSettings(t, map[string]any{"type": "command", "command": old, "refreshInterval": 60})
-	InstallStatusLine(p, bin)
-	if got := readSL(t, p)["command"]; got != bin+" statusline | {\necho hi\n}" {
-		t.Fatalf("migrada: %q", got)
+	// Forma nova com caminho entre aspas.
+	q := wrapCommand("/a b/nobre", "echo hi")
+	if sl, ours, err := parseStatusLine(q); !ours || err != nil || sl.bin != "/a b/nobre" || sl.orig != "echo hi" {
+		t.Fatalf("aspas: %q %+v %v %v", q, sl, ours, err)
 	}
-	if _, ours, _ := parseStatusLine("/usr/bin/other statusline | { x ; }"); ours {
-		t.Fatal("não é nosso")
+	for _, notOurs := range []string{"/usr/bin/other statusline | { x ; }", "{ /usr/bin/other statusline || cat; } | {\nx\n}", "{ echo; }"} {
+		if _, ours, _ := parseStatusLine(notOurs); ours {
+			t.Fatalf("não é nosso: %q", notOurs)
+		}
+	}
+	if _, ours, err := parseStatusLine("{ " + bin + " statusline || true; } | x"); !ours || !errors.Is(err, ErrStatusLineShape) {
+		t.Fatalf("formato desconhecido: %v %v", ours, err)
 	}
 }
 
@@ -322,5 +341,82 @@ func TestInstallSettingsOneBackupAndStatusLineErrorKeepsHooks(t *testing.T) {
 	rep, slErr, err = InstallSettings(p, bin, true, false)
 	if err != nil || !errors.Is(slErr, ErrInvalidSettings) || readHooks(t, p)["Stop"] == nil {
 		t.Fatalf("%+v %v %v", rep, slErr, err)
+	}
+}
+
+// O binário do nobre sumiu (desinstalado, movido): a status line tem de sair
+// igual à do original, no mesmo shell. "|| cat" repassa o stdin.
+func TestStatusLineMissingNobreSameOutputAsOriginal(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq não instalado")
+	}
+	missing := filepath.Join(t.TempDir(), "sumiu", "nobre")
+	wrapped := wrapCommand(missing, userCmd)
+	home, _ := os.UserHomeDir()
+	in := `{"workspace":{"current_dir":"` + home + `/proj"},"rate_limits":{"five_hour":{"used_percentage":12}}}`
+	run := func(sh, cmd string) (string, int) {
+		c := exec.Command(sh, "-c", cmd)
+		c.Stdin = strings.NewReader(in)
+		o, err := c.Output() // stderr ("not found") fica de fora
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatalf("%s: %v", sh, err)
+		}
+		return string(o), code
+	}
+	ran := 0
+	for _, sh := range []string{"bash", "dash", "zsh", "sh"} {
+		if _, err := exec.LookPath(sh); err != nil {
+			t.Logf("%s não instalado", sh)
+			continue
+		}
+		ran++
+		wantOut, wantCode := run(sh, userCmd)
+		gotOut, gotCode := run(sh, wrapped)
+		if gotOut != wantOut || gotCode != wantCode {
+			t.Errorf("%s: (%q, %d) != original (%q, %d)", sh, gotOut, gotCode, wantOut, wantCode)
+		}
+		if sh == "bash" && !strings.Contains(gotOut, "/proj") {
+			t.Errorf("bash: saída inesperada %q", gotOut)
+		}
+	}
+	if ran == 0 {
+		t.Skip("nenhum shell")
+	}
+}
+
+func TestStatusLineRefusesUnsafeOriginal(t *testing.T) {
+	for _, orig := range []string{
+		"echo a \\",
+		"# só comentário",
+		"  # um\n\n# dois\n",
+	} {
+		p := slSettings(t, map[string]any{"type": "command", "command": orig})
+		before := string(mustRead(t, p))
+		_, err := InstallStatusLine(p, bin)
+		if !errors.Is(err, ErrStatusLineUnsafe) || !strings.HasPrefix(err.Error(), "não consigo integrar esta status line com segurança: ") {
+			t.Fatalf("%q: err = %v", orig, err)
+		}
+		if string(mustRead(t, p)) != before {
+			t.Fatalf("%q: alterou o arquivo", orig)
+		}
+		// Junto com os hooks: a status line fica de fora, os hooks entram.
+		rep, slErr, err := InstallSettings(p, bin, true, false)
+		if err != nil || !errors.Is(slErr, ErrStatusLineUnsafe) || readHooks(t, p)["Stop"] == nil || readSL(t, p)["command"] != orig {
+			t.Fatalf("%q: %+v %v %v", orig, rep, slErr, err)
+		}
+	}
+	// Barra invertida escapada (par) e comentário depois de comando são seguros.
+	for _, orig := range []string{"echo a \\\\", "echo hi # c", "# cabeçalho\necho hi"} {
+		p := slSettings(t, map[string]any{"type": "command", "command": orig})
+		if _, err := InstallStatusLine(p, bin); err != nil {
+			t.Fatalf("%q: %v", orig, err)
+		}
+		w := readSL(t, p)["command"].(string)
+		if out, err := exec.Command("bash", "-n", "-c", w).CombinedOutput(); err != nil {
+			t.Fatalf("%q: sintaxe inválida: %v %s", orig, err, out)
+		}
 	}
 }

@@ -106,7 +106,7 @@ func TestStatuslineRealBinaryInRealPipeUnderShells(t *testing.T) {
 				defer srv.Close()
 				env := []string{"NOBRE_ADDR=" + strings.TrimPrefix(srv.URL, "http://")}
 				wantOut, wantCode := runShell(t, shell, tc.orig, pipeJSON, env)
-				wrapped := bin + " statusline | {\n" + tc.orig + "\n}"
+				wrapped := "{ " + bin + " statusline || cat; } | {\n" + tc.orig + "\n}"
 				gotOut, gotCode := runShell(t, shell, wrapped, pipeJSON, env)
 				if gotOut != wantOut || gotCode != wantCode {
 					t.Fatalf("(%q, %d) != original (%q, %d)", gotOut, gotCode, wantOut, wantCode)

@@ -14,23 +14,31 @@ import (
 // Status line: o Claude Code passa o JSON da sessão ao comando de
 // statusLine.command pelo stdin. O Cockpit entra no pipe:
 //
-//	<nobre> statusline | {\n<comando original>\n}   (com status line anterior)
-//	<nobre> statusline --resumo                     (sem status line anterior)
+//	{ <nobre> statusline || cat; } | {\n<comando original>\n}   (com status line anterior)
+//	<nobre> statusline --resumo                                (sem status line anterior)
 //
 // "nobre statusline" repassa o stdin intacto e envia os limites do plano ao
-// daemon. O comando original continua rodando no shell do Claude Code.
+// daemon. O comando original continua rodando no shell do Claude Code. Se o
+// binário do nobre sumir (exit 127), o "cat" repassa o stdin e a status line
+// sai igual à original.
 
 const (
 	statusLineArg      = " statusline"
 	statusLineSummary  = " --resumo"
-	statusLinePipe     = " | {\n" // forma atual: grupo fechado com nova linha
-	statusLinePipeOld  = " | { "  // forma antiga: "{ <orig> ; }" ou "{ <orig>\n}"
+	statusLineOpen     = "{ "               // forma atual: "{ <nobre> statusline || cat; } | {\n<orig>\n}"
+	statusLineFallback = " || cat; } | {\n" // depois de "<nobre> statusline" na forma atual
+	statusLinePipe     = " | {\n"           // forma antiga: "<nobre> statusline | {\n<orig>\n}"
+	statusLinePipeOld  = " | { "            // forma mais antiga: "{ <orig> ; }" ou "{ <orig>\n}"
 	statusLineRefresh  = 60
 	statusLineCheckKey = "statusline"
 )
 
 // ErrStatusLineShape: o comando é do Cockpit mas não tem a forma que gravamos.
 var ErrStatusLineShape = errors.New("o comando da status line é do nobre mas tem um formato desconhecido; nada foi alterado")
+
+// ErrStatusLineUnsafe: o comando original não pode ir dentro do grupo sem
+// gerar shell inválido; nada foi alterado.
+var ErrStatusLineUnsafe = errors.New("não consigo integrar esta status line com segurança")
 
 // quoteBin devolve o caminho do nobre pronto para o shell: como está, ou entre
 // aspas simples quando tem caracteres especiais.
@@ -42,10 +50,25 @@ func quoteBin(b string) string {
 }
 
 // wrapCommand monta o comando com o wrapper em torno de orig. O grupo fecha
-// sempre em nova linha: assim "#" no fim, comentário só, "\" final ou here-doc
-// no original não engolem o "}".
+// sempre em nova linha: assim "#" no fim ou here-doc no original não engolem o
+// "}". "\" final e comentário só são recusados antes (unsafeOriginal).
 func wrapCommand(bin, orig string) string {
-	return quoteBin(bin) + statusLineArg + statusLinePipe + orig + "\n}"
+	return statusLineOpen + quoteBin(bin) + statusLineArg + statusLineFallback + orig + "\n}"
+}
+
+// unsafeOriginal diz por que orig não pode ir dentro de "{\n<orig>\n}"
+// ("" = pode): "\" final continuaria a linha do "}", e um grupo só com
+// comentários fica vazio (erro de sintaxe).
+func unsafeOriginal(orig string) string {
+	if n := len(orig) - len(strings.TrimRight(orig, `\`)); n%2 == 1 {
+		return `o comando termina com "\" (continuação de linha); remova a barra final e rode de novo`
+	}
+	for _, line := range strings.Split(orig, "\n") {
+		if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "#") {
+			return ""
+		}
+	}
+	return "o comando só tem comentários"
 }
 
 func summaryCommand(bin string) string { return quoteBin(bin) + statusLineArg + statusLineSummary }
@@ -57,9 +80,13 @@ type slCmd struct {
 	orig    string // comando original (forma wrapper)
 }
 
-// parseStatusLine reconhece "<...>/nobre statusline ...". ours=false: não é
-// nosso; ours=true com err: é nosso mas de formato desconhecido.
+// parseStatusLine reconhece "[{ ]<...>/nobre statusline ...". ours=false: não
+// é nosso; ours=true com err: é nosso mas de formato desconhecido.
 func parseStatusLine(cmd string) (sl slCmd, ours bool, err error) {
+	braced := strings.HasPrefix(cmd, statusLineOpen)
+	if braced {
+		cmd = cmd[len(statusLineOpen):]
+	}
 	var bin, rest string
 	switch {
 	case strings.HasPrefix(cmd, "'"):
@@ -84,6 +111,11 @@ func parseStatusLine(cmd string) (sl slCmd, ours bool, err error) {
 	rest = rest[len(statusLineArg):]
 	sl.bin = bin
 	switch {
+	case braced:
+		if strings.HasPrefix(rest, statusLineFallback) && strings.HasSuffix(rest, "\n}") {
+			sl.orig = strings.TrimSuffix(rest[len(statusLineFallback):], "\n}")
+			return sl, true, nil
+		}
 	case rest == statusLineSummary:
 		sl.summary = true
 		return sl, true, nil
@@ -176,6 +208,9 @@ func applyStatusLine(root map[string]any, nobreBin string) (slResult, error) {
 	case strings.TrimSpace(cur) == "":
 		want = summaryCommand(nobreBin)
 	default:
+		if why := unsafeOriginal(cur); why != "" {
+			return slResult{}, fmt.Errorf("%w: %s", ErrStatusLineUnsafe, why)
+		}
 		want = wrapCommand(nobreBin, cur)
 	}
 	_, hasRefresh := sl["refreshInterval"]
