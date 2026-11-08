@@ -76,6 +76,9 @@ type Alert struct {
 	CardKey string `json:"card_key"`
 	Agent   string `json:"agent"`
 	Text    string `json:"text"`
+	// ResetsAt (só plan_limit): quando a janela reinicia; a UI esconde o
+	// alerta quando o relógio do cliente passa dele.
+	ResetsAt *time.Time `json:"resets_at,omitempty"`
 }
 
 func (s *server) overviewRoutes(mux *http.ServeMux) {

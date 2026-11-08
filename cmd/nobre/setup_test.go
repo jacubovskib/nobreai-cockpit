@@ -116,6 +116,15 @@ func TestSetupStatusLineStepAndOptOut(t *testing.T) {
 		!strings.Contains(string(b), `"refreshInterval": 60`) {
 		t.Fatalf("%+v\n%s", r, b)
 	}
+	// Hooks e status line num único ler-alterar-gravar: exatamente um backup,
+	// com o conteúdo original.
+	baks, _ := filepath.Glob(e.settings + ".bak-*")
+	if len(baks) != 1 {
+		t.Fatalf("backups = %v", baks)
+	}
+	if orig, _ := os.ReadFile(baks[0]); string(orig) != `{"statusLine":{"type":"command","command":"echo oi"}}` {
+		t.Fatalf("backup = %s", orig)
+	}
 
 	// Original que não dá para embrulhar com segurança: recusa clara, hooks entram.
 	e = newSetupEnv(t)
@@ -191,12 +200,10 @@ func TestSetupInvalidSettingsLeavesFileAndRerunIsIdempotent(t *testing.T) {
 		t.Fatal("alterou settings inválido")
 	}
 	os.Remove(e.settings)
+	// Sem settings.json, a execução cria o arquivo: não há o que guardar em backup.
 	e.run(t, "127.0.0.1:1", "", t.TempDir())
-	// A primeira execução gravou settings.json em dois passos (hooks e status
-	// line): o segundo passo deixa um backup do intermediário.
-	old, _ := filepath.Glob(e.settings + ".bak-*")
-	for _, f := range old {
-		os.Remove(f)
+	if m, _ := filepath.Glob(e.settings + ".bak-*"); len(m) != 0 {
+		t.Fatalf("backup sem arquivo anterior: %v", m)
 	}
 	e.ran = nil
 	r = e.run(t, "127.0.0.1:1", "", t.TempDir())

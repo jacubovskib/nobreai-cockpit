@@ -135,7 +135,7 @@ func (s *server) planAlerts(now time.Time) ([]Alert, error) {
 	warn := float64(set.PlanWarnPct)
 	add := func(name, label string, weekday bool) {
 		if w, ok := latest[name]; ok && !w.Expired && w.UsedPct >= warn {
-			out = append(out, Alert{Kind: "plan_limit", Agent: "claude",
+			out = append(out, Alert{Kind: "plan_limit", Agent: "claude", ResetsAt: w.ResetsAt,
 				Text: fmt.Sprintf("%s do plano em %s%%%s.", label, pctText(w.UsedPct), resetText(w.ResetsAt, weekday))})
 		}
 	}

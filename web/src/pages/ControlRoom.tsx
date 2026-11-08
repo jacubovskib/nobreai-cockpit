@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useOverview, useSettings } from '../api/queries'
@@ -226,8 +226,19 @@ function terminalFor(s: ActiveSession, terminals: TerminalInfo[] | undefined, se
   return forCard(live, s.card.key).find((t) => !sessionPids.has(t.pid))?.id
 }
 
+// planAlertExpired: alerta de limite do plano cuja janela já reiniciou no
+// relógio do cliente (o daemon só o tira na próxima leitura da overview).
+const planAlertExpired = (a: Alert, now: number) =>
+  a.kind === 'plan_limit' && !!a.resets_at && new Date(a.resets_at).getTime() <= now
+
 export function ControlRoom() {
   const { data, isPending, isError } = useOverview()
+  // Reavalia a validade dos alertas do plano a cada 30 s, sem novo pedido.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000)
+    return () => clearInterval(t)
+  }, [])
   const settings = useSettings().data
   const terminals = useTerminals().data
   const qc = useQueryClient()
@@ -241,7 +252,8 @@ export function ControlRoom() {
   if (isError) return <p role="alert" style={{ color: 'var(--err)' }}>Não foi possível carregar a sala de controle.</p>
   if (isPending || !data) return <p className="placeholder">Carregando…</p>
 
-  const { today, alerts, active, no_card, events } = data
+  const { today, active, no_card, events } = data
+  const alerts = data.alerts.filter((a) => !planAlertExpired(a, now))
   // Só sessões vivas (processo existindo) contam como ativas.
   const alive = active.filter((a) => !a.pid_dead_at)
   const agentsActive = [...new Set(alive.map((a) => agentInfo(a.agent).name))].join(', ')

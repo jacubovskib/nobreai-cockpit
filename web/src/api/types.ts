@@ -200,6 +200,8 @@ export interface Alert {
   card_key: string
   agent: string
   text: string
+  // Só plan_limit: quando a janela reinicia (o alerta some depois disso).
+  resets_at?: string | null
 }
 
 // GET /api/overview

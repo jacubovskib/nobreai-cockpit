@@ -53,10 +53,12 @@ function WindowRow({ name, label, w, history, warn, now, weekday }: {
   name: string; label: string; w: PlanWindowState | null; history: PlanPoint[]; warn: number; now: number; weekday: boolean
 }) {
   const sub: React.CSSProperties = { fontSize: 13, color: 'var(--text-2)' }
+  // Expirada pelo daemon ou pelo relógio do cliente (resets_at já passou).
+  const expired = !!w && (w.expired || (!!w.resets_at && new Date(w.resets_at).getTime() <= now))
   let body: React.ReactNode
   if (!w) {
     body = <span style={sub}>sem dados ainda</span>
-  } else if (w.expired) {
+  } else if (expired) {
     body = <span style={sub}>reiniciada — aguardando nova leitura</span>
   } else {
     const over = w.used_pct >= warn
@@ -79,7 +81,7 @@ function WindowRow({ name, label, w, history, warn, now, weekday }: {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, gap: 8 }}>
         <span>{label}</span>
-        {w && !w.expired && (
+        {w && !expired && (
           <strong style={{ fontWeight: 600 }}>{pct(w.used_pct)}{w.used_pct >= warn && <span style={{ color: 'var(--warn)', fontWeight: 400 }}> · aviso</span>}</strong>
         )}
       </div>

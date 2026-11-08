@@ -8,8 +8,9 @@ export const useHealth = () =>
 export const useSettings = () =>
   useQuery({ queryKey: ['settings'], queryFn: () => get<Settings>('/api/settings') })
 
+// Os alertas do plano dependem do relógio (reinício da janela): relê a cada minuto.
 export const useOverview = () =>
-  useQuery({ queryKey: ['overview'], queryFn: () => get<Overview>('/api/overview') })
+  useQuery({ queryKey: ['overview'], queryFn: () => get<Overview>('/api/overview'), refetchInterval: 60000 })
 
 export const useCards = () =>
   useQuery({ queryKey: ['cards'], queryFn: () => get<CardSummary[]>('/api/cards') })

@@ -64,6 +64,14 @@ describe('PlanLimits', () => {
     expect(screen.queryByText('90%')).not.toBeInTheDocument()
   })
 
+  it('resets_at já passado no relógio do cliente conta como expirada', async () => {
+    mock({ [URL]: data({ five_hour: { used_pct: 90, resets_at: iso(-1), received_at: iso(-30), expired: false } }) })
+    wrap(<PlanLimits />)
+    expect(await screen.findByText('reiniciada — aguardando nova leitura')).toBeInTheDocument()
+    expect(screen.queryByText('90%')).not.toBeInTheDocument()
+    expect(screen.queryByRole('meter')).not.toBeInTheDocument()
+  })
+
   it('sem nenhuma leitura explica a status line e linka para Configuração', async () => {
     mock({ [URL]: data({}) })
     wrap(<PlanLimits />)
@@ -103,6 +111,32 @@ describe('alerta plan_limit na Sala de controle', () => {
     expect(screen.getByRole('link', { name: 'Ver limites do plano' })).toHaveAttribute('href', '#plano-limites')
     expect(screen.queryByRole('link', { name: 'Abrir card' })).not.toBeInTheDocument()
     expect(await screen.findByRole('region', { name: 'Limites do plano' })).toBeInTheDocument()
+  })
+
+  it('some quando a janela já reiniciou no relógio do cliente', async () => {
+    const overview: Overview = {
+      active: [], no_card: [], events: [],
+      today: { active_agents: 0, cards_in_progress: 0, cards_without_live_session: 0, cost_usd: 0, cost_unpriced: false, daily_limit_usd: 0, tokens_input: 0, tokens_output: 0, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [] },
+      alerts: [
+        { kind: 'plan_limit', card_key: '', agent: 'claude', text: 'Sessão de 5 h do plano em 85% (reinicia às 15:15).', resets_at: iso(-1) },
+        { kind: 'plan_limit', card_key: '', agent: 'claude', text: 'Limite semanal do plano em 90% (reinicia ter às 19:05).', resets_at: iso(60 * 24) },
+      ],
+    }
+    mock({ '/api/overview': overview, '/api/settings': {}, [URL]: data({}), '/api/terminals': [] })
+    wrap(<ControlRoom />)
+    expect(await screen.findByText(/Limite semanal do plano em 90%/)).toBeInTheDocument()
+    expect(screen.queryByText(/Sessão de 5 h do plano em 85%/)).not.toBeInTheDocument()
+  })
+
+  it('sem alertas vigentes diz que nada precisa de atenção', async () => {
+    const overview: Overview = {
+      active: [], no_card: [], events: [],
+      today: { active_agents: 0, cards_in_progress: 0, cards_without_live_session: 0, cost_usd: 0, cost_unpriced: false, daily_limit_usd: 0, tokens_input: 0, tokens_output: 0, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [] },
+      alerts: [{ kind: 'plan_limit', card_key: '', agent: 'claude', text: 'Sessão de 5 h do plano em 85% (reinicia às 15:15).', resets_at: iso(-1) }],
+    }
+    mock({ '/api/overview': overview, '/api/settings': {}, [URL]: data({}), '/api/terminals': [] })
+    wrap(<ControlRoom />)
+    expect(await screen.findByText('Nada precisa de atenção agora.')).toBeInTheDocument()
   })
 })
 

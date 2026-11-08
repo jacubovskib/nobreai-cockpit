@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,6 +240,11 @@ func TestOverviewPlanLimitAlerts(t *testing.T) {
 	}
 	post(80, 91.4, five, week) // 80 = limite exato; mesmo minuto: coalesce com o maior
 	got := alerts()
+	// O alerta leva o resets_at: a UI o esconde quando o relógio do cliente passa dele.
+	raw := a.do(t, "GET", "/api/overview", nil, 0).Body.String()
+	if !strings.Contains(raw, `"resets_at":"2026-11-07T14:30:00Z"`) || !strings.Contains(raw, `"resets_at":"2026-11-10T22:05:00Z"`) {
+		t.Fatalf("alerta sem resets_at: %s", raw)
+	}
 	want := []string{
 		"Sessão de 5 h do plano em 80% (reinicia às 11:30).",
 		"Limite semanal do plano em 91% (reinicia ter às 19:05).",
