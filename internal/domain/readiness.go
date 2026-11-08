@@ -24,6 +24,8 @@ type Settings struct {
 	Currency              string          `json:"currency"`
 	BRLRate               float64         `json:"brl_rate"`
 	IncompleteAction      string          `json:"incomplete_action"` // "ask_agent" ou "mark"
+	// PlanWarnPct é o percentual dos limites do plano a partir do qual a sala de controle avisa.
+	PlanWarnPct int `json:"plan_warn_pct"`
 	// Demo marca o banco de demonstração (nobred --seed-demo): a UI mostra a faixa "Dados de demonstração".
 	Demo bool `json:"demo"`
 }
@@ -42,6 +44,7 @@ func DefaultSettings() Settings {
 		TerminalCmd:           []string{"x-terminal-emulator", "-e"},
 		Currency:              "USD",
 		IncompleteAction:      "ask_agent",
+		PlanWarnPct:           80,
 	}
 }
 
