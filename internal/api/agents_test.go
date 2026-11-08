@@ -51,7 +51,7 @@ func TestAgentsListAndInstall(t *testing.T) {
 	if rec.Code != 200 || len(rows) != 3 || rows[0].Agent != "claude" || rows[1].Agent != "codex" || rows[2].Agent != "kiro" {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	if rows[0].Detection.Found || len(rows[0].Detection.Checks) != 4 {
+	if rows[0].Detection.Found || len(rows[0].Detection.Checks) != 5 {
 		t.Fatalf("%+v", rows[0])
 	}
 	for _, r := range rows[1:] {
@@ -74,7 +74,7 @@ func TestAgentsListAndInstall(t *testing.T) {
 	}
 	rows = decode[[]row](t, a.do(t, "GET", "/api/agents", nil, 0))
 	for _, c := range rows[0].Detection.Checks {
-		if (c.Key == "hooks" || c.Key == "skill") && !c.OK {
+		if (c.Key == "hooks" || c.Key == "skill" || c.Key == "statusline") && !c.OK {
 			t.Fatalf("%+v", c)
 		}
 	}

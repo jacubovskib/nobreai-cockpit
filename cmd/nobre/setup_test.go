@@ -106,6 +106,25 @@ func TestSetupInstallsEverythingAndRegistersProject(t *testing.T) {
 	}
 }
 
+func TestSetupStatusLineStepAndOptOut(t *testing.T) {
+	e := newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	os.WriteFile(e.settings, []byte(`{"statusLine":{"type":"command","command":"echo oi"}}`), 0o600)
+	r := e.run(t, "127.0.0.1:1", "", t.TempDir())
+	b, _ := os.ReadFile(e.settings)
+	if r.code != 0 || !strings.Contains(string(b), `"command": "/opt/x/bin/nobre statusline | { echo oi ; }"`) ||
+		!strings.Contains(string(b), `"refreshInterval": 60`) {
+		t.Fatalf("%+v\n%s", r, b)
+	}
+
+	e = newSetupEnv(t)
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir(), "--sem-statusline")
+	b, _ = os.ReadFile(e.settings)
+	if r.code != 0 || strings.Contains(string(b), "statusLine") || !strings.Contains(r.stdout, "--sem-statusline") {
+		t.Fatalf("%+v\n%s", r, b)
+	}
+}
+
 func TestSetupDeclineProjectAndNotGit(t *testing.T) {
 	e := newSetupEnv(t)
 	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { t.Errorf("API não deveria ser chamada") })
@@ -129,7 +148,7 @@ func TestSetupDryRunWritesNothing(t *testing.T) {
 			t.Fatalf("%s foi criado no dry-run", p)
 		}
 	}
-	for _, want := range []string{"dry-run", "nobred.service", "enable --now nobred", "Instalaria hooks"} {
+	for _, want := range []string{"dry-run", "nobred.service", "enable --now nobred", "Instalaria hooks", "Integraria a status line"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Fatalf("falta %q em %s", want, r.stdout)
 		}
@@ -162,9 +181,15 @@ func TestSetupInvalidSettingsLeavesFileAndRerunIsIdempotent(t *testing.T) {
 	}
 	os.Remove(e.settings)
 	e.run(t, "127.0.0.1:1", "", t.TempDir())
+	// A primeira execução gravou settings.json em dois passos (hooks e status
+	// line): o segundo passo deixa um backup do intermediário.
+	old, _ := filepath.Glob(e.settings + ".bak-*")
+	for _, f := range old {
+		os.Remove(f)
+	}
 	e.ran = nil
 	r = e.run(t, "127.0.0.1:1", "", t.TempDir())
-	if r.code != 0 || !strings.Contains(r.stdout, "já instalados") {
+	if r.code != 0 || !strings.Contains(r.stdout, "já instalados") || !strings.Contains(r.stdout, "Status line já integrada") {
 		t.Fatalf("%+v", r)
 	}
 	if m, _ := filepath.Glob(e.settings + ".bak-*"); len(m) != 0 {

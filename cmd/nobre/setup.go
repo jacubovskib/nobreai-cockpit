@@ -107,17 +107,18 @@ func (l *checklist) bad(format string, a ...any) {
 	fmt.Fprintf(l.c.out, "! "+format+"\n", a...)
 }
 
-// setup instala hooks e skill do Claude Code, grava e ativa o serviço do
+// setup instala hooks, status line e skill do Claude Code, grava e ativa o serviço do
 // daemon e oferece cadastrar o repositório atual como projeto.
 func (c *cli) setup(args []string) error {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	dry := fs.Bool("dry-run", false, "mostra o que mudaria sem gravar nada")
+	noSL := fs.Bool("sem-statusline", false, "não integra a status line do Claude Code")
 	pos, err := c.parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 0 {
-		return usagef("uso: nobre setup [--dry-run]")
+		return usagef("uso: nobre setup [--dry-run] [--sem-statusline]")
 	}
 	d := c.sd
 	if d == nil {
@@ -142,6 +143,23 @@ func (c *cli) setup(args []string) error {
 	} else {
 		for _, m := range rep.Messages {
 			l.ok("%s%s", prefix, m)
+		}
+	}
+
+	// 1b. Status line: entra no pipe e envia os limites do plano ao daemon.
+	if *noSL {
+		l.ok("Status line do Claude Code: pulada (--sem-statusline)")
+	} else {
+		sline := claude.InstallStatusLine
+		if *dry {
+			sline = claude.PlanStatusLine
+		}
+		if rep, err := sline(d.SettingsPath, d.NobreBin); err != nil {
+			l.bad("Status line do Claude Code: %v", err)
+		} else {
+			for _, m := range rep.Messages {
+				l.ok("%s%s", prefix, m)
+			}
 		}
 	}
 

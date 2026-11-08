@@ -152,6 +152,16 @@ func (a *Adapter) Detect() adapter.Detection {
 		}
 	}
 
+	sline := adapter.Check{Key: statusLineCheckKey, Label: "Status line integrada"}
+	if b, detail := statusLineState(a.paths.SettingsPath); b == "" {
+		sline.Detail = detail
+	} else if !binaryExists(b) {
+		sline.Detail = "aponta para um binário que não existe: " + b
+	} else {
+		sline.OK = true
+		sline.Detail = b + " statusline"
+	}
+
 	skill := adapter.Check{Key: "skill", Label: "Skill do Cockpit instalada"}
 	skillFile := filepath.Join(a.paths.SkillsDir, skillName, "SKILL.md")
 	if b, err := os.ReadFile(skillFile); err == nil {
@@ -170,7 +180,7 @@ func (a *Adapter) Detect() adapter.Detection {
 		events.Detail = "último " + ago(a.deps.Now().Sub(last))
 	}
 
-	d.Checks = []adapter.Check{cliCheck, hooks, skill, events}
+	d.Checks = []adapter.Check{cliCheck, hooks, sline, skill, events}
 	return d
 }
 

@@ -40,7 +40,8 @@ Administração:
   nobre prompt save --name <n> --tag <t>                  salva um prompt (corpo pelo stdin)
   nobre run <agente> [args...]                            roda o agente com o terminal visível na plataforma (Ctrl+] solta)
   nobre ui                                                abre o Cockpit no navegador
-  nobre setup [--dry-run]                                 instala hooks e skill do Claude Code e ativa o daemon
+  nobre setup [--dry-run] [--sem-statusline]              instala hooks, skill e status line do Claude Code e ativa o daemon
+  nobre statusline [--resumo]                             status line do Claude Code: repassa o stdin e envia os limites do plano
 
 Hooks (chamados pelo agente, nunca falham):
   nobre hook <agente> <Evento>
@@ -84,6 +85,9 @@ func (c *cli) run(args []string) int {
 	cmd, rest := args[0], args[1:]
 	if cmd == "hook" {
 		return c.hook(rest)
+	}
+	if cmd == "statusline" {
+		return c.statusline(rest)
 	}
 	if cmd == "run" && (len(rest) == 0 || rest[0] != "-h" && rest[0] != "--help") {
 		return c.runAgent(rest) // os argumentos depois do agente são do agente, inclusive --help

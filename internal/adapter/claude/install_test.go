@@ -254,7 +254,7 @@ func TestDetectReportsMissingHooks(t *testing.T) {
 	e.a.SetPaths(Paths{SettingsPath: p, SkillsDir: t.TempDir(), NobreBin: bin, ClaudeBin: cli,
 		Version: func(string) string { return "2.1.0" }})
 	d := e.a.Detect()
-	if !d.Found || d.Path != cli || d.Version != "2.1.0" || len(d.Checks) != 4 {
+	if !d.Found || d.Path != cli || d.Version != "2.1.0" || len(d.Checks) != 5 {
 		t.Fatalf("%+v", d)
 	}
 	by := map[string]bool{}

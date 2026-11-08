@@ -249,28 +249,34 @@ func installHooks(settingsPath, nobreBin string, now time.Time, write bool) (ada
 		rep.Messages = append(rep.Messages, "Instalaria hooks em "+strings.Join(changed, ", ")+" ("+settingsPath+").")
 		return rep, nil
 	}
+	bak, err := commitSettings(settingsPath, root, raw, exists, now)
+	if err != nil {
+		return rep, err
+	}
+	rep.Backup = bak
+	rep.Messages = append(rep.Messages, "Hooks instalados em "+strings.Join(changed, ", ")+".")
+	if rep.Backup != "" {
+		rep.Messages = append(rep.Messages, "Backup: "+rep.Backup)
+	}
+	return rep, nil
+}
+
+// commitSettings grava root em settingsPath: backup O_EXCL do conteúdo atual
+// (se havia), JSON sem escapar &/</>, escrita atômica que preserva symlink.
+func commitSettings(settingsPath string, root map[string]any, raw []byte, exists bool, now time.Time) (backup string, err error) {
 	if exists && len(bytes.TrimSpace(raw)) > 0 {
-		bak, err := writeBackup(settingsPath+".bak-"+now.Format("20060102150405"), raw)
-		if err != nil {
-			return rep, err
+		if backup, err = writeBackup(settingsPath+".bak-"+now.Format("20060102150405"), raw); err != nil {
+			return "", err
 		}
-		rep.Backup = bak
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(root); err != nil {
-		return rep, err
+		return backup, err
 	}
-	if err := writeFileAtomic(settingsPath, buf.Bytes()); err != nil {
-		return rep, err
-	}
-	rep.Messages = append(rep.Messages, "Hooks instalados em "+strings.Join(changed, ", ")+".")
-	if rep.Backup != "" {
-		rep.Messages = append(rep.Messages, "Backup: "+rep.Backup)
-	}
-	return rep, nil
+	return backup, writeFileAtomic(settingsPath, buf.Bytes())
 }
 
 // writeBackup cria o backup com O_EXCL; se o nome existe, acrescenta -1, -2...
@@ -350,7 +356,7 @@ func InstallSkill(dir string) error {
 	return writeFileAtomic(SkillFile(dir), []byte(skillContent))
 }
 
-// Install instala hooks e skill com os caminhos do adaptador.
+// Install instala hooks, status line e skill com os caminhos do adaptador.
 func (a *Adapter) Install() (adapter.InstallReport, error) {
 	p := a.paths
 	if p.SettingsPath == "" || p.SkillsDir == "" {
@@ -362,6 +368,15 @@ func (a *Adapter) Install() (adapter.InstallReport, error) {
 	rep, err := InstallHooks(p.SettingsPath, p.NobreBin)
 	if err != nil {
 		return rep, err
+	}
+	sl, err := InstallStatusLine(p.SettingsPath, p.NobreBin)
+	if err != nil {
+		return rep, err
+	}
+	rep.Changed = append(rep.Changed, sl.Changed...)
+	rep.Messages = append(rep.Messages, sl.Messages...)
+	if rep.Backup == "" {
+		rep.Backup = sl.Backup
 	}
 	need, err := PlanSkill(p.SkillsDir)
 	if err != nil {
