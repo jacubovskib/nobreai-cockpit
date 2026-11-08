@@ -61,11 +61,16 @@ type cli struct {
 	sd *setupDeps
 	// rd são os pontos do terminal local do `nobre run`; nil = padrões.
 	rd *runDeps
+	// spawn entrega o payload dos limites a um processo destacado; nil = envia
+	// na hora, com 300 ms (testes).
+	spawn func(payload []byte)
 }
 
 func newCLI() *cli {
-	return &cli{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, cwd: os.Getwd,
+	c := &cli{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, cwd: os.Getwd,
 		opener: func(url string) error { return exec.Command("xdg-open", url).Start() }}
+	c.spawn = func(p []byte) { spawnStatuslineSender(c.addr())(p) }
+	return c
 }
 
 func main() { os.Exit(newCLI().run(os.Args[1:])) }
@@ -86,7 +91,7 @@ func (c *cli) run(args []string) int {
 	if cmd == "hook" {
 		return c.hook(rest)
 	}
-	if cmd == "statusline" {
+	if cmd == "statusline" && !wantsHelp(rest) {
 		return c.statusline(rest)
 	}
 	if cmd == "run" && (len(rest) == 0 || rest[0] != "-h" && rest[0] != "--help") {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"regexp"
 	"strings"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 // Status line: o Claude Code passa o JSON da sessão ao comando de
 // statusLine.command pelo stdin. O Cockpit entra no pipe:
 //
-//	<nobre> statusline | { <comando original> ; }   (com status line anterior)
+//	<nobre> statusline | {\n<comando original>\n}   (com status line anterior)
 //	<nobre> statusline --resumo                     (sem status line anterior)
 //
 // "nobre statusline" repassa o stdin intacto e envia os limites do plano ao
@@ -24,15 +23,14 @@ import (
 const (
 	statusLineArg      = " statusline"
 	statusLineSummary  = " --resumo"
-	statusLinePipe     = " | { "
+	statusLinePipe     = " | {\n" // forma atual: grupo fechado com nova linha
+	statusLinePipeOld  = " | { "  // forma antiga: "{ <orig> ; }" ou "{ <orig>\n}"
 	statusLineRefresh  = 60
 	statusLineCheckKey = "statusline"
 )
 
 // ErrStatusLineShape: o comando é do Cockpit mas não tem a forma que gravamos.
 var ErrStatusLineShape = errors.New("o comando da status line é do nobre mas tem um formato desconhecido; nada foi alterado")
-
-var trailingComment = regexp.MustCompile(`(^|\s)#`)
 
 // quoteBin devolve o caminho do nobre pronto para o shell: como está, ou entre
 // aspas simples quando tem caracteres especiais.
@@ -43,17 +41,11 @@ func quoteBin(b string) string {
 	return "'" + strings.ReplaceAll(b, "'", `'\''`) + "'"
 }
 
-// wrapCommand monta o comando com o wrapper em torno de orig. O fechamento é
-// " ; }" salvo quando isso quebraria o original (várias linhas, comentário na
-// última linha, ou termina em ; ou &): aí vai "\n}".
+// wrapCommand monta o comando com o wrapper em torno de orig. O grupo fecha
+// sempre em nova linha: assim "#" no fim, comentário só, "\" final ou here-doc
+// no original não engolem o "}".
 func wrapCommand(bin, orig string) string {
-	end := " ; }"
-	t := strings.TrimRight(orig, " \t\r\n")
-	last := t[strings.LastIndex(t, "\n")+1:]
-	if strings.Contains(orig, "\n") || trailingComment.MatchString(last) || strings.HasSuffix(t, ";") || strings.HasSuffix(t, "&") {
-		end = "\n}"
-	}
-	return quoteBin(bin) + statusLineArg + statusLinePipe + orig + end
+	return quoteBin(bin) + statusLineArg + statusLinePipe + orig + "\n}"
 }
 
 func summaryCommand(bin string) string { return quoteBin(bin) + statusLineArg + statusLineSummary }
@@ -95,8 +87,11 @@ func parseStatusLine(cmd string) (sl slCmd, ours bool, err error) {
 	case rest == statusLineSummary:
 		sl.summary = true
 		return sl, true, nil
-	case strings.HasPrefix(rest, statusLinePipe):
-		body := rest[len(statusLinePipe):]
+	case strings.HasPrefix(rest, statusLinePipe) && strings.HasSuffix(rest, "\n}"):
+		sl.orig = strings.TrimSuffix(rest[len(statusLinePipe):], "\n}")
+		return sl, true, nil
+	case strings.HasPrefix(rest, statusLinePipeOld):
+		body := rest[len(statusLinePipeOld):]
 		switch {
 		case strings.HasSuffix(body, "\n}"):
 			sl.orig = strings.TrimSuffix(body, "\n}")
@@ -142,35 +137,40 @@ func PlanStatusLine(settingsPath, nobreBin string) (adapter.InstallReport, error
 	return installStatusLine(settingsPath, nobreBin, time.Now(), false)
 }
 
-func installStatusLine(settingsPath, nobreBin string, now time.Time, write bool) (adapter.InstallReport, error) {
-	rep := adapter.InstallReport{Changed: []string{}, Messages: []string{}}
-	if settingsPath == "" || nobreBin == "" {
-		return rep, errors.New("caminho do settings.json ou do nobre não definido")
-	}
-	root, raw, exists, err := loadSettings(settingsPath)
-	if err != nil {
-		return rep, err
+// ErrBinQuote: o caminho do nobre não pode ter aspas simples (não geramos o escape).
+var ErrBinQuote = errors.New("o caminho do nobre contém aspas simples (') e não pode ir na status line; instale o nobre em outro caminho")
+
+// slResult é o resultado de applyStatusLine.
+type slResult struct {
+	changed bool
+	command string // comando que ficou (ou ficaria) em statusLine.command
+	note    string // por que nada mudou, quando !changed
+}
+
+// applyStatusLine altera root; em erro root fica intacto.
+func applyStatusLine(root map[string]any, nobreBin string) (slResult, error) {
+	if strings.Contains(nobreBin, "'") {
+		return slResult{}, ErrBinQuote
 	}
 	sl, err := statusLineOf(root)
 	if err != nil {
-		return rep, err
+		return slResult{}, err
 	}
 	if sl == nil {
 		sl = map[string]any{}
 	}
 	if t, ok := sl["type"].(string); ok && t != "command" {
-		rep.Messages = append(rep.Messages, fmt.Sprintf("Status line do tipo %q não é um comando; nada a alterar.", t))
-		return rep, nil
+		return slResult{note: fmt.Sprintf("Status line do tipo %q não é um comando; nada a alterar.", t)}, nil
 	}
 	cur, hasCmd := sl["command"].(string)
 	if _, present := sl["command"]; present && !hasCmd {
-		return rep, ErrInvalidSettings
+		return slResult{}, ErrInvalidSettings
 	}
 	var want string
 	cp, ours, perr := parseStatusLine(cur)
 	switch {
 	case perr != nil:
-		return rep, perr
+		return slResult{}, perr
 	case ours:
 		want = cp.build(nobreBin)
 	case strings.TrimSpace(cur) == "":
@@ -180,17 +180,36 @@ func installStatusLine(settingsPath, nobreBin string, now time.Time, write bool)
 	}
 	_, hasRefresh := sl["refreshInterval"]
 	if cur == want && hasRefresh && sl["type"] == "command" {
-		rep.Messages = append(rep.Messages, "Status line já integrada; nada a alterar.")
-		return rep, nil
+		return slResult{command: want, note: "Status line já integrada; nada a alterar."}, nil
 	}
 	sl["type"], sl["command"] = "command", want
 	if !hasRefresh {
 		sl["refreshInterval"] = json.Number(fmt.Sprint(statusLineRefresh))
 	}
 	root["statusLine"] = sl
+	return slResult{changed: true, command: want}, nil
+}
+
+func installStatusLine(settingsPath, nobreBin string, now time.Time, write bool) (adapter.InstallReport, error) {
+	rep := adapter.InstallReport{Changed: []string{}, Messages: []string{}}
+	if settingsPath == "" || nobreBin == "" {
+		return rep, errors.New("caminho do settings.json ou do nobre não definido")
+	}
+	root, raw, exists, err := loadSettings(settingsPath)
+	if err != nil {
+		return rep, err
+	}
+	r, err := applyStatusLine(root, nobreBin)
+	if err != nil {
+		return rep, err
+	}
+	if !r.changed {
+		rep.Messages = append(rep.Messages, r.note)
+		return rep, nil
+	}
 	rep.Changed = []string{"statusLine"}
 	if !write {
-		rep.Messages = append(rep.Messages, "Integraria a status line ("+settingsPath+"): "+want)
+		rep.Messages = append(rep.Messages, "Integraria a status line ("+settingsPath+"): "+r.command)
 		return rep, nil
 	}
 	bak, err := commitSettings(settingsPath, root, raw, exists, now)

@@ -133,33 +133,20 @@ func (c *cli) setup(args []string) error {
 		fmt.Fprintln(c.out, "Modo dry-run: nada será gravado.")
 	}
 
-	// 1. Hooks do Claude Code.
-	hooks := claude.InstallHooks
-	if *dry {
-		hooks = claude.PlanHooks
-	}
-	if rep, err := hooks(d.SettingsPath, d.NobreBin); err != nil {
+	// 1. Hooks e status line do Claude Code (uma só leitura/gravação do
+	// settings.json). A status line entra no pipe e envia os limites do plano.
+	rep, slErr, err := claude.InstallSettings(d.SettingsPath, d.NobreBin, !*noSL, *dry)
+	if err != nil {
 		l.bad("Hooks do Claude Code: %v", err)
 	} else {
 		for _, m := range rep.Messages {
 			l.ok("%s%s", prefix, m)
 		}
-	}
-
-	// 1b. Status line: entra no pipe e envia os limites do plano ao daemon.
-	if *noSL {
-		l.ok("Status line do Claude Code: pulada (--sem-statusline)")
-	} else {
-		sline := claude.InstallStatusLine
-		if *dry {
-			sline = claude.PlanStatusLine
+		if *noSL {
+			l.ok("Status line do Claude Code: pulada (--sem-statusline)")
 		}
-		if rep, err := sline(d.SettingsPath, d.NobreBin); err != nil {
-			l.bad("Status line do Claude Code: %v", err)
-		} else {
-			for _, m := range rep.Messages {
-				l.ok("%s%s", prefix, m)
-			}
+		if slErr != nil {
+			l.bad("Status line do Claude Code: %v", slErr)
 		}
 	}
 

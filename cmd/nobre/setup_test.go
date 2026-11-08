@@ -112,7 +112,7 @@ func TestSetupStatusLineStepAndOptOut(t *testing.T) {
 	os.WriteFile(e.settings, []byte(`{"statusLine":{"type":"command","command":"echo oi"}}`), 0o600)
 	r := e.run(t, "127.0.0.1:1", "", t.TempDir())
 	b, _ := os.ReadFile(e.settings)
-	if r.code != 0 || !strings.Contains(string(b), `"command": "/opt/x/bin/nobre statusline | { echo oi ; }"`) ||
+	if r.code != 0 || !strings.Contains(string(b), `"command": "/opt/x/bin/nobre statusline | {\necho oi\n}"`) ||
 		!strings.Contains(string(b), `"refreshInterval": 60`) {
 		t.Fatalf("%+v\n%s", r, b)
 	}

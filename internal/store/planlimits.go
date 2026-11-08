@@ -23,9 +23,11 @@ func (s *Store) RecordPlanLimits(r domain.PlanReading) error {
 	}
 	defer tx.Rollback()
 	// Retenção: leituras com mais de 30 dias saem a cada gravação.
-	if _, err := tx.Exec(`DELETE FROM plan_limits WHERE julianday(received_at) < julianday(?)`,
-		fmtTime(r.At.Add(-planRetention))); err != nil {
-		return err
+	for _, name := range []string{domain.PlanFiveHour, domain.PlanSevenDay} {
+		if _, err := tx.Exec(`DELETE FROM plan_limits WHERE window=? AND julianday(received_at) < julianday(?)`,
+			name, fmtTime(r.At.Add(-planRetention))); err != nil {
+			return err
+		}
 	}
 	for _, w := range []struct {
 		name string
