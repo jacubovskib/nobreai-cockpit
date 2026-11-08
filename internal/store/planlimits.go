@@ -9,6 +9,9 @@ import (
 
 // planCoalesce: leitura da mesma janela e mesmo resets_at dentro deste prazo
 // da anterior atualiza a linha em vez de inserir (no máximo ~1 linha/minuto).
+// planRetention: por quanto tempo as leituras ficam.
+const planRetention = 30 * 24 * time.Hour
+
 const planCoalesce = 60 * time.Second
 
 // RecordPlanLimits grava uma linha por janela presente, coalescendo com a
@@ -19,6 +22,11 @@ func (s *Store) RecordPlanLimits(r domain.PlanReading) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Retenção: leituras com mais de 30 dias saem a cada gravação.
+	if _, err := tx.Exec(`DELETE FROM plan_limits WHERE julianday(received_at) < julianday(?)`,
+		fmtTime(r.At.Add(-planRetention))); err != nil {
+		return err
+	}
 	for _, w := range []struct {
 		name string
 		v    *domain.PlanWindow
@@ -52,8 +60,7 @@ func (s *Store) RecordPlanLimits(r domain.PlanReading) error {
 }
 
 // LatestPlanLimits devolve a leitura mais recente (por horário de recebimento)
-// de cada janela que já teve leitura. Expired usa o relógio do sistema; a API
-// recalcula com o seu próprio relógio.
+// de cada janela que já teve leitura. Expired fica a cargo da API (Deps.Now).
 func (s *Store) LatestPlanLimits() (map[string]domain.PlanWindowState, error) {
 	out := map[string]domain.PlanWindowState{}
 	for _, name := range []string{domain.PlanFiveHour, domain.PlanSevenDay} {
@@ -77,7 +84,6 @@ func (s *Store) LatestPlanLimits() (map[string]domain.PlanWindowState, error) {
 				return nil, err
 			}
 			st.ResetsAt = &t
-			st.Expired = !t.After(time.Now())
 		}
 		out[name] = st
 	}

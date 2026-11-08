@@ -30,7 +30,7 @@ func TestPlanLimitsRecordAndLatest(t *testing.T) {
 		t.Fatalf("só five_hour: %+v", m)
 	}
 	f := m["five_hour"]
-	if f.UsedPct != 23.5 || f.ResetsAt == nil || !f.ResetsAt.Equal(rs) || !f.ReceivedAt.Equal(t0) || f.Expired {
+	if f.UsedPct != 23.5 || f.ResetsAt == nil || !f.ResetsAt.Equal(rs) || !f.ReceivedAt.Equal(t0) {
 		t.Fatalf("five_hour = %+v", f)
 	}
 }
@@ -75,17 +75,14 @@ func TestPlanLimitsLatestByReceivedAtAcrossFormats(t *testing.T) {
 	}
 }
 
-func TestPlanLimitsExpiredAndHistorySince(t *testing.T) {
+func TestPlanLimitsHistorySince(t *testing.T) {
 	s := newTestStore(t)
 	past := time.Now().Add(-time.Hour)
 	s.RecordPlanLimits(domain.PlanReading{At: time.Now().Add(-2 * time.Hour), FiveHour: win(90, past)})
 	s.RecordPlanLimits(domain.PlanReading{At: time.Now().Add(-30 * time.Hour), SevenDay: &domain.PlanWindow{UsedPct: 5}})
 	m, _ := s.LatestPlanLimits()
-	if !m["five_hour"].Expired {
-		t.Fatalf("deveria estar expirada: %+v", m["five_hour"])
-	}
-	if sd := m["seven_day"]; sd.Expired || sd.ResetsAt != nil {
-		t.Fatalf("sem resets_at nunca expira: %+v", sd)
+	if m["five_hour"].Expired || m["seven_day"].ResetsAt != nil {
+		t.Fatalf("o store não calcula Expired: %+v", m)
 	}
 	h, _ := s.PlanLimitsHistory("seven_day", time.Now().Add(-24*time.Hour))
 	if len(h) != 0 {
@@ -94,5 +91,22 @@ func TestPlanLimitsExpiredAndHistorySince(t *testing.T) {
 	h, _ = s.PlanLimitsHistory("seven_day", time.Now().Add(-48*time.Hour))
 	if len(h) != 1 {
 		t.Fatalf("history = %+v", h)
+	}
+}
+
+func TestPlanLimitsRetention30Days(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	s.RecordPlanLimits(domain.PlanReading{At: now.Add(-31 * 24 * time.Hour), FiveHour: &domain.PlanWindow{UsedPct: 1}})
+	s.RecordPlanLimits(domain.PlanReading{At: now.Add(-29 * 24 * time.Hour), FiveHour: &domain.PlanWindow{UsedPct: 2}})
+	var n int
+	s.DB.QueryRow(`SELECT COUNT(*) FROM plan_limits`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("antes: %d", n)
+	}
+	s.RecordPlanLimits(domain.PlanReading{At: now, FiveHour: &domain.PlanWindow{UsedPct: 3}})
+	s.DB.QueryRow(`SELECT COUNT(*) FROM plan_limits`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("a de 31 dias deveria sair: %d", n)
 	}
 }
