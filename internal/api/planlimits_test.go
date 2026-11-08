@@ -60,6 +60,26 @@ func TestPlanLimitsPostAndGet(t *testing.T) {
 	if len(p.History["five_hour"]) != 1 || len(p.History["seven_day"]) != 1 || p.WarnPct != 80 {
 		t.Fatalf("history/warn = %+v", p)
 	}
+	// Mesma leitura de novo (sessão ociosa) ou menor: vigente igual, sem publicar.
+	a.do(t, "POST", "/api/plan-limits", body, 0)
+	body["rate_limits"].(map[string]any)["five_hour"] = map[string]any{"used_percentage": 10, "resets_at": reset}
+	a.do(t, "POST", "/api/plan-limits", body, 0)
+	select {
+	case k := <-ch:
+		t.Fatalf("publicou %q sem mudança da vigente", k)
+	case <-time.After(100 * time.Millisecond):
+	}
+	// Valor maior muda a vigente: publica.
+	body["rate_limits"].(map[string]any)["five_hour"] = map[string]any{"used_percentage": 30, "resets_at": reset}
+	a.do(t, "POST", "/api/plan-limits", body, 0)
+	select {
+	case k := <-ch:
+		if k != "plan" {
+			t.Fatalf("hub = %q", k)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sem publicação plan")
+	}
 }
 
 func TestPlanLimitsGetEmptyAndExpired(t *testing.T) {

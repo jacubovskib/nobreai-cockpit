@@ -237,7 +237,7 @@ func TestOverviewPlanLimitAlerts(t *testing.T) {
 	if got := alerts(); len(got) != 0 {
 		t.Fatalf("abaixo do aviso = %v", got)
 	}
-	post(80, 91.4, five, week) // 80 = limite exato; mais de 60 s depois? mesma hora: coalesce, vale o último
+	post(80, 91.4, five, week) // 80 = limite exato; mesmo minuto: coalesce com o maior
 	got := alerts()
 	want := []string{
 		"Sessão de 5 h do plano em 80% (reinicia às 11:30).",
@@ -246,7 +246,9 @@ func TestOverviewPlanLimitAlerts(t *testing.T) {
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("alertas = %q, quer %q", got, want)
 	}
-	// Janela expirada não alerta.
+	// Janela expirada não alerta. (Numa API nova: com a janela de 5 h ainda
+	// vigente, uma leitura com reinício no passado seria descartada.)
+	a = newTestAPI(t)
 	post(99, 99, testNow.Add(-time.Minute), week)
 	got = alerts()
 	if len(got) != 1 || got[0] != "Limite semanal do plano em 99% (reinicia ter às 19:05)." {

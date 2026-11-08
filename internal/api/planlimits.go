@@ -55,11 +55,14 @@ func (s *server) postPlanLimits(w http.ResponseWriter, r *http.Request) {
 		rd := domain.PlanReading{SessionID: in.SessionID, At: s.now(),
 			FiveHour: in.RateLimits.FiveHour.valid(), SevenDay: in.RateLimits.SevenDay.valid()}
 		if rd.FiveHour != nil || rd.SevenDay != nil {
-			if err := s.st.RecordPlanLimits(rd); err != nil {
+			changed, err := s.st.RecordPlanLimits(rd)
+			if err != nil {
 				writeStoreError(w, err, "")
 				return
 			}
-			s.publish("plan")
+			if changed {
+				s.publish("plan")
+			}
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
