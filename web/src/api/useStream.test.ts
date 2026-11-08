@@ -42,3 +42,13 @@ describe('createInvalidator', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 })
+
+describe('kind plan', () => {
+  it('invalida o painel do plano e o overview (alerta)', async () => {
+    const { invalidateForKind } = await import('./useStream')
+    const qc = new QueryClient()
+    const spy = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue()
+    invalidateForKind(qc, 'plan')
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0])).toEqual(['plan', 'overview'])
+  })
+})

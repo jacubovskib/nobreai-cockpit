@@ -113,6 +113,7 @@ export interface Settings {
   currency: 'USD' | 'BRL' | string
   brl_rate: number
   incomplete_action: 'ask_agent' | 'mark' | string
+  plan_warn_pct: number
   demo: boolean
 }
 
@@ -195,7 +196,7 @@ export interface TodayTotals {
 }
 
 export interface Alert {
-  kind: 'stale' | 'limit_warn' | 'incomplete' | 'unpriced' | string
+  kind: 'stale' | 'limit_warn' | 'incomplete' | 'unpriced' | 'plan_limit' | string
   card_key: string
   agent: string
   text: string
@@ -296,4 +297,19 @@ export interface WorktreeDetail {
   sessions: WorktreeSessionDetail[]
   cards: CardRef[]
   events: WorktreeEvent[]
+}
+
+// GET /api/plan-limits?hours=24 (janelas do plano do Claude Code, vindas da status line)
+export interface PlanWindowState {
+  used_pct: number
+  resets_at: string | null
+  received_at: string
+  expired: boolean
+}
+export interface PlanPoint { at: string; used_pct: number }
+export interface PlanLimits {
+  five_hour: PlanWindowState | null
+  seven_day: PlanWindowState | null
+  history: { five_hour: PlanPoint[] | null; seven_day: PlanPoint[] | null }
+  warn_pct: number
 }

@@ -10,6 +10,7 @@ const KIND_KEYS: Record<string, string[]> = {
   usage: ['usage', 'overview', 'cards', 'card'],
   prompts: ['prompts'],
   terminals: ['terminals'],
+  plan: ['plan', 'overview'],
 }
 
 export function invalidateForKind(qc: QueryClient, kind: string) {

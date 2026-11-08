@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { get } from './client'
-import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total } from './types'
+import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits } from './types'
 
 export const useHealth = () =>
   useQuery({ queryKey: ['health'], queryFn: () => get<Health>('/api/health'), refetchInterval: 15000, retry: false })
@@ -63,3 +63,7 @@ export const useWorktreeDetail = (project: string, path: string) =>
     retry: false,
     enabled: !!project && !!path,
   })
+
+// A hora relativa ("reinicia em…") muda sem evento: relê a cada minuto.
+export const usePlanLimits = (hours = 24) =>
+  useQuery({ queryKey: ['plan', hours], queryFn: () => get<PlanLimits>(`/api/plan-limits?hours=${hours}`), refetchInterval: 60000 })

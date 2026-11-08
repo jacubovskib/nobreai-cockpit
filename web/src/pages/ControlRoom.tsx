@@ -13,6 +13,7 @@ import { Tokens, formatTokens } from '../ui/Tokens'
 import { WorktreeTag } from '../ui/WorktreeTag'
 import { minutesSince } from './board'
 import { NewTask } from './NewTask'
+import { PlanLimits } from './PlanLimits'
 
 const panel: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, padding: 18, borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--border)' }
 const btn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', minHeight: 40, padding: '0 14px', borderRadius: 8, border: '1px solid #3A3F4B', background: 'transparent', color: 'var(--text)', font: 'inherit', cursor: 'pointer', textDecoration: 'none' }
@@ -46,6 +47,7 @@ function AlertRow({ alert, onPause, pausing }: { alert: Alert; onPause: (key: st
         {alert.kind === 'stale' && alert.card_key && (
           <button type="button" style={btn} disabled={pausing} onClick={() => onPause(alert.card_key)}>Mover para Pausado</button>
         )}
+        {alert.kind === 'plan_limit' && <a href="#plano-limites" style={btn}>Ver limites do plano</a>}
         {(alert.kind === 'limit_warn' || alert.kind === 'unpriced') && <Link to="/config" style={btn}>Ajustar limite</Link>}
         {alert.card_key && <Link to={`/cards/${alert.card_key}`} style={btnPrimary}>Abrir card</Link>}
       </div>
@@ -321,6 +323,8 @@ export function ControlRoom() {
               {today.per_agent.filter((l) => l.daily_usd > 0 && l.action).map((l) => ` ${agentInfo(l.agent).name}: ${actionText(l.action)}.`).join('')}
             </p>
           </section>
+
+          <PlanLimits />
 
           <section aria-labelledby="feed-t" style={panel}>
             <h2 id="feed-t" style={h2}>Eventos dos hooks</h2>

@@ -114,7 +114,27 @@ function AgentCard({ info }: { info: AgentDetection }) {
   )
 }
 
-function Agents() {
+function PlanWarn({ settings }: { settings: Settings }) {
+  const save = useSaveSettings(settings)
+  const [v, setV] = useState(String(settings.plan_warn_pct ?? 80))
+  const [bad, setBad] = useState<Error | null>(null)
+  const submit = () => {
+    const n = parseNum(v)
+    if (!(Number.isInteger(n) && n >= 1 && n <= 100)) return setBad(new Error('Informe um percentual inteiro de 1 a 100.'))
+    setBad(null)
+    save.mutate({ plan_warn_pct: n })
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+      <label style={field}>Avisar quando o limite do plano passar de (%)
+        <input style={{ ...small, width: 80 }} inputMode="numeric" value={v} onChange={(e) => setV(e.target.value)} />
+      </label>
+      <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} label="Salvar aviso do plano" onSave={submit} />
+    </div>
+  )
+}
+
+function Agents({ settings }: { settings?: Settings }) {
   const agents = useAgents()
   return (
     <Section
@@ -128,6 +148,7 @@ function Agents() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
         {agents.data?.map((a) => <AgentCard key={a.agent} info={a} />)}
       </div>
+      {settings && <PlanWarn settings={settings} />}
     </Section>
   )
 }
@@ -485,7 +506,7 @@ export function Config() {
       </header>
       {failed && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar as configurações.</p>}
       {!failed && (settings.isPending || limits.isPending || projects.isPending) && <p className="placeholder">Carregando…</p>}
-      <Agents />
+      <Agents settings={settings.data} />
       {limits.data && <Limits limits={limits.data} />}
       {settings.data && <CardCreation settings={settings.data} />}
       {settings.data && <Handoff settings={settings.data} />}
