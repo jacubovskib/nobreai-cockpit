@@ -228,49 +228,85 @@ func PlanHooks(settingsPath, nobreBin string) (adapter.InstallReport, error) {
 }
 
 func installHooks(settingsPath, nobreBin string, now time.Time, write bool) (adapter.InstallReport, error) {
+	rep, _, err := installSettings(settingsPath, nobreBin, now, write, false)
+	return rep, err
+}
+
+// InstallSettings instala hooks e, com statusLine, a status line num único
+// ler-alterar-gravar de settings.json (um só backup). Erro da status line vem
+// em slErr e não impede os hooks; err é fatal (nada gravado). dry=true só calcula.
+func InstallSettings(settingsPath, nobreBin string, statusLine, dry bool) (rep adapter.InstallReport, slErr, err error) {
+	return installSettings(settingsPath, nobreBin, time.Now(), !dry, statusLine)
+}
+
+func installSettings(settingsPath, nobreBin string, now time.Time, write, withSL bool) (adapter.InstallReport, error, error) {
 	rep := adapter.InstallReport{Changed: []string{}, Messages: []string{}}
 	if settingsPath == "" || nobreBin == "" {
-		return rep, errors.New("caminho do settings.json ou do nobre não definido")
+		return rep, nil, errors.New("caminho do settings.json ou do nobre não definido")
 	}
 	root, raw, exists, err := loadSettings(settingsPath)
 	if err != nil {
-		return rep, err
+		return rep, nil, err
 	}
 	changed, err := mergeHooks(root, nobreBin)
 	if err != nil {
-		return rep, err
+		return rep, nil, err
+	}
+	var sl slResult
+	var slErr error
+	if withSL {
+		sl, slErr = applyStatusLine(root, nobreBin)
 	}
 	if len(changed) == 0 {
 		rep.Messages = append(rep.Messages, "Hooks já instalados; nada a alterar.")
-		return rep, nil
+	} else if !write {
+		rep.Messages = append(rep.Messages, "Instalaria hooks em "+strings.Join(changed, ", ")+" ("+settingsPath+").")
+	}
+	if withSL && slErr == nil && !sl.changed {
+		rep.Messages = append(rep.Messages, sl.note)
+	} else if sl.changed && !write {
+		rep.Messages = append(rep.Messages, "Integraria a status line ("+settingsPath+"): "+sl.command)
 	}
 	rep.Changed = changed
-	if !write {
-		rep.Messages = append(rep.Messages, "Instalaria hooks em "+strings.Join(changed, ", ")+" ("+settingsPath+").")
-		return rep, nil
+	if sl.changed {
+		rep.Changed = append(rep.Changed, "statusLine")
 	}
+	if len(rep.Changed) == 0 || !write {
+		return rep, slErr, nil
+	}
+	bak, err := commitSettings(settingsPath, root, raw, exists, now)
+	if err != nil {
+		return rep, slErr, err
+	}
+	rep.Backup = bak
+	if len(changed) > 0 {
+		rep.Messages = append(rep.Messages, "Hooks instalados em "+strings.Join(changed, ", ")+".")
+	}
+	if sl.changed {
+		rep.Messages = append(rep.Messages, "Status line integrada.")
+	}
+	if bak != "" {
+		rep.Messages = append(rep.Messages, "Backup: "+bak)
+	}
+	return rep, slErr, nil
+}
+
+// commitSettings grava root em settingsPath: backup O_EXCL do conteúdo atual
+// (se havia), JSON sem escapar &/</>, escrita atômica que preserva symlink.
+func commitSettings(settingsPath string, root map[string]any, raw []byte, exists bool, now time.Time) (backup string, err error) {
 	if exists && len(bytes.TrimSpace(raw)) > 0 {
-		bak, err := writeBackup(settingsPath+".bak-"+now.Format("20060102150405"), raw)
-		if err != nil {
-			return rep, err
+		if backup, err = writeBackup(settingsPath+".bak-"+now.Format("20060102150405"), raw); err != nil {
+			return "", err
 		}
-		rep.Backup = bak
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(root); err != nil {
-		return rep, err
+		return backup, err
 	}
-	if err := writeFileAtomic(settingsPath, buf.Bytes()); err != nil {
-		return rep, err
-	}
-	rep.Messages = append(rep.Messages, "Hooks instalados em "+strings.Join(changed, ", ")+".")
-	if rep.Backup != "" {
-		rep.Messages = append(rep.Messages, "Backup: "+rep.Backup)
-	}
-	return rep, nil
+	return backup, writeFileAtomic(settingsPath, buf.Bytes())
 }
 
 // writeBackup cria o backup com O_EXCL; se o nome existe, acrescenta -1, -2...
@@ -350,16 +386,19 @@ func InstallSkill(dir string) error {
 	return writeFileAtomic(SkillFile(dir), []byte(skillContent))
 }
 
-// Install instala hooks e skill com os caminhos do adaptador.
+const msgNoNobre = "não achei o binário nobre (coloque-o ao lado do nobred ou no PATH)"
+
+// Install instala hooks e skill com os caminhos do adaptador. A status line
+// não entra: é a ação explícita InstallStatusLine.
 func (a *Adapter) Install() (adapter.InstallReport, error) {
 	p := a.paths
 	if p.SettingsPath == "" || p.SkillsDir == "" {
 		return adapter.InstallReport{}, errors.New(msgNoPaths)
 	}
 	if p.NobreBin == "" {
-		return adapter.InstallReport{}, errors.New("não achei o binário nobre (coloque-o ao lado do nobred ou no PATH)")
+		return adapter.InstallReport{}, errors.New(msgNoNobre)
 	}
-	rep, err := InstallHooks(p.SettingsPath, p.NobreBin)
+	rep, _, err := installSettings(p.SettingsPath, p.NobreBin, time.Now(), true, false)
 	if err != nil {
 		return rep, err
 	}
@@ -377,4 +416,24 @@ func (a *Adapter) Install() (adapter.InstallReport, error) {
 		rep.Messages = append(rep.Messages, "Skill já instalada; nada a alterar.")
 	}
 	return rep, nil
+}
+
+// InstallStatusLine integra a status line com os caminhos do adaptador.
+func (a *Adapter) InstallStatusLine() (adapter.InstallReport, error) {
+	p := a.paths
+	if p.SettingsPath == "" {
+		return adapter.InstallReport{}, errors.New(msgNoPaths)
+	}
+	if p.NobreBin == "" {
+		return adapter.InstallReport{}, errors.New(msgNoNobre)
+	}
+	return InstallStatusLine(p.SettingsPath, p.NobreBin)
+}
+
+// UninstallStatusLine remove a integração da status line (devolve o original).
+func (a *Adapter) UninstallStatusLine() (adapter.InstallReport, error) {
+	if a.paths.SettingsPath == "" {
+		return adapter.InstallReport{}, errors.New(msgNoPaths)
+	}
+	return UninstallStatusLine(a.paths.SettingsPath, a.paths.NobreBin)
 }

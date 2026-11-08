@@ -106,6 +106,45 @@ func TestSetupInstallsEverythingAndRegistersProject(t *testing.T) {
 	}
 }
 
+func TestSetupStatusLineStepAndOptOut(t *testing.T) {
+	e := newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	os.WriteFile(e.settings, []byte(`{"statusLine":{"type":"command","command":"echo oi"}}`), 0o600)
+	r := e.run(t, "127.0.0.1:1", "", t.TempDir())
+	b, _ := os.ReadFile(e.settings)
+	if r.code != 0 || !strings.Contains(string(b), `"command": "{ /opt/x/bin/nobre statusline || cat; } | {\necho oi\n}"`) ||
+		!strings.Contains(string(b), `"refreshInterval": 60`) {
+		t.Fatalf("%+v\n%s", r, b)
+	}
+	// Hooks e status line num único ler-alterar-gravar: exatamente um backup,
+	// com o conteúdo original.
+	baks, _ := filepath.Glob(e.settings + ".bak-*")
+	if len(baks) != 1 {
+		t.Fatalf("backups = %v", baks)
+	}
+	if orig, _ := os.ReadFile(baks[0]); string(orig) != `{"statusLine":{"type":"command","command":"echo oi"}}` {
+		t.Fatalf("backup = %s", orig)
+	}
+
+	// Original que não dá para embrulhar com segurança: recusa clara, hooks entram.
+	e = newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	os.WriteFile(e.settings, []byte(`{"statusLine":{"type":"command","command":"# só comentário"}}`), 0o600)
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir())
+	b, _ = os.ReadFile(e.settings)
+	if r.code != 1 || !strings.Contains(r.stdout, "! Status line do Claude Code: não consigo integrar esta status line com segurança: o comando só tem comentários") ||
+		!strings.Contains(string(b), `"command": "# só comentário"`) || !strings.Contains(string(b), "hook claude Stop") {
+		t.Fatalf("%+v\n%s", r, b)
+	}
+
+	e = newSetupEnv(t)
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir(), "--sem-statusline")
+	b, _ = os.ReadFile(e.settings)
+	if r.code != 0 || strings.Contains(string(b), "statusLine") || !strings.Contains(r.stdout, "--sem-statusline") {
+		t.Fatalf("%+v\n%s", r, b)
+	}
+}
+
 func TestSetupDeclineProjectAndNotGit(t *testing.T) {
 	e := newSetupEnv(t)
 	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { t.Errorf("API não deveria ser chamada") })
@@ -129,7 +168,7 @@ func TestSetupDryRunWritesNothing(t *testing.T) {
 			t.Fatalf("%s foi criado no dry-run", p)
 		}
 	}
-	for _, want := range []string{"dry-run", "nobred.service", "enable --now nobred", "Instalaria hooks"} {
+	for _, want := range []string{"dry-run", "nobred.service", "enable --now nobred", "Instalaria hooks", "Integraria a status line"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Fatalf("falta %q em %s", want, r.stdout)
 		}
@@ -161,10 +200,14 @@ func TestSetupInvalidSettingsLeavesFileAndRerunIsIdempotent(t *testing.T) {
 		t.Fatal("alterou settings inválido")
 	}
 	os.Remove(e.settings)
+	// Sem settings.json, a execução cria o arquivo: não há o que guardar em backup.
 	e.run(t, "127.0.0.1:1", "", t.TempDir())
+	if m, _ := filepath.Glob(e.settings + ".bak-*"); len(m) != 0 {
+		t.Fatalf("backup sem arquivo anterior: %v", m)
+	}
 	e.ran = nil
 	r = e.run(t, "127.0.0.1:1", "", t.TempDir())
-	if r.code != 0 || !strings.Contains(r.stdout, "já instalados") {
+	if r.code != 0 || !strings.Contains(r.stdout, "já instalados") || !strings.Contains(r.stdout, "Status line já integrada") {
 		t.Fatalf("%+v", r)
 	}
 	if m, _ := filepath.Glob(e.settings + ".bak-*"); len(m) != 0 {
@@ -215,5 +258,49 @@ func TestUnitPATHQuotedForSystemd(t *testing.T) {
 	}
 	if strings.Contains(unitContent("/x", ""), "Environment=") {
 		t.Fatal("PATH vazio não deveria gerar Environment=")
+	}
+}
+
+func TestSetupRemoveStatusLine(t *testing.T) {
+	e := newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	orig := `input=$(cat); echo "$input" | jq -r .model # fim`
+	b, _ := json.Marshal(map[string]any{"statusLine": map[string]any{"type": "command", "command": orig}})
+	os.WriteFile(e.settings, b, 0o600)
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir()); r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	e.ran = nil
+	read := func() string {
+		var root struct {
+			StatusLine map[string]any `json:"statusLine"`
+		}
+		b, _ := os.ReadFile(e.settings)
+		json.Unmarshal(b, &root)
+		s, _ := root.StatusLine["command"].(string)
+		return s
+	}
+	if !strings.Contains(read(), "statusline || cat") {
+		t.Fatalf("não integrou: %q", read())
+	}
+	// Dry-run: só diz o que faria.
+	r := e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover-statusline", "--dry-run")
+	if r.code != 0 || !strings.Contains(r.stdout, "Removeria a integração") || !strings.Contains(read(), "statusline || cat") {
+		t.Fatalf("%+v %q", r, read())
+	}
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover-statusline")
+	if r.code != 0 || read() != orig || !strings.Contains(r.stdout, "Status line restaurada") || len(e.ran) != 0 {
+		t.Fatalf("%+v %q ran=%v", r, read(), e.ran)
+	}
+	// Só a status line: hooks continuam.
+	if b, _ := os.ReadFile(e.settings); !strings.Contains(string(b), "hook claude Stop") {
+		t.Fatalf("hooks sumiram: %s", b)
+	}
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover-statusline")
+	if r.code != 0 || !strings.Contains(r.stdout, "não é do nobre") {
+		t.Fatalf("%+v", r)
+	}
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover-statusline", "--sem-statusline"); r.code != 2 {
+		t.Fatalf("flags conflitantes: %+v", r)
 	}
 }

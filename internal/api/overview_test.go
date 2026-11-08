@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,5 +203,71 @@ func TestLastActivityText(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: %q, quer %q", c.kind, got, c.want)
 		}
+	}
+}
+
+func TestOverviewPlanLimitAlerts(t *testing.T) {
+	old := time.Local
+	time.Local = time.FixedZone("BRT", -3*3600)
+	defer func() { time.Local = old }()
+	a := newTestAPI(t) // testNow = 2026-11-07 12:00 UTC (sábado 09:00 local)
+	post := func(five, seven float64, fiveReset, sevenReset time.Time) {
+		t.Helper()
+		rec := a.do(t, "POST", "/api/plan-limits", map[string]any{"session_id": "s", "rate_limits": map[string]any{
+			"five_hour": map[string]any{"used_percentage": five, "resets_at": fiveReset.Unix()},
+			"seven_day": map[string]any{"used_percentage": seven, "resets_at": sevenReset.Unix()},
+		}}, 0)
+		if rec.Code != 204 {
+			t.Fatalf("POST = %d", rec.Code)
+		}
+	}
+	alerts := func() []string {
+		t.Helper()
+		var out []string
+		for _, al := range decode[overviewResp](t, a.do(t, "GET", "/api/overview", nil, 0)).Alerts {
+			if al.Kind == "plan_limit" {
+				out = append(out, al.Text)
+			}
+		}
+		return out
+	}
+	// 5h reinicia 14:30Z = 11:30 local (sáb); semana reinicia 2026-11-10 22:05Z = ter 19:05 local.
+	five := time.Date(2026, 11, 7, 14, 30, 0, 0, time.UTC)
+	week := time.Date(2026, 11, 10, 22, 5, 0, 0, time.UTC)
+	post(79.9, 50, five, week)
+	if got := alerts(); len(got) != 0 {
+		t.Fatalf("abaixo do aviso = %v", got)
+	}
+	post(80, 91.4, five, week) // 80 = limite exato; mesmo minuto: coalesce com o maior
+	got := alerts()
+	// O alerta leva o resets_at: a UI o esconde quando o relógio do cliente passa dele.
+	raw := a.do(t, "GET", "/api/overview", nil, 0).Body.String()
+	if !strings.Contains(raw, `"resets_at":"2026-11-07T14:30:00Z"`) || !strings.Contains(raw, `"resets_at":"2026-11-10T22:05:00Z"`) {
+		t.Fatalf("alerta sem resets_at: %s", raw)
+	}
+	want := []string{
+		"Sessão de 5 h do plano em 80% (reinicia às 11:30).",
+		"Limite semanal do plano em 91% (reinicia ter às 19:05).",
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("alertas = %q, quer %q", got, want)
+	}
+	// Janela expirada não alerta. (Numa API nova: com a janela de 5 h ainda
+	// vigente, uma leitura com reinício no passado seria descartada.)
+	a = newTestAPI(t)
+	post(99, 99, testNow.Add(-time.Minute), week)
+	got = alerts()
+	if len(got) != 1 || got[0] != "Limite semanal do plano em 99% (reinicia ter às 19:05)." {
+		t.Fatalf("expirada = %q", got)
+	}
+	// plan_warn_pct configurável.
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"plan_warn_pct": 100}, 0); rec.Code != 200 {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	if got = alerts(); len(got) != 0 {
+		t.Fatalf("warn 100 = %q", got)
+	}
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"plan_warn_pct": 0}, 0); rec.Code != 400 {
+		t.Fatalf("plan_warn_pct 0 = %d", rec.Code)
 	}
 }

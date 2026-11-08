@@ -39,6 +39,17 @@ func New(addr string) *Client {
 	return &Client{base: "http://" + addr, hc: &http.Client{Timeout: Timeout}, PID: DetectAgentPID()}
 }
 
+// NewBare é New sem a detecção do PID do agente (que percorre /proc): para
+// chamadas com prazo curto, como a da status line.
+func NewBare(addr string) *Client {
+	return &Client{base: "http://" + addr, hc: &http.Client{Timeout: Timeout}}
+}
+
+// PlanLimits envia ao daemon o JSON {session_id, rate_limits} da status line.
+func (c *Client) PlanLimits(ctx context.Context, body any) error {
+	return c.Do(ctx, "POST", "/api/plan-limits", body, nil)
+}
+
 // DetectAgentPID: NOBRE_AGENT_PID tem prioridade; senão sobe a árvore de
 // processos a partir do pai atual procurando os nomes de todos os adaptadores.
 // Não achar devolve 0.

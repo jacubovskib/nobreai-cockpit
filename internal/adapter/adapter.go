@@ -26,6 +26,13 @@ type Adapter interface {
 	LaunchCommand(bin, initialPrompt string) []string
 }
 
+// StatusLiner é opcional: adaptador cuja status line o Cockpit integra. Fica
+// fora de Install() porque mexe num comando do usuário: só com pedido explícito.
+type StatusLiner interface {
+	InstallStatusLine() (InstallReport, error)
+	UninstallStatusLine() (InstallReport, error)
+}
+
 // HookCall é a chamada de hook repassada pelo `nobre hook`.
 type HookCall struct {
 	Event    string            `json:"event"`

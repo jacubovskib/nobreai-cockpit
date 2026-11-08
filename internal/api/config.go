@@ -60,6 +60,9 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 	case st.Currency != "USD" && st.Currency != "BRL":
 		writeError(w, http.StatusBadRequest, "moeda inválida (use USD ou BRL)")
 		return
+	case st.PlanWarnPct < 1 || st.PlanWarnPct > 100:
+		writeError(w, http.StatusBadRequest, "plan_warn_pct deve ficar entre 1 e 100")
+		return
 	case st.WhereStoppedTTLMin < 0 || st.GraceMin < 0 || st.ReminderEditThreshold < 0 || st.BRLRate < 0:
 		writeError(w, http.StatusBadRequest, "valores numéricos não podem ser negativos")
 		return

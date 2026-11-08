@@ -69,15 +69,31 @@ function useSaveSettings(settings: Settings) {
 }
 
 // ---- Agentes ----
+function InstallResult({ rep }: { rep?: InstallReport }) {
+  if (!rep) return null
+  return (
+    <div role="status" style={{ ...muted, fontSize: 13 }}>
+      {rep.messages.map((m) => <div key={m}>{m}</div>)}
+      {rep.backup && <div>Backup: <code>{rep.backup}</code></div>}
+    </div>
+  )
+}
+
 function AgentCard({ info }: { info: AgentDetection }) {
   const qc = useQueryClient()
+  const refresh = () => qc.invalidateQueries({ queryKey: ['agents'] })
   const install = useMutation({
     mutationFn: () => post<InstallReport>(`/api/agents/${info.agent}/install`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
+    onSuccess: refresh,
+  })
+  // A status line é um comando do usuário: só muda com pedido explícito.
+  const statusLine = useMutation({
+    mutationFn: (action: 'install' | 'uninstall') => post<InstallReport>(`/api/agents/${info.agent}/statusline`, { action }),
+    onSuccess: refresh,
   })
   const d = info.detection
   const installable = info.agent === 'claude'
-  const rep = install.data
+  const slIntegrated = d.checks.find((c) => c.key === 'statusline')?.ok === true
   return (
     <article aria-label={agentInfo(info.agent).name} style={{ ...panel, background: 'var(--bg)', padding: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
@@ -101,26 +117,50 @@ function AgentCard({ info }: { info: AgentDetection }) {
           <button type="button" style={btnPrimary} disabled={install.isPending} onClick={() => install.mutate()}>
             {install.isPending ? 'Instalando…' : 'Instalar o que falta'}
           </button>
-          {rep && (
-            <div role="status" style={{ ...muted, fontSize: 13 }}>
-              {rep.messages.map((m) => <div key={m}>{m}</div>)}
-              {rep.backup && <div>Backup: <code>{rep.backup}</code></div>}
-            </div>
-          )}
+          <InstallResult rep={install.data} />
           <ErrorLine error={install.error} />
+          <p style={{ ...muted, margin: 0, fontSize: 12 }}>
+            Status line: o Cockpit entra no comando da sua status line para ler os limites do plano; a saída continua a mesma.
+          </p>
+          <button type="button" style={btn} disabled={statusLine.isPending}
+            onClick={() => statusLine.mutate(slIntegrated ? 'uninstall' : 'install')}>
+            {statusLine.isPending ? 'Aplicando…' : slIntegrated ? 'Remover integração' : 'Integrar status line'}
+          </button>
+          <InstallResult rep={statusLine.data} />
+          <ErrorLine error={statusLine.error} />
         </div>
       )}
     </article>
   )
 }
 
-function Agents() {
+function PlanWarn({ settings }: { settings: Settings }) {
+  const save = useSaveSettings(settings)
+  const [v, setV] = useState(String(settings.plan_warn_pct ?? 80))
+  const [bad, setBad] = useState<Error | null>(null)
+  const submit = () => {
+    const n = parseNum(v)
+    if (!(Number.isInteger(n) && n >= 1 && n <= 100)) return setBad(new Error('Informe um percentual inteiro de 1 a 100.'))
+    setBad(null)
+    save.mutate({ plan_warn_pct: n })
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+      <label style={field}>Avisar quando o limite do plano passar de (%)
+        <input style={{ ...small, width: 80 }} inputMode="numeric" value={v} onChange={(e) => setV(e.target.value)} />
+      </label>
+      <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} label="Salvar aviso do plano" onSave={submit} />
+    </div>
+  )
+}
+
+function Agents({ settings }: { settings?: Settings }) {
   const agents = useAgents()
   return (
     <Section
       id="agentes"
       title="Agentes detectados"
-      hint="Instala os hooks e a skill do Claude Code neste computador. Codex e Kiro chegam depois."
+      hint="Instala os hooks e a skill do Claude Code neste computador; a status line só é integrada quando você pedir. Codex e Kiro chegam depois."
       action={<button type="button" style={btn} disabled={agents.isFetching} onClick={() => agents.refetch()}>Escanear de novo</button>}
     >
       {agents.isError && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível detectar os agentes.</p>}
@@ -128,6 +168,7 @@ function Agents() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
         {agents.data?.map((a) => <AgentCard key={a.agent} info={a} />)}
       </div>
+      {settings && <PlanWarn settings={settings} />}
     </Section>
   )
 }
@@ -485,7 +526,7 @@ export function Config() {
       </header>
       {failed && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar as configurações.</p>}
       {!failed && (settings.isPending || limits.isPending || projects.isPending) && <p className="placeholder">Carregando…</p>}
-      <Agents />
+      <Agents settings={settings.data} />
       {limits.data && <Limits limits={limits.data} />}
       {settings.data && <CardCreation settings={settings.data} />}
       {settings.data && <Handoff settings={settings.data} />}

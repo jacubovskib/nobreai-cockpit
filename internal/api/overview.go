@@ -70,12 +70,15 @@ type TodayTotals struct {
 }
 
 // Alert é um item de "Precisa de atenção". Kind: stale, limit_warn,
-// incomplete ou unpriced.
+// incomplete, unpriced ou plan_limit.
 type Alert struct {
 	Kind    string `json:"kind"`
 	CardKey string `json:"card_key"`
 	Agent   string `json:"agent"`
 	Text    string `json:"text"`
+	// ResetsAt (só plan_limit): quando a janela reinicia; a UI esconde o
+	// alerta quando o relógio do cliente passa dele.
+	ResetsAt *time.Time `json:"resets_at,omitempty"`
 }
 
 func (s *server) overviewRoutes(mux *http.ServeMux) {
@@ -321,6 +324,12 @@ func (s *server) buildOverview() (Overview, error) {
 		o.Alerts = append(o.Alerts, Alert{Kind: "unpriced",
 			Text: "Há uso de modelos sem preço configurado: " + strings.Join(unpriced, ", ") + "."})
 	}
+
+	planAlerts, err := s.planAlerts(now)
+	if err != nil {
+		return o, err
+	}
+	o.Alerts = append(o.Alerts, planAlerts...)
 
 	if o.Events, err = s.st.RecentEvents(30); err != nil {
 		return o, err

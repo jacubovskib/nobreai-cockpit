@@ -40,7 +40,9 @@ Administração:
   nobre prompt save --name <n> --tag <t>                  salva um prompt (corpo pelo stdin)
   nobre run <agente> [args...]                            roda o agente com o terminal visível na plataforma (Ctrl+] solta)
   nobre ui                                                abre o Cockpit no navegador
-  nobre setup [--dry-run]                                 instala hooks e skill do Claude Code e ativa o daemon
+  nobre setup [--dry-run] [--sem-statusline]              instala hooks, skill e status line do Claude Code e ativa o daemon
+  nobre setup --remover-statusline [--dry-run]            só remove a integração da status line (devolve o comando original)
+  nobre statusline [--resumo]                             status line do Claude Code: repassa o stdin e envia os limites do plano
 
 Hooks (chamados pelo agente, nunca falham):
   nobre hook <agente> <Evento>
@@ -60,11 +62,16 @@ type cli struct {
 	sd *setupDeps
 	// rd são os pontos do terminal local do `nobre run`; nil = padrões.
 	rd *runDeps
+	// spawn entrega o payload dos limites a um processo destacado; nil = envia
+	// na hora, com 300 ms (testes).
+	spawn func(payload []byte)
 }
 
 func newCLI() *cli {
-	return &cli{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, cwd: os.Getwd,
+	c := &cli{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, cwd: os.Getwd,
 		opener: func(url string) error { return exec.Command("xdg-open", url).Start() }}
+	c.spawn = func(p []byte) { spawnStatuslineSender(c.addr())(p) }
+	return c
 }
 
 func main() { os.Exit(newCLI().run(os.Args[1:])) }
@@ -84,6 +91,9 @@ func (c *cli) run(args []string) int {
 	cmd, rest := args[0], args[1:]
 	if cmd == "hook" {
 		return c.hook(rest)
+	}
+	if cmd == "statusline" && !wantsHelp(rest) {
+		return c.statusline(rest)
 	}
 	if cmd == "run" && (len(rest) == 0 || rest[0] != "-h" && rest[0] != "--help") {
 		return c.runAgent(rest) // os argumentos depois do agente são do agente, inclusive --help
