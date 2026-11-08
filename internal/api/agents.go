@@ -19,6 +19,7 @@ type agentInfo struct {
 func (s *server) agentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", s.listAgents)
 	mux.HandleFunc("POST /api/agents/{agent}/install", s.installAgent)
+	mux.HandleFunc("POST /api/agents/{agent}/statusline", s.agentStatusLine)
 }
 
 // listAgents devolve a detecção de cada agente. Agentes sem adaptador
@@ -41,22 +42,25 @@ func (s *server) listAgents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// installAgent instala hooks e skill do agente, no lado do daemon (com os
-// caminhos do usuário que roda o nobred).
-func (s *server) installAgent(w http.ResponseWriter, r *http.Request) {
+// agentAdapter acha o adaptador do agente da rota; responde 501 (agente
+// conhecido sem adaptador) ou 404 e devolve false quando não há.
+func (s *server) agentAdapter(w http.ResponseWriter, r *http.Request) (adapter.Adapter, bool) {
 	name := r.PathValue("agent")
-	ad, ok := s.deps.Adapters[name]
-	if !ok {
-		for _, n := range agentOrder {
-			if n == name {
-				writeError(w, http.StatusNotImplemented, msgAdapterLater)
-				return
-			}
-		}
-		writeError(w, http.StatusNotFound, "agente desconhecido")
-		return
+	if ad, ok := s.deps.Adapters[name]; ok {
+		return ad, true
 	}
-	rep, err := ad.Install()
+	for _, n := range agentOrder {
+		if n == name {
+			writeError(w, http.StatusNotImplemented, msgAdapterLater)
+			return nil, false
+		}
+	}
+	writeError(w, http.StatusNotFound, "agente desconhecido")
+	return nil, false
+}
+
+// writeInstallReport responde o relatório de instalação e avisa a UI.
+func (s *server) writeInstallReport(w http.ResponseWriter, rep adapter.InstallReport, err error) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -69,4 +73,47 @@ func (s *server) installAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publish("config")
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// installAgent instala hooks e skill do agente, no lado do daemon (com os
+// caminhos do usuário que roda o nobred). Não mexe na status line.
+func (s *server) installAgent(w http.ResponseWriter, r *http.Request) {
+	ad, ok := s.agentAdapter(w, r)
+	if !ok {
+		return
+	}
+	rep, err := ad.Install()
+	s.writeInstallReport(w, rep, err)
+}
+
+// agentStatusLine integra ou remove a status line do agente: ação explícita,
+// separada de "Instalar o que falta", porque mexe num comando do usuário.
+func (s *server) agentStatusLine(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Action string `json:"action"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if in.Action != "install" && in.Action != "uninstall" {
+		writeError(w, http.StatusBadRequest, `action deve ser "install" ou "uninstall"`)
+		return
+	}
+	ad, ok := s.agentAdapter(w, r)
+	if !ok {
+		return
+	}
+	sl, ok := ad.(adapter.StatusLiner)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "este agente não tem status line integrável")
+		return
+	}
+	var rep adapter.InstallReport
+	var err error
+	if in.Action == "install" {
+		rep, err = sl.InstallStatusLine()
+	} else {
+		rep, err = sl.UninstallStatusLine()
+	}
+	s.writeInstallReport(w, rep, err)
 }

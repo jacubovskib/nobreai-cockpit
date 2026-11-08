@@ -74,9 +74,75 @@ func TestAgentsListAndInstall(t *testing.T) {
 	}
 	rows = decode[[]row](t, a.do(t, "GET", "/api/agents", nil, 0))
 	for _, c := range rows[0].Detection.Checks {
-		if (c.Key == "hooks" || c.Key == "skill" || c.Key == "statusline") && !c.OK {
+		if (c.Key == "hooks" || c.Key == "skill") && !c.OK {
 			t.Fatalf("%+v", c)
 		}
+		// "Instalar o que falta" não integra a status line (consentimento).
+		if c.Key == "statusline" && c.OK {
+			t.Fatalf("status line integrada sem pedido: %+v", c)
+		}
+	}
+	if strings.Contains(string(b), "statusLine") {
+		t.Fatalf("install mexeu na status line: %s", b)
+	}
+}
+
+func TestAgentStatusLineInstallAndUninstall(t *testing.T) {
+	a, settings, _ := agentsAPI(t)
+	os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"echo oi"}}`), 0o600)
+	ch, cancel := a.hub.Subscribe()
+	defer cancel()
+	statusOK := func() bool {
+		t.Helper()
+		type row struct {
+			Detection adapter.Detection `json:"detection"`
+		}
+		for _, c := range decode[[]row](t, a.do(t, "GET", "/api/agents", nil, 0))[0].Detection.Checks {
+			if c.Key == "statusline" {
+				return c.OK
+			}
+		}
+		t.Fatal("sem check statusline")
+		return false
+	}
+	rec := a.do(t, "POST", "/api/agents/claude/statusline", map[string]any{"action": "install"}, 0)
+	rep := decode[adapter.InstallReport](t, rec)
+	if rec.Code != 200 || len(rep.Changed) != 1 || rep.Backup == "" || !statusOK() {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	select {
+	case k := <-ch:
+		if k != "config" {
+			t.Fatalf("hub = %q", k)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sem publicação config")
+	}
+	b, _ := os.ReadFile(settings)
+	if !strings.Contains(string(b), `statusline || cat; } | {\necho oi\n}`) {
+		t.Fatalf("settings: %s", b)
+	}
+	rec = a.do(t, "POST", "/api/agents/claude/statusline", map[string]any{"action": "uninstall"}, 0)
+	if rec.Code != 200 || statusOK() {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if b, _ := os.ReadFile(settings); !strings.Contains(string(b), `"command": "echo oi"`) {
+		t.Fatalf("settings: %s", b)
+	}
+	// Ação inválida, recusa da status line, agente sem adaptador ou desconhecido.
+	if rec := a.do(t, "POST", "/api/agents/claude/statusline", map[string]any{"action": "x"}, 0); rec.Code != 400 {
+		t.Fatalf("ação inválida = %d", rec.Code)
+	}
+	os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"# só comentário"}}`), 0o600)
+	rec = a.do(t, "POST", "/api/agents/claude/statusline", map[string]any{"action": "install"}, 0)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "não consigo integrar esta status line com segurança") {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if rec := a.do(t, "POST", "/api/agents/codex/statusline", map[string]any{"action": "install"}, 0); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("codex = %d", rec.Code)
+	}
+	if rec := a.do(t, "POST", "/api/agents/xyz/statusline", map[string]any{"action": "install"}, 0); rec.Code != http.StatusNotFound {
+		t.Fatalf("xyz = %d", rec.Code)
 	}
 }
 

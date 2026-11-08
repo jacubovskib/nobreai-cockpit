@@ -69,15 +69,31 @@ function useSaveSettings(settings: Settings) {
 }
 
 // ---- Agentes ----
+function InstallResult({ rep }: { rep?: InstallReport }) {
+  if (!rep) return null
+  return (
+    <div role="status" style={{ ...muted, fontSize: 13 }}>
+      {rep.messages.map((m) => <div key={m}>{m}</div>)}
+      {rep.backup && <div>Backup: <code>{rep.backup}</code></div>}
+    </div>
+  )
+}
+
 function AgentCard({ info }: { info: AgentDetection }) {
   const qc = useQueryClient()
+  const refresh = () => qc.invalidateQueries({ queryKey: ['agents'] })
   const install = useMutation({
     mutationFn: () => post<InstallReport>(`/api/agents/${info.agent}/install`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
+    onSuccess: refresh,
+  })
+  // A status line é um comando do usuário: só muda com pedido explícito.
+  const statusLine = useMutation({
+    mutationFn: (action: 'install' | 'uninstall') => post<InstallReport>(`/api/agents/${info.agent}/statusline`, { action }),
+    onSuccess: refresh,
   })
   const d = info.detection
   const installable = info.agent === 'claude'
-  const rep = install.data
+  const slIntegrated = d.checks.find((c) => c.key === 'statusline')?.ok === true
   return (
     <article aria-label={agentInfo(info.agent).name} style={{ ...panel, background: 'var(--bg)', padding: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
@@ -101,13 +117,17 @@ function AgentCard({ info }: { info: AgentDetection }) {
           <button type="button" style={btnPrimary} disabled={install.isPending} onClick={() => install.mutate()}>
             {install.isPending ? 'Instalando…' : 'Instalar o que falta'}
           </button>
-          {rep && (
-            <div role="status" style={{ ...muted, fontSize: 13 }}>
-              {rep.messages.map((m) => <div key={m}>{m}</div>)}
-              {rep.backup && <div>Backup: <code>{rep.backup}</code></div>}
-            </div>
-          )}
+          <InstallResult rep={install.data} />
           <ErrorLine error={install.error} />
+          <p style={{ ...muted, margin: 0, fontSize: 12 }}>
+            Status line: o Cockpit entra no comando da sua status line para ler os limites do plano; a saída continua a mesma.
+          </p>
+          <button type="button" style={btn} disabled={statusLine.isPending}
+            onClick={() => statusLine.mutate(slIntegrated ? 'uninstall' : 'install')}>
+            {statusLine.isPending ? 'Aplicando…' : slIntegrated ? 'Remover integração' : 'Integrar status line'}
+          </button>
+          <InstallResult rep={statusLine.data} />
+          <ErrorLine error={statusLine.error} />
         </div>
       )}
     </article>
@@ -140,7 +160,7 @@ function Agents({ settings }: { settings?: Settings }) {
     <Section
       id="agentes"
       title="Agentes detectados"
-      hint="Instala os hooks e a skill do Claude Code neste computador. Codex e Kiro chegam depois."
+      hint="Instala os hooks e a skill do Claude Code neste computador; a status line só é integrada quando você pedir. Codex e Kiro chegam depois."
       action={<button type="button" style={btn} disabled={agents.isFetching} onClick={() => agents.refetch()}>Escanear de novo</button>}
     >
       {agents.isError && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível detectar os agentes.</p>}

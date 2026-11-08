@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
 )
@@ -108,17 +109,19 @@ func (l *checklist) bad(format string, a ...any) {
 }
 
 // setup instala hooks, status line e skill do Claude Code, grava e ativa o serviço do
-// daemon e oferece cadastrar o repositório atual como projeto.
+// daemon e oferece cadastrar o repositório atual como projeto. Com
+// --remover-statusline só desfaz a integração da status line.
 func (c *cli) setup(args []string) error {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	dry := fs.Bool("dry-run", false, "mostra o que mudaria sem gravar nada")
 	noSL := fs.Bool("sem-statusline", false, "não integra a status line do Claude Code")
+	rmSL := fs.Bool("remover-statusline", false, "só remove a integração da status line (devolve o comando original)")
 	pos, err := c.parse(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(pos) != 0 {
-		return usagef("uso: nobre setup [--dry-run] [--sem-statusline]")
+	if len(pos) != 0 || (*noSL && *rmSL) {
+		return usagef("uso: nobre setup [--dry-run] [--sem-statusline | --remover-statusline]")
 	}
 	d := c.sd
 	if d == nil {
@@ -131,6 +134,10 @@ func (c *cli) setup(args []string) error {
 	if *dry {
 		prefix = "[dry-run] "
 		fmt.Fprintln(c.out, "Modo dry-run: nada será gravado.")
+	}
+
+	if *rmSL {
+		return c.removeStatusLine(d, *dry, l)
 	}
 
 	// 1. Hooks e status line do Claude Code (uma só leitura/gravação do
@@ -171,6 +178,28 @@ func (c *cli) setup(args []string) error {
 
 	if l.warn {
 		return errors.New("Setup terminou com pendências (itens com !).")
+	}
+	return nil
+}
+
+// removeStatusLine é o "nobre setup --remover-statusline": só desfaz a
+// integração da status line; hooks, skill, serviço e projeto ficam como estão.
+func (c *cli) removeStatusLine(d *setupDeps, dry bool, l *checklist) error {
+	var rep adapter.InstallReport
+	var err error
+	prefix := ""
+	if dry {
+		prefix = "[dry-run] "
+		rep, err = claude.PlanUninstallStatusLine(d.SettingsPath)
+	} else {
+		rep, err = claude.UninstallStatusLine(d.SettingsPath, d.NobreBin)
+	}
+	if err != nil {
+		l.bad("Status line do Claude Code: %v", err)
+		return errors.New("Setup terminou com pendências (itens com !).")
+	}
+	for _, m := range rep.Messages {
+		l.ok("%s%s", prefix, m)
 	}
 	return nil
 }

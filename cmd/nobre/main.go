@@ -41,6 +41,7 @@ Administração:
   nobre run <agente> [args...]                            roda o agente com o terminal visível na plataforma (Ctrl+] solta)
   nobre ui                                                abre o Cockpit no navegador
   nobre setup [--dry-run] [--sem-statusline]              instala hooks, skill e status line do Claude Code e ativa o daemon
+  nobre setup --remover-statusline [--dry-run]            só remove a integração da status line (devolve o comando original)
   nobre statusline [--resumo]                             status line do Claude Code: repassa o stdin e envia os limites do plano
 
 Hooks (chamados pelo agente, nunca falham):

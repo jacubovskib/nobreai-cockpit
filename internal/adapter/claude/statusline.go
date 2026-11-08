@@ -262,6 +262,15 @@ func installStatusLine(settingsPath, nobreBin string, now time.Time, write bool)
 // UninstallStatusLine desfaz InstallStatusLine: devolve o comando original;
 // na forma --resumo remove a statusLine (era só nossa). O refreshInterval fica.
 func UninstallStatusLine(settingsPath, nobreBin string) (adapter.InstallReport, error) {
+	return uninstallStatusLine(settingsPath, time.Now(), true)
+}
+
+// PlanUninstallStatusLine é o dry-run de UninstallStatusLine.
+func PlanUninstallStatusLine(settingsPath string) (adapter.InstallReport, error) {
+	return uninstallStatusLine(settingsPath, time.Now(), false)
+}
+
+func uninstallStatusLine(settingsPath string, now time.Time, write bool) (adapter.InstallReport, error) {
 	rep := adapter.InstallReport{Changed: []string{}, Messages: []string{}}
 	if settingsPath == "" {
 		return rep, errors.New("caminho do settings.json não definido")
@@ -283,18 +292,29 @@ func UninstallStatusLine(settingsPath, nobreBin string) (adapter.InstallReport, 
 		rep.Messages = append(rep.Messages, "Status line não é do nobre; nada a alterar.")
 		return rep, nil
 	}
+	rep.Changed = []string{"statusLine"}
+	if !write {
+		if cp.summary {
+			rep.Messages = append(rep.Messages, "Removeria a integração da status line ("+settingsPath+"): sem status line anterior, a statusLine sai.")
+		} else {
+			rep.Messages = append(rep.Messages, "Removeria a integração da status line ("+settingsPath+"), voltando a: "+cp.orig)
+		}
+		return rep, nil
+	}
 	if cp.summary {
 		delete(root, "statusLine")
 	} else {
 		sl["command"] = cp.orig
 	}
-	rep.Changed = []string{"statusLine"}
-	bak, err := commitSettings(settingsPath, root, raw, exists, time.Now())
+	bak, err := commitSettings(settingsPath, root, raw, exists, now)
 	if err != nil {
 		return rep, err
 	}
 	rep.Backup = bak
 	rep.Messages = append(rep.Messages, "Status line restaurada.")
+	if bak != "" {
+		rep.Messages = append(rep.Messages, "Backup: "+bak)
+	}
 	return rep, nil
 }
 
@@ -318,7 +338,7 @@ func statusLineState(settingsPath string) (bin, detail string) {
 	case perr != nil:
 		return "", perr.Error()
 	case !ours:
-		return "", "a status line não passa pelo nobre: rode nobre setup"
+		return "", "a status line não passa pelo nobre: use Integrar status line ou rode nobre setup"
 	}
 	return cp.bin, ""
 }

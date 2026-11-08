@@ -386,21 +386,21 @@ func InstallSkill(dir string) error {
 	return writeFileAtomic(SkillFile(dir), []byte(skillContent))
 }
 
-// Install instala hooks, status line e skill com os caminhos do adaptador.
+const msgNoNobre = "não achei o binário nobre (coloque-o ao lado do nobred ou no PATH)"
+
+// Install instala hooks e skill com os caminhos do adaptador. A status line
+// não entra: é a ação explícita InstallStatusLine.
 func (a *Adapter) Install() (adapter.InstallReport, error) {
 	p := a.paths
 	if p.SettingsPath == "" || p.SkillsDir == "" {
 		return adapter.InstallReport{}, errors.New(msgNoPaths)
 	}
 	if p.NobreBin == "" {
-		return adapter.InstallReport{}, errors.New("não achei o binário nobre (coloque-o ao lado do nobred ou no PATH)")
+		return adapter.InstallReport{}, errors.New(msgNoNobre)
 	}
-	rep, slErr, err := installSettings(p.SettingsPath, p.NobreBin, time.Now(), true, true)
+	rep, _, err := installSettings(p.SettingsPath, p.NobreBin, time.Now(), true, false)
 	if err != nil {
 		return rep, err
-	}
-	if slErr != nil {
-		rep.Messages = append(rep.Messages, "Status line não integrada: "+slErr.Error())
 	}
 	need, err := PlanSkill(p.SkillsDir)
 	if err != nil {
@@ -416,4 +416,24 @@ func (a *Adapter) Install() (adapter.InstallReport, error) {
 		rep.Messages = append(rep.Messages, "Skill já instalada; nada a alterar.")
 	}
 	return rep, nil
+}
+
+// InstallStatusLine integra a status line com os caminhos do adaptador.
+func (a *Adapter) InstallStatusLine() (adapter.InstallReport, error) {
+	p := a.paths
+	if p.SettingsPath == "" {
+		return adapter.InstallReport{}, errors.New(msgNoPaths)
+	}
+	if p.NobreBin == "" {
+		return adapter.InstallReport{}, errors.New(msgNoNobre)
+	}
+	return InstallStatusLine(p.SettingsPath, p.NobreBin)
+}
+
+// UninstallStatusLine remove a integração da status line (devolve o original).
+func (a *Adapter) UninstallStatusLine() (adapter.InstallReport, error) {
+	if a.paths.SettingsPath == "" {
+		return adapter.InstallReport{}, errors.New(msgNoPaths)
+	}
+	return UninstallStatusLine(a.paths.SettingsPath, a.paths.NobreBin)
 }

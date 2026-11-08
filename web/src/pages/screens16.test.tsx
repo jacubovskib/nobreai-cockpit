@@ -114,6 +114,36 @@ describe('Config', () => {
     expect(fn.mock.calls.some(([u, i]) => u === '/api/agents/claude/install' && i?.method === 'POST')).toBe(true)
   })
 
+  it('status line é uma ação separada: integrar e remover', async () => {
+    const withSL = (ok: boolean) => [{ ...agents[0], detection: { ...agents[0].detection, checks: [
+      ...agents[0].detection.checks, { key: 'statusline', label: 'Status line integrada', detail: '', ok },
+    ] } }, ...agents.slice(1)]
+    const fn = mock({ ...routes, '/api/agents': withSL(false),
+      'POST /api/agents/claude/statusline': { changed: ['statusLine'], backup: '/h/.claude/settings.json.bak-1', messages: ['Status line integrada.'] } })
+    const { unmount } = wrap(<Config />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Integrar status line' }))
+    expect(await screen.findByText('Status line integrada.')).toBeInTheDocument()
+    expect(calls(fn, 'POST', '/api/agents/claude/statusline')).toEqual([{ action: 'install' }])
+    expect(calls(fn, 'POST', '/api/agents/claude/install')).toHaveLength(0)
+    unmount()
+
+    const fn2 = mock({ ...routes, '/api/agents': withSL(true),
+      'POST /api/agents/claude/statusline': { changed: ['statusLine'], backup: '', messages: ['Status line restaurada.'] } })
+    wrap(<Config />)
+    expect(screen.queryByRole('button', { name: 'Integrar status line' })).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: 'Remover integração' }))
+    expect(await screen.findByText('Status line restaurada.')).toBeInTheDocument()
+    expect(calls(fn2, 'POST', '/api/agents/claude/statusline')).toEqual([{ action: 'uninstall' }])
+  })
+
+  it('recusa da status line aparece na tela', async () => {
+    mock({ ...routes, '/api/agents': agents,
+      'POST /api/agents/claude/statusline': { status: 500, body: { error: 'não consigo integrar esta status line com segurança: o comando só tem comentários' } } })
+    wrap(<Config />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Integrar status line' }))
+    expect(await screen.findByText(/não consigo integrar esta status line com segurança/)).toBeInTheDocument()
+  })
+
   it('erro na instalação aparece na tela', async () => {
     mock({ ...routes, '/api/agents': agents,
       'POST /api/agents/claude/install': { status: 500, body: { error: '~/.claude/settings.json não é um JSON válido; nada foi alterado' } } })

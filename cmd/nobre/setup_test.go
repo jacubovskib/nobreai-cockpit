@@ -253,3 +253,47 @@ func TestUnitPATHQuotedForSystemd(t *testing.T) {
 		t.Fatal("PATH vazio não deveria gerar Environment=")
 	}
 }
+
+func TestSetupRemoveStatusLine(t *testing.T) {
+	e := newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	orig := `input=$(cat); echo "$input" | jq -r .model # fim`
+	b, _ := json.Marshal(map[string]any{"statusLine": map[string]any{"type": "command", "command": orig}})
+	os.WriteFile(e.settings, b, 0o600)
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir()); r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	e.ran = nil
+	read := func() string {
+		var root struct {
+			StatusLine map[string]any `json:"statusLine"`
+		}
+		b, _ := os.ReadFile(e.settings)
+		json.Unmarshal(b, &root)
+		s, _ := root.StatusLine["command"].(string)
+		return s
+	}
+	if !strings.Contains(read(), "statusline || cat") {
+		t.Fatalf("não integrou: %q", read())
+	}
+	// Dry-run: só diz o que faria.
+	r := e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover-statusline", "--dry-run")
+	if r.code != 0 || !strings.Contains(r.stdout, "Removeria a integração") || !strings.Contains(read(), "statusline || cat") {
+		t.Fatalf("%+v %q", r, read())
+	}
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover-statusline")
+	if r.code != 0 || read() != orig || !strings.Contains(r.stdout, "Status line restaurada") || len(e.ran) != 0 {
+		t.Fatalf("%+v %q ran=%v", r, read(), e.ran)
+	}
+	// Só a status line: hooks continuam.
+	if b, _ := os.ReadFile(e.settings); !strings.Contains(string(b), "hook claude Stop") {
+		t.Fatalf("hooks sumiram: %s", b)
+	}
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover-statusline")
+	if r.code != 0 || !strings.Contains(r.stdout, "não é do nobre") {
+		t.Fatalf("%+v", r)
+	}
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover-statusline", "--sem-statusline"); r.code != 2 {
+		t.Fatalf("flags conflitantes: %+v", r)
+	}
+}

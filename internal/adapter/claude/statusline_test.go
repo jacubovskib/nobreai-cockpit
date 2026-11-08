@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 )
 
 // userCmd é a status line real do usuário (bash: ${cwd/#$HOME/~}, $(cat), aspas, \033).
@@ -418,5 +420,55 @@ func TestStatusLineRefusesUnsafeOriginal(t *testing.T) {
 		if out, err := exec.Command("bash", "-n", "-c", w).CombinedOutput(); err != nil {
 			t.Fatalf("%q: sintaxe inválida: %v %s", orig, err, out)
 		}
+	}
+}
+
+// Install() (botão "Instalar o que falta") não mexe na status line: ela é uma
+// ação separada e explícita (InstallStatusLine/UninstallStatusLine do adaptador).
+func TestAdapterInstallLeavesStatusLineAndSeparateActions(t *testing.T) {
+	e := newEnv(t)
+	b := fakeNobre(t)
+	p := slSettings(t, map[string]any{"type": "command", "command": userCmd})
+	e.a.SetPaths(Paths{SettingsPath: p, SkillsDir: t.TempDir(), NobreBin: b, ClaudeBin: b})
+	rep, err := e.a.Install()
+	if err != nil || readHooks(t, p)["Stop"] == nil {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := readSL(t, p)["command"]; got != userCmd {
+		t.Fatalf("Install mexeu na status line: %q", got)
+	}
+	for _, c := range rep.Changed {
+		if c == "statusLine" {
+			t.Fatalf("changed = %v", rep.Changed)
+		}
+	}
+	var sl adapter.StatusLiner = e.a
+	if rep, err := sl.InstallStatusLine(); err != nil || len(rep.Changed) != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := readSL(t, p)["command"]; got != wrapCommand(b, userCmd) {
+		t.Fatalf("integrada: %q", got)
+	}
+	if rep, err := sl.UninstallStatusLine(); err != nil || len(rep.Changed) != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := readSL(t, p)["command"]; got != userCmd {
+		t.Fatalf("removida: %q", got)
+	}
+	e.a.SetPaths(Paths{})
+	if _, err := e.a.InstallStatusLine(); err == nil {
+		t.Fatal("sem caminhos deveria falhar")
+	}
+}
+
+func TestUninstallStatusLineDryRun(t *testing.T) {
+	p := slSettings(t, map[string]any{"type": "command", "command": wrapCommand(bin, "echo hi")})
+	before := string(mustRead(t, p))
+	rep, err := PlanUninstallStatusLine(p)
+	if err != nil || len(rep.Changed) != 1 || string(mustRead(t, p)) != before || !strings.Contains(strings.Join(rep.Messages, " "), "echo hi") {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if m, _ := filepath.Glob(p + ".bak-*"); len(m) != 0 {
+		t.Fatalf("backup no dry-run: %v", m)
 	}
 }
