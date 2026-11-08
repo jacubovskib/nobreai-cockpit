@@ -137,13 +137,6 @@ func parseStatusLine(cmd string) (sl slCmd, ours bool, err error) {
 	return sl, true, ErrStatusLineShape
 }
 
-func (sl slCmd) build(bin string) string {
-	if sl.summary {
-		return summaryCommand(bin)
-	}
-	return wrapCommand(bin, sl.orig)
-}
-
 // statusLineOf devolve o objeto statusLine de root (nil se ausente).
 func statusLineOf(root map[string]any) (map[string]any, error) {
 	v, present := root["statusLine"]
@@ -203,8 +196,14 @@ func applyStatusLine(root map[string]any, nobreBin string) (slResult, error) {
 	switch {
 	case perr != nil:
 		return slResult{}, perr
+	case ours && cp.summary:
+		want = summaryCommand(nobreBin)
 	case ours:
-		want = cp.build(nobreBin)
+		// Reinstalar/migrar também embrulha o original: mesma checagem.
+		if why := unsafeOriginal(cp.orig); why != "" {
+			return slResult{}, fmt.Errorf("%w: %s", ErrStatusLineUnsafe, why)
+		}
+		want = wrapCommand(nobreBin, cp.orig)
 	case strings.TrimSpace(cur) == "":
 		want = summaryCommand(nobreBin)
 	default:

@@ -410,6 +410,19 @@ func TestStatusLineRefusesUnsafeOriginal(t *testing.T) {
 			t.Fatalf("%q: %+v %v %v", orig, rep, slErr, err)
 		}
 	}
+	// Wrapper antigo em volta de um original inseguro: reinstalar (migrar)
+	// também recusa; desinstalar devolve o original.
+	old := bin + " statusline | {\n# só comentário\n}"
+	p := slSettings(t, map[string]any{"type": "command", "command": old})
+	if _, err := InstallStatusLine(p, "/outro/nobre"); !errors.Is(err, ErrStatusLineUnsafe) {
+		t.Fatalf("reinstalação: err = %v", err)
+	}
+	if got := readSL(t, p)["command"]; got != old {
+		t.Fatalf("alterou: %q", got)
+	}
+	if _, err := UninstallStatusLine(p, bin); err != nil || readSL(t, p)["command"] != "# só comentário" {
+		t.Fatalf("desinstalar: %v %q", err, readSL(t, p)["command"])
+	}
 	// Barra invertida escapada (par) e comentário depois de comando são seguros.
 	for _, orig := range []string{"echo a \\\\", "echo hi # c", "# cabeçalho\necho hi"} {
 		p := slSettings(t, map[string]any{"type": "command", "command": orig})
