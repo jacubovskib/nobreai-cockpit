@@ -43,6 +43,7 @@ func (s *Store) RecordPlanLimits(r domain.PlanReading) (changed bool, err error)
 	}
 	at := fmtTime(r.At)
 	minute := r.At.UTC().Format("2006-01-02T15:04")
+	minuteStart := fmtTime(r.At.UTC().Truncate(time.Minute))
 	for _, w := range []struct {
 		name string
 		v    *domain.PlanWindow
@@ -70,8 +71,9 @@ func (s *Store) RecordPlanLimits(r domain.PlanReading) (changed bool, err error)
 			}
 		}
 		res, err := tx.Exec(`UPDATE plan_limits SET used_pct=MAX(used_pct, ?), received_at=?, session_id=?
-			WHERE window=? AND resets_at IS ? AND strftime('%Y-%m-%dT%H:%M', received_at) = ?`,
-			w.v.UsedPct, at, r.SessionID, w.name, resets, minute)
+			WHERE window=? AND julianday(received_at) >= julianday(?) AND resets_at IS ?
+			AND strftime('%Y-%m-%dT%H:%M', received_at) = ?`,
+			w.v.UsedPct, at, r.SessionID, w.name, minuteStart, resets, minute)
 		if err != nil {
 			return false, err
 		}
