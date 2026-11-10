@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppRoutes } from './routes'
@@ -45,5 +45,36 @@ describe('Navegação', () => {
     renderApp('/worktrees')
     expect(await screen.findByRole('heading', { name: 'Worktrees' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Worktrees/ })).toHaveAttribute('aria-current', 'page')
+  })
+})
+
+describe('Seletor de projeto', () => {
+  const base = {
+    '/api/health': { ok: true, version: '0.1.0' }, '/api/settings': { demo: false },
+    '/api/projects': [{ id: 1, name: 'cockpit', path: '/w/cockpit', capture: true }, { id: 2, name: 'site', path: '/w/site', capture: true }],
+    '/api/cards': [], '/api/usage/totals?group=project': [],
+  }
+  const hrefs = () => screen.getAllByRole('link').map((a) => a.getAttribute('href'))
+
+  it('lista os projetos e leva o filtro aos links do menu', async () => {
+    mockApi(base)
+    renderApp('/board')
+    const sel = await screen.findByRole('combobox', { name: 'Projeto' })
+    await screen.findByRole('option', { name: 'site' })
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Todos os projetos', 'cockpit', 'site'])
+    fireEvent.change(sel, { target: { value: '2' } })
+    await waitFor(() => expect(hrefs().every((h) => h!.endsWith('?projeto=2'))).toBe(true))
+    expect(screen.getByRole('link', { name: /Board/ })).toHaveAttribute('aria-current', 'page')
+    fireEvent.change(sel, { target: { value: '' } })
+    await waitFor(() => expect(hrefs().some((h) => h!.includes('projeto'))).toBe(false))
+    expect(sel).toHaveValue('')
+  })
+  it('id desconhecido na URL vale Todos', async () => {
+    mockApi(base)
+    renderApp('/?projeto=99')
+    const sel = await screen.findByRole('combobox', { name: 'Projeto' })
+    await screen.findByRole('option', { name: 'site' })
+    expect(sel).toHaveValue('')
+    expect(hrefs().some((h) => h!.includes('projeto'))).toBe(false)
   })
 })

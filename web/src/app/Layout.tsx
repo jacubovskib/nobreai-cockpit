@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { useHealth, useSettings } from '../api/queries'
+import { useHealth, useProjects, useSettings } from '../api/queries'
+import { useProjectFilter, withProject } from './project'
 import { useStream } from '../api/useStream'
 import { CurrencyContext } from '../ui/money'
 
@@ -72,6 +73,8 @@ export function Layout() {
   useStream()
   const settings = useSettings()
   // Toda tela abaixo mostra custo na moeda configurada (Money/useMoney).
+  const projects = useProjects()
+  const { projectId, setProjectId } = useProjectFilter()
   const currency = { currency: settings.data?.currency, rate: settings.data?.brl_rate }
   return (
     <CurrencyContext.Provider value={currency}>
@@ -88,9 +91,22 @@ export function Layout() {
             <span className="brand-sub">pessoal · local</span>
           </div>
         </div>
+        <div style={{ padding: '0 12px 12px' }}>
+          <select
+            aria-label="Projeto"
+            value={projectId ?? ''}
+            onChange={(e) => setProjectId(e.target.value === '' ? null : Number(e.target.value))}
+            style={{ width: '100%', minHeight: 44, padding: '0 10px', borderRadius: 8, border: '1px solid #2E333E', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' }}
+          >
+            <option value="">Todos os projetos</option>
+            {[...(projects.data ?? [])].sort((a, b) => a.id - b.id).map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
         <div className="nav">
           {NAV.map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink key={n.to} to={withProject(n.to, projectId)} end={n.end} className={({ isActive }) => (isActive ? 'active' : '')}>
               {n.icon}
               {n.label}
             </NavLink>
