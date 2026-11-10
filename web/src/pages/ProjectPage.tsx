@@ -11,6 +11,7 @@ export function ProjectPage() {
   const { id } = useParams()
   const projects = useProjects()
   const cards = useCards()
+  if (projects.isError || cards.isError) return <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar o projeto.</p>
   if (projects.isPending || cards.isPending) return <p className="placeholder">Carregando…</p>
   const list = projects.data ?? []
   const project = /^\d+$/.test(id ?? '') ? list.find((p) => p.id === Number(id)) : undefined

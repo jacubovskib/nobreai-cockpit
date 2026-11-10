@@ -95,4 +95,18 @@ describe('página do projeto', () => {
     wrap('/projetos/99')
     expect(await screen.findByText('Projeto não encontrado')).toBeInTheDocument()
   })
+  it('falha em /api/projects mostra o erro, não "não encontrado"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) =>
+      url === '/api/projects' ? new Response('{}', { status: 500 }) : new Response(JSON.stringify((routes as Record<string, unknown>)[url] ?? {}), { status: 200 })))
+    wrap('/projetos/1')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Não foi possível carregar o projeto.')
+    expect(screen.queryByText('Projeto não encontrado')).toBeNull()
+  })
+  it('falha em /api/cards mostra o erro', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) =>
+      url === '/api/cards' ? new Response('{}', { status: 500 }) : new Response(JSON.stringify((routes as Record<string, unknown>)[url] ?? {}), { status: 200 })))
+    wrap('/projetos/1')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Não foi possível carregar o projeto.')
+    expect(screen.queryByText('Nenhuma entrega')).toBeNull()
+  })
 })
