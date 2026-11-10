@@ -234,3 +234,83 @@ func TestCardDetailTouchedFiles(t *testing.T) {
 		t.Fatalf("touched_files = %s", rec.Body)
 	}
 }
+
+// setCard grava coluna e updated_at direto no banco do teste.
+func (a *testAPI) setCard(t *testing.T, key string, col domain.Column, updated time.Time) {
+	t.Helper()
+	if _, err := a.st.DB.Exec(`UPDATE cards SET col=?, updated_at=? WHERE key=?`, string(col), updated.UTC().Format(time.RFC3339Nano), key); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListCardsSignal(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	keys := map[string]string{}
+	for _, name := range []string{"pausado", "revisao", "vivo"} {
+		c, err := a.st.CreateCard(domain.Card{Title: name, ProjectID: p.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys[name] = c.Key
+	}
+	old := testNow.Add(-72 * time.Hour)
+	a.setCard(t, keys["pausado"], domain.Pausado, old)
+	a.setCard(t, keys["revisao"], domain.Revisao, old)
+	a.setCard(t, keys["vivo"], domain.EmAndamento, old)
+
+	endedPaused, endedReview := testNow.Add(-48*time.Hour), testNow.Add(-30*time.Hour)
+	for id, k := range map[string]string{"claude:p": "pausado", "claude:r": "revisao", "claude:v": "vivo"} {
+		a.liveSession(t, id, 100+len(id)+int(id[len(id)-1]), keys[k])
+	}
+	if err := a.st.EndSession("claude:p", "x", endedPaused); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.EndSession("claude:r", "x", endedReview); err != nil {
+		t.Fatal(err)
+	}
+	for id, at := range map[string]time.Time{"claude:p": endedPaused, "claude:r": endedReview} {
+		if _, err := a.st.DB.Exec(`UPDATE sessions SET last_event_at=? WHERE id=?`, at.Format(time.RFC3339Nano), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// o EndSession pode mexer no card; fixa de novo o estado do teste
+	a.setCard(t, keys["pausado"], domain.Pausado, old)
+	a.setCard(t, keys["revisao"], domain.Revisao, old)
+	if _, err := a.st.DB.Exec(`UPDATE sessions SET last_event_at=? WHERE id='claude:v'`, testNow.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := a.do(t, "GET", "/api/cards", nil, 0)
+	if rec.Code != 200 {
+		t.Fatalf("code %d %s", rec.Code, rec.Body)
+	}
+	got := map[string]CardSummary{}
+	for _, c := range decode[[]CardSummary](t, rec) {
+		got[c.Key] = c
+	}
+	if c := got[keys["pausado"]]; c.Signal != domain.SignalParado || c.SignalSince == nil || !c.SignalSince.Equal(endedPaused) {
+		t.Fatalf("pausado = %q %v", c.Signal, c.SignalSince)
+	}
+	if c := got[keys["revisao"]]; c.Signal != domain.SignalAguardandoRevisao || c.SignalSince == nil || !c.SignalSince.Equal(endedReview) {
+		t.Fatalf("revisao = %q %v", c.Signal, c.SignalSince)
+	}
+	if c := got[keys["vivo"]]; c.Signal != "" || c.SignalSince != nil {
+		t.Fatalf("vivo = %q %v", c.Signal, c.SignalSince)
+	}
+}
+
+func TestListCardsSignalWithoutSessions(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	if err := a.st.MoveCard(c.Key, domain.Pausado); err != nil {
+		t.Fatal(err)
+	}
+	old := testNow.Add(-48 * time.Hour)
+	a.setCard(t, c.Key, domain.Pausado, old)
+	rec := a.do(t, "GET", "/api/cards", nil, 0)
+	list := decode[[]CardSummary](t, rec)
+	if len(list) != 1 || list[0].Signal != domain.SignalParado || list[0].SignalSince == nil || !list[0].SignalSince.Equal(old) {
+		t.Fatalf("list = %+v", list)
+	}
+}

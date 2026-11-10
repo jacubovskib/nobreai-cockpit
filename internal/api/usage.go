@@ -70,12 +70,20 @@ func (s *server) usageTotals(w http.ResponseWriter, r *http.Request) {
 		f.GroupBy = "agent"
 	}
 	switch f.GroupBy {
-	case "agent", "card", "session", "day_agent", "model":
+	case "agent", "card", "session", "day_agent", "model", "project":
 	default:
-		writeError(w, http.StatusBadRequest, "agrupamento inválido (use agent, card, session, day_agent ou model)")
+		writeError(w, http.StatusBadRequest, "agrupamento inválido (use agent, card, session, day_agent, model ou project)")
 		return
 	}
 	var err error
+	if v := q.Get("project"); v != "" {
+		id, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "projeto inválido")
+			return
+		}
+		f.ProjectID = &id
+	}
 	if f.From, err = parseDay(q.Get("from")); err != nil {
 		writeError(w, http.StatusBadRequest, "data inicial inválida")
 		return
