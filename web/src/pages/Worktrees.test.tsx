@@ -45,6 +45,11 @@ describe('Worktrees · projeto', () => {
     expect(await screen.findByRole('heading', { name: 'solto' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'api' })).toBeNull()
   })
+  it('com filtro e nenhuma seção mostra a mensagem', async () => {
+    mockApi({ '/api/worktrees': [data[0]], '/api/projects': data.map((d) => d.project) })
+    wrap('/worktrees?projeto=2')
+    expect(await screen.findByText('Nenhum worktree neste projeto.')).toBeInTheDocument()
+  })
 })
 
 describe('Worktrees', () => {

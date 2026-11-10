@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Terminals } from './Terminals'
 
@@ -10,9 +10,13 @@ vi.mock('../ui/TerminalView', () => ({
 
 const info = (o: object) => ({ id: 'a', card_key: 'NAC-1', agent: 'claude', origin: 'plataforma', title: '', pid: 1, started_at: new Date().toISOString(), ended_at: null, exit_code: null, cols: 80, rows: 24, clients: 1, ...o })
 
+function Where() {
+  return <output data-testid="where">{useLocation().search}</output>
+}
+
 function renderAt(path = '/terminals') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={qc}><MemoryRouter initialEntries={[path]}><Terminals /></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={qc}><MemoryRouter initialEntries={[path]}><Terminals /><Where /></MemoryRouter></QueryClientProvider>)
 }
 afterEach(() => vi.unstubAllGlobals())
 
@@ -48,6 +52,27 @@ describe('Terminals', () => {
     expect(screen.getByRole('link', { name: 'NAC-2' })).toBeInTheDocument()
     expect(await screen.findByText('site')).toBeInTheDocument()
     expect(screen.getByText('Sem projeto')).toBeInTheDocument()
+  })
+
+  it('selecionar um terminal mantém o projeto na URL', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([info({ id: 'a', card_key: 'NAC-1' })]), { status: 200 })))
+    renderAt('/terminals?projeto=2')
+    fireEvent.click(await screen.findByRole('button', { name: /Abrir terminal/ }))
+    expect(screen.getByTestId('where')).toHaveTextContent('projeto=2')
+    expect(screen.getByTestId('where')).toHaveTextContent('id=a')
+  })
+
+  it('terminal com card usa o projeto do card, não o diretório', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(
+      url === '/api/projects'
+        ? [{ id: 1, name: 'api', path: '/w/api', capture: true }, { id: 2, name: 'site', path: '/w/site', capture: true }]
+        : url === '/api/cards'
+          ? [{ id: 5, key: 'NAC-1', title: 'x', project_id: 2, column: 'backlog', totals: { cost_usd: 0, unpriced: false }, readiness: { met: 0, total: 5, ready: false }, signal: '', signal_since: null }]
+          : [info({ id: 'a', card_key: 'NAC-1', dir: '/fora/de/tudo' })],
+    ), { status: 200 })))
+    renderAt()
+    expect(await screen.findByText('site')).toBeInTheDocument()
+    expect(screen.queryByText('Sem projeto')).toBeNull()
   })
 
   it('mostra estado vazio', async () => {

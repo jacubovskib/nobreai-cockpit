@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
+import { useWithProject } from '../app/project'
 import { useWorktreeDetail } from '../api/queries'
 import type { GitDetail, ProcDetail, WorktreeDetail, WorktreeResources, WorktreeSessionDetail } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
@@ -182,13 +183,14 @@ function Sessions({ sessions }: { sessions: WorktreeSessionDetail[] }) {
 const pad = (n: number) => String(n).padStart(2, '0')
 
 function Body({ d }: { d: WorktreeDetail }) {
+  const withP = useWithProject()
   const w = d.worktree
   const name = baseName(w.path)
   const live = d.sessions.filter((s) => s.live)
   return (
     <div style={{ maxWidth: 1180, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
       <nav aria-label="Trilha" style={muted}>
-        <Link to="/worktrees">Worktrees</Link> <span aria-hidden="true">/</span> <span>{d.project.name}</span> <span aria-hidden="true">/</span> <span>{name}</span>
+        <Link to={withP('/worktrees')}>Worktrees</Link> <span aria-hidden="true">/</span> <span>{d.project.name}</span> <span aria-hidden="true">/</span> <span>{name}</span>
       </nav>
       <header style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
@@ -260,6 +262,7 @@ function Body({ d }: { d: WorktreeDetail }) {
 }
 
 export function WorktreeDetailPage() {
+  const withP = useWithProject()
   const [params] = useSearchParams()
   const project = params.get('project') ?? ''
   const path = params.get('path') ?? ''
@@ -270,7 +273,7 @@ export function WorktreeDetailPage() {
         <h1 style={{ fontSize: 24 }}>Worktree não encontrado</h1>
         <p style={muted}>
           {path ? <><span style={mono}>{path}</span> não está na lista de worktrees do projeto. </> : null}
-          <Link to="/worktrees">Voltar aos worktrees</Link>
+          <Link to={withP('/worktrees')}>Voltar aos worktrees</Link>
         </p>
       </section>
     )

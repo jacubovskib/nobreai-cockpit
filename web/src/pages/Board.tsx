@@ -8,7 +8,7 @@ import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
 import { ReadinessPips } from '../ui/ReadinessPips'
 import { ProjectTag } from '../ui/ProjectTag'
-import { useProjectFilter } from '../app/project'
+import { useProjectFilter, useWithProject } from '../app/project'
 import { NewTask } from './NewTask'
 import { COLUMNS, groupByColumn, minutesSince, plural, signalText } from './board'
 
@@ -26,6 +26,7 @@ const cardBox = (c: CardSummary, stale: boolean): React.CSSProperties => ({
 })
 
 function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (key: string, col: Column) => void; busy: boolean; tag?: React.ReactNode }) {
+  const withP = useWithProject()
   const signal = signalText(card.signal, card.signal_since)
   const stale = card.column === 'em_andamento' && !card.live && !signal
   const mins = minutesSince(card.last_activity_at)
@@ -62,7 +63,7 @@ function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (ke
           </span>
         )}
       </div>
-      <Link to={`/cards/${card.key}`} style={{ fontSize: 14.5, fontWeight: 500, color: 'var(--text)', textDecoration: 'none', lineHeight: 1.35 }}>
+      <Link to={withP(`/cards/${card.key}`)} style={{ fontSize: 14.5, fontWeight: 500, color: 'var(--text)', textDecoration: 'none', lineHeight: 1.35 }}>
         {card.title}
       </Link>
       {tag}

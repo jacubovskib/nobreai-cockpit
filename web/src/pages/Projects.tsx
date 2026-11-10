@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useCards, useProjects, useTotals } from '../api/queries'
 import { Money } from '../ui/Money'
 import { ProjectTag } from '../ui/ProjectTag'
-import { projectColor } from '../app/project'
+import { projectColor, useWithProject } from '../app/project'
 import { range } from './analytics/data'
 import { signalText } from './board'
 import { btn, muted, panel } from './card/shared'
@@ -31,6 +31,7 @@ function Count({ n, since, signal }: { n: number; since: string | null; signal: 
 
 // Compara todos os projetos: ignora o seletor da barra lateral.
 export function Projects() {
+  const withP = useWithProject()
   const [period, setPeriod] = useState(7)
   const { from, to } = useMemo(() => range(period), [period])
   const projects = useProjects()
@@ -85,7 +86,7 @@ export function Projects() {
                 <tr key={r.project?.id ?? 'none'} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={td}>
                     {r.project ? (
-                      <Link to={`/projetos/${r.project.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>
+                      <Link to={withP(`/projetos/${r.project.id}`)} style={{ color: 'inherit', textDecoration: 'none' }}>
                         <ProjectTag project={r.project} projects={list} />
                       </Link>
                     ) : (
@@ -106,7 +107,7 @@ export function Projects() {
                   </td>
                   <td style={td}>
                     {r.current ? (
-                      <Link to={`/cards/${r.current.key}`} style={{ color: 'inherit' }}>
+                      <Link to={withP(`/cards/${r.current.key}`)} style={{ color: 'inherit' }}>
                         <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5 }}>{r.current.key}</span> {r.current.title}
                       </Link>
                     ) : (

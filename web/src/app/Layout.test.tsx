@@ -77,4 +77,13 @@ describe('Seletor de projeto', () => {
     expect(sel).toHaveValue('')
     expect(hrefs().some((h) => h!.includes('?projeto='))).toBe(false)
   })
+  it('id não numérico na URL vale Todos e os links ficam sem projeto', async () => {
+    mockApi(base)
+    renderApp('/?projeto=abc')
+    const sel = await screen.findByRole('combobox', { name: 'Projeto' })
+    await screen.findByRole('option', { name: 'site' })
+    expect(sel).toHaveValue('')
+    expect(screen.getByRole('option', { name: 'Todos os projetos' })).toBeInTheDocument()
+    expect(hrefs().some((h) => h!.includes('?projeto='))).toBe(false)
+  })
 })

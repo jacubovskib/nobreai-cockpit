@@ -59,4 +59,10 @@ describe('Board por projeto', () => {
     expect(screen.queryByText('Card revisão')).toBeNull()
     expect(screen.queryByText('web')).toBeNull()
   })
+  it('o link do card leva o projeto escolhido', async () => {
+    mock(routes)
+    wrap(<Board />, '/board?projeto=2')
+    const link = await screen.findByRole('link', { name: 'Card do web' })
+    expect(link).toHaveAttribute('href', '/cards/NAC-3?projeto=2')
+  })
 })

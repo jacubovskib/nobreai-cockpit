@@ -1,8 +1,8 @@
 import { Link, useSearchParams } from 'react-router-dom'
 import { isLive, useTerminals, type TerminalInfo } from '../api/terminals'
-import { useProjects } from '../api/queries'
-import type { Project } from '../api/types'
-import { projectForPath } from '../app/project'
+import { useCards, useProjects } from '../api/queries'
+import type { CardSummary, Project } from '../api/types'
+import { projectForPath, useWithProject } from '../app/project'
 import { ProjectTag } from '../ui/ProjectTag'
 import { agentInfo } from '../ui/agents'
 import { LazyTerminalView } from '../ui/LazyTerminalView'
@@ -11,8 +11,12 @@ import { minutesSince } from './board'
 const th: React.CSSProperties = { textAlign: 'left', fontWeight: 500, fontSize: 12, color: 'var(--text-2)', padding: '6px 10px' }
 const td: React.CSSProperties = { padding: '8px 10px', borderTop: '1px solid var(--border)' }
 
-function Row({ t, selected, onSelect, projects }: { t: TerminalInfo; selected: boolean; onSelect: () => void; projects: Project[] }) {
+function Row({ t, selected, onSelect, projects, cards }: { t: TerminalInfo; selected: boolean; onSelect: () => void; projects: Project[]; cards: CardSummary[] }) {
   const live = isLive(t)
+  const withP = useWithProject()
+  // Terminal com card segue o projeto do card; só sem card vale o diretório.
+  const card = t.card_key ? cards.find((c) => c.key === t.card_key) : undefined
+  const project = card ? projects.find((p) => p.id === card.project_id) ?? null : t.dir ? projectForPath(projects, t.dir) : null
   return (
     <tr style={{ background: selected ? '#1F232C' : undefined }}>
       <td style={td}>
@@ -26,8 +30,8 @@ function Row({ t, selected, onSelect, projects }: { t: TerminalInfo; selected: b
           {agentInfo(t.agent).name}
         </button>
       </td>
-      <td style={td}>{t.card_key ? <Link to={`/cards/${t.card_key}`} className="mono">{t.card_key}</Link> : <span style={{ color: 'var(--text-2)' }}>sem card</span>}</td>
-      <td style={td}><ProjectTag project={t.dir ? projectForPath(projects, t.dir) : null} projects={projects} /></td>
+      <td style={td}>{t.card_key ? <Link to={withP(`/cards/${t.card_key}`)} className="mono">{t.card_key}</Link> : <span style={{ color: 'var(--text-2)' }}>sem card</span>}</td>
+      <td style={td}><ProjectTag project={project} projects={projects} /></td>
       <td style={td}>{t.origin}</td>
       <td style={td}>há {minutesSince(t.started_at)} min</td>
       <td style={td}>
@@ -41,6 +45,8 @@ function Row({ t, selected, onSelect, projects }: { t: TerminalInfo; selected: b
 export function Terminals() {
   const { data, isPending, isError } = useTerminals()
   const projects = useProjects().data ?? []
+  const cardsData = useCards().data
+  const cards = Array.isArray(cardsData) ? cardsData : []
   const [params, setParams] = useSearchParams()
   const selected = params.get('id') ?? ''
   const list = [...(data ?? [])].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
@@ -65,7 +71,7 @@ export function Terminals() {
             </thead>
             <tbody>
               {list.map((t) => (
-                <Row key={t.id} t={t} selected={t.id === selected} projects={projects} onSelect={() => setParams({ id: t.id })} />
+                <Row key={t.id} t={t} selected={t.id === selected} projects={projects} cards={cards} onSelect={() => setParams((prev) => { const n = new URLSearchParams(prev); n.set('id', t.id); return n })} />
               ))}
             </tbody>
           </table>

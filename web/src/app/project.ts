@@ -47,3 +47,9 @@ export function useProjectFilter(): { projectId: number | null; project: Project
     },
   }
 }
+
+// Aplica o projeto escolhido (?projeto=) a um link interno, para o filtro acompanhar a navegação.
+export function useWithProject(): (to: string) => string {
+  const { projectId } = useProjectFilter()
+  return (to) => withProject(to, projectId)
+}

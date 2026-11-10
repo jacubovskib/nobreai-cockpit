@@ -109,6 +109,7 @@ function Editor({ initial, isNew, onSaved, onDeleted, onDuplicate }: {
   const [confirmDel, setConfirmDel] = useState(false)
   const cards = useCards().data ?? []
   const projects = useProjects().data ?? []
+  const { project: chosenProject } = useProjectFilter()
   const [cardKey, setCardKey] = useState('')
   const previewCard = cardKey || cards[0]?.key || ''
   const set = (p: Partial<Draft>) => setD((x) => ({ ...x, ...p }))
@@ -213,7 +214,7 @@ function Editor({ initial, isNew, onSaved, onDeleted, onDuplicate }: {
             type="checkbox"
             checked={d.project_id !== null}
             disabled={projects.length === 0}
-            onChange={(e) => set({ project_id: e.target.checked ? (projects[0]?.id ?? null) : null })}
+            onChange={(e) => set({ project_id: e.target.checked ? (chosenProject?.id ?? projects[0]?.id ?? null) : null })}
           />
           Só neste projeto{project ? `: ${project.name}` : ''}
           {d.project_id !== null && projects.length > 1 && (

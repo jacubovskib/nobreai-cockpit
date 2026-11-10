@@ -10,6 +10,7 @@ import { formatAmount, formatMoney, moneySymbol, useCurrency } from '../ui/money
 import { DailyChart } from './analytics/DailyChart'
 import { buildDays, range, tokens, ymd } from './analytics/data'
 import { btn, h2, muted, panel } from './card/shared'
+import { useWithProject } from '../app/project'
 
 const PERIODS = [
   { id: 1, label: 'Hoje', long: 'hoje' },
@@ -33,6 +34,7 @@ function duration(startIso: string, endIso: string | null, lastIso: string) {
 const startFmt = new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 
 export function Analytics() {
+  const withP = useWithProject()
   const [period, setPeriod] = useState(7)
   const [asTable, setAsTable] = useState(false)
   const { from, to } = useMemo(() => range(period), [period])
@@ -224,7 +226,7 @@ export function Analytics() {
               </>
             )
             const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, color: 'inherit', textDecoration: 'none', minHeight: 40 }
-            return t.key === '' ? <div key="" style={row}>{inner}</div> : <Link key={t.key} to={`/cards/${t.key}`} style={row}>{inner}</Link>
+            return t.key === '' ? <div key="" style={row}>{inner}</div> : <Link key={t.key} to={withP(`/cards/${t.key}`)} style={row}>{inner}</Link>
           })}
         </section>
       </div>
@@ -257,7 +259,7 @@ export function Analytics() {
                 return (
                   <tr key={s.id} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={td}>{startFmt.format(new Date(s.started_at))}</td>
-                    <td style={td}>{key ? <Link to={`/cards/${key}`}>{key}</Link> : '—'}</td>
+                    <td style={td}>{key ? <Link to={withP(`/cards/${key}`)}>{key}</Link> : '—'}</td>
                     <td style={td}><AgentSwatch agent={s.agent} /></td>
                     <td style={td}>{s.model || '—'}</td>
                     <td style={td}>{duration(s.started_at, s.ended_at, s.last_event_at)}{live ? ' · ao vivo' : ''}</td>

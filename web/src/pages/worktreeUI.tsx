@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import type { CardRef, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
 import { minutesSince } from './board'
 import { muted } from './card/shared'
+import { useWithProject } from '../app/project'
 
 export const tag: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', minHeight: 22, padding: '0 8px', borderRadius: 6, fontSize: 12, border: '1px solid var(--border)', color: 'var(--text-2)' }
 export const tagWarn: React.CSSProperties = { ...tag, color: 'var(--warn)', borderColor: '#4A3B17' }
@@ -61,8 +62,9 @@ export function SessionStatus({ s }: { s: WorktreeSession }) {
 }
 
 export function CardLink({ c }: { c: CardRef }) {
+  const withP = useWithProject()
   return (
-    <Link to={`/cards/${c.key}`} style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, color: 'var(--text)', textDecoration: 'none' }}>
+    <Link to={withP(`/cards/${c.key}`)} style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, color: 'var(--text)', textDecoration: 'none' }}>
       <span style={{ ...mono, fontSize: 12.5, color: 'var(--text-2)' }}>{c.key}</span>
       <span style={{ fontWeight: 500 }}>{c.title}</span>
     </Link>

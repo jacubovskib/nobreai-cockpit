@@ -73,7 +73,7 @@ describe('ControlRoom', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Criar card desta sessão' }))
     fireEvent.change(screen.getByLabelText('Título do card'), { target: { value: 'Meu card' } })
     fireEvent.click(screen.getByRole('button', { name: 'Criar e vincular' }))
-    const alert = await screen.findByRole('alert')
+    const alert = (await screen.findByText(/já tem uma sessão viva/)).closest('[role="alert"]')!
     expect(alert).toHaveTextContent('NAC-9')
     expect(alert).toHaveTextContent('já tem uma sessão viva')
     expect(calls(fn, 'POST', '/api/cards')).toEqual([{ title: 'Meu card', project_id: 7 }])
@@ -271,4 +271,12 @@ describe('ControlRoom · projeto', () => {
       expect(screen.getAllByText(/^Ao vivo · /)).toHaveLength(2)
     })
   }
+  it('sessão sem card mostra a etiqueta do projeto', async () => {
+    mock({
+      '/api/overview': { ...overview, alerts: [], no_card: [{ id: 's9', agent: 'claude', project_id: 1, cwd: '/w/api', started_at: new Date().toISOString(), usage: total, unpriced: false }] },
+      '/api/settings': {}, '/api/projects': [{ id: 1, name: 'api', path: '/w/api', capture: true }],
+    })
+    wrap(<ControlRoom />, '/')
+    expect(await screen.findByText('api')).toBeInTheDocument()
+  })
 })

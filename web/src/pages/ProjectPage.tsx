@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import { useCards, useProjects } from '../api/queries'
-import { withProject } from '../app/project'
+import { useWithProject, withProject } from '../app/project'
 import { ProjectTag } from '../ui/ProjectTag'
 import { signalText } from './board'
 import { btn, h2, muted, panel } from './card/shared'
@@ -8,6 +8,7 @@ import { GROUPS, timeline } from './projects'
 
 // Cronograma das entregas do projeto da rota (não usa o seletor da barra lateral).
 export function ProjectPage() {
+  const withP = useWithProject()
   const { id } = useParams()
   const projects = useProjects()
   const cards = useCards()
@@ -22,7 +23,7 @@ export function ProjectPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 900 }}>
       <header style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
         <div>
-          <Link to="/projetos" style={muted}>← Projetos</Link>
+          <Link to={withP('/projetos')} style={muted}>← Projetos</Link>
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', margin: '4px 0' }}>{project.name}</h1>
           <ProjectTag project={project} projects={list} />
         </div>
@@ -37,7 +38,7 @@ export function ProjectPage() {
             <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {group.map(({ card }) => (
                 <li key={card.key}>
-                  <Link to={`/cards/${card.key}`} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'baseline', color: 'inherit', textDecoration: 'none' }}>
+                  <Link to={withP(`/cards/${card.key}`)} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'baseline', color: 'inherit', textDecoration: 'none' }}>
                     <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5, color: 'var(--text-2)' }}>{card.key}</span>
                     <span>{card.title}</span>
                     {card.signal && <span style={muted}>{signalText(card.signal, card.signal_since)}</span>}

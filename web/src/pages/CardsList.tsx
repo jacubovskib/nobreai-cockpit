@@ -5,9 +5,10 @@ import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
 import { StatusBadge } from '../ui/StatusBadge'
 import { ProjectTag } from '../ui/ProjectTag'
-import { useProjectFilter } from '../app/project'
+import { useProjectFilter, useWithProject } from '../app/project'
 
 export function CardsList() {
+  const withP = useWithProject()
   const { data, isPending, isError } = useCards()
   const { projectId } = useProjectFilter()
   const projects = useProjects().data ?? []
@@ -54,7 +55,7 @@ export function CardsList() {
               {rows.map((c) => (
                 <tr key={c.key} style={{ borderTop: '1px solid var(--border)' }}>
                   <td className="mono" style={{ padding: '10px 12px', color: 'var(--text-2)' }}>{c.key}</td>
-                  <td style={{ padding: '10px 12px' }}><Link to={`/cards/${c.key}`}>{c.title}</Link></td>
+                  <td style={{ padding: '10px 12px' }}><Link to={withP(`/cards/${c.key}`)}>{c.title}</Link></td>
                   <td style={{ padding: '10px 12px' }}><ProjectTag project={projects.find((p) => p.id === c.project_id) ?? null} projects={projects} /></td>
                   <td style={{ padding: '10px 12px' }}><StatusBadge column={c.column} live={c.live} /></td>
                   <td style={{ padding: '10px 12px' }}>{c.agent ? <AgentSwatch agent={c.agent} /> : '—'}</td>

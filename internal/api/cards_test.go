@@ -314,3 +314,18 @@ func TestListCardsSignalWithoutSessions(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 }
+
+func TestListCardsSignalLiveIdleHasNoSignal(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.setCard(t, c.Key, domain.EmAndamento, testNow.Add(-72*time.Hour))
+	a.liveSession(t, "claude:idle", 4242, c.Key)
+	if _, err := a.st.DB.Exec(`UPDATE sessions SET last_event_at=? WHERE id='claude:idle'`, testNow.Add(-48*time.Hour).Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	a.setCard(t, c.Key, domain.EmAndamento, testNow.Add(-72*time.Hour))
+	list := decode[[]CardSummary](t, a.do(t, "GET", "/api/cards", nil, 0))
+	if len(list) != 1 || !list[0].Live || list[0].Signal != "" || list[0].SignalSince != nil {
+		t.Fatalf("list = %+v", list)
+	}
+}

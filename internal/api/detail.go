@@ -138,8 +138,11 @@ func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, er
 	if sum.LastActivityAt != nil && sum.LastActivityAt.After(last) {
 		last = *sum.LastActivityAt
 	}
-	if sum.Signal = domain.CardSignal(c.Column, last, s.now()); sum.Signal != domain.SignalNone {
-		sum.SignalSince = &last
+	// Sessão viva = o agente está ali; ociosa não vira "parado".
+	if !sum.Live {
+		if sum.Signal = domain.CardSignal(c.Column, last, s.now()); sum.Signal != domain.SignalNone {
+			sum.SignalSince = &last
+		}
 	}
 	return sum, err
 }
