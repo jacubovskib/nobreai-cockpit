@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useCards } from '../api/queries'
+import { useCards, useProjects } from '../api/queries'
 import { patch } from '../api/client'
 import type { CardSummary, Column } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
 import { ReadinessPips } from '../ui/ReadinessPips'
+import { ProjectTag } from '../ui/ProjectTag'
+import { useProjectFilter } from '../app/project'
 import { NewTask } from './NewTask'
-import { COLUMNS, groupByColumn, minutesSince, plural } from './board'
+import { COLUMNS, groupByColumn, minutesSince, plural, signalText } from './board'
 
 const FILTERS = [
   { id: 'todos', label: 'Todos' },
@@ -23,8 +25,9 @@ const cardBox = (c: CardSummary, stale: boolean): React.CSSProperties => ({
   color: 'inherit',
 })
 
-function BoardCard({ card, onMove, busy }: { card: CardSummary; onMove: (key: string, col: Column) => void; busy: boolean }) {
-  const stale = card.column === 'em_andamento' && !card.live
+function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (key: string, col: Column) => void; busy: boolean; tag?: React.ReactNode }) {
+  const signal = signalText(card.signal, card.signal_since)
+  const stale = card.column === 'em_andamento' && !card.live && !signal
   const mins = minutesSince(card.last_activity_at)
   const staleText = card.pid_dead_at
     ? `processo encerrado há ${minutesSince(card.pid_dead_at)} min`
@@ -44,6 +47,14 @@ function BoardCard({ card, onMove, busy }: { card: CardSummary; onMove: (key: st
             ao vivo
           </span>
         )}
+        {signal && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: card.signal === 'parado' ? 'var(--warn)' : 'var(--text-2)' }}>
+            {card.signal === 'parado'
+              ? <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M12 3 2 21h20z" /><path d="M12 10v5M12 18v.5" /></svg>
+              : <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>}
+            {signal}
+          </span>
+        )}
         {stale && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--warn)' }}>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M12 3 2 21h20z" /><path d="M12 10v5M12 18v.5" /></svg>
@@ -54,6 +65,7 @@ function BoardCard({ card, onMove, busy }: { card: CardSummary; onMove: (key: st
       <Link to={`/cards/${card.key}`} style={{ fontSize: 14.5, fontWeight: 500, color: 'var(--text)', textDecoration: 'none', lineHeight: 1.35 }}>
         {card.title}
       </Link>
+      {tag}
       {card.where_stopped && (
         <span style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.4 }}>Onde parei: {card.where_stopped}</span>
       )}
@@ -85,6 +97,8 @@ function BoardCard({ card, onMove, busy }: { card: CardSummary; onMove: (key: st
 export function Board() {
   const { data, isPending, isError } = useCards()
   const qc = useQueryClient()
+  const { projectId } = useProjectFilter()
+  const projects = useProjects().data ?? []
   const [agent, setAgent] = useState('todos')
   const [error, setError] = useState('')
   const [over, setOver] = useState<Column | null>(null)
@@ -103,7 +117,9 @@ export function Board() {
     move.mutate({ key, column })
   }
 
-  const cards = (data ?? []).filter((c) => agent === 'todos' || c.agent === agent)
+  const cards = (data ?? [])
+    .filter((c) => projectId === null || c.project_id === projectId)
+    .filter((c) => agent === 'todos' || c.agent === agent)
   const groups = groupByColumn(cards)
 
   return (
@@ -169,7 +185,7 @@ export function Board() {
                 <span className="mono" style={{ fontSize: 12, color: 'var(--text-2)' }}>{groups[col.id].length}</span>
               </div>
               <p style={{ margin: '-4px 4px 4px', fontSize: 12, color: '#7C8493' }}>{col.rule}</p>
-              {groups[col.id].map((c) => <BoardCard key={c.key} card={c} onMove={onMove} busy={move.isPending} />)}
+              {groups[col.id].map((c) => <BoardCard key={c.key} card={c} onMove={onMove} busy={move.isPending} tag={projectId === null ? <ProjectTag project={projects.find((p) => p.id === c.project_id) ?? null} projects={projects} /> : undefined} />)}
             </section>
           ))}
         </div>

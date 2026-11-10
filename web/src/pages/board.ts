@@ -25,3 +25,14 @@ export function minutesSince(iso: string | null, now: number = Date.now()): numb
 }
 
 export const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+// signalText: "parado há 30 h" / "aguardando revisão há 3 dias". Abaixo de 48 h mostra
+// horas; a partir daí, dias inteiros (arredondados para baixo). Sem sinal, vazio.
+export function signalText(signal: CardSummary['signal'], since: string | null, now: Date = new Date()): string {
+  if (!signal || !since) return ''
+  const t = Date.parse(since)
+  if (Number.isNaN(t)) return ''
+  const hours = Math.max(0, Math.floor((now.getTime() - t) / 3600000))
+  const label = signal === 'parado' ? 'parado' : 'aguardando revisão'
+  return hours < 48 ? `${label} há ${hours} h` : `${label} há ${Math.floor(hours / 24)} dias`
+}
