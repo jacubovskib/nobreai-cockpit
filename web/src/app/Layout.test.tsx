@@ -66,7 +66,7 @@ describe('Seletor de projeto', () => {
     await waitFor(() => expect(hrefs().every((h) => h!.endsWith('?projeto=2'))).toBe(true))
     expect(screen.getByRole('link', { name: /Board/ })).toHaveAttribute('aria-current', 'page')
     fireEvent.change(sel, { target: { value: '' } })
-    await waitFor(() => expect(hrefs().some((h) => h!.includes('projeto'))).toBe(false))
+    await waitFor(() => expect(hrefs().some((h) => h!.includes('?projeto='))).toBe(false))
     expect(sel).toHaveValue('')
   })
   it('id desconhecido na URL vale Todos', async () => {
@@ -75,6 +75,6 @@ describe('Seletor de projeto', () => {
     const sel = await screen.findByRole('combobox', { name: 'Projeto' })
     await screen.findByRole('option', { name: 'site' })
     expect(sel).toHaveValue('')
-    expect(hrefs().some((h) => h!.includes('projeto'))).toBe(false)
+    expect(hrefs().some((h) => h!.includes('?projeto='))).toBe(false)
   })
 })

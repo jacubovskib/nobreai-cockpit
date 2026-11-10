@@ -185,6 +185,10 @@ Telas, desenhadas no Claude Design: https://claude.ai/artifact/VZs84mPU4RS1rWCPQ
 4. **Analytics**: tokens e custo por sessão, card, agente, provider, ao longo do tempo.
 5. **Configuração**: agentes detectados + checklist de saúde, limites de custo, regra de "pronto para handoff", projetos.
 6. **Prompts**: biblioteca com editor, variáveis e prévia preenchida com um card real; lista de prompts capturados nas sessões com "Salvar como prompt".
+7. **Projetos**: tabela comparativa (custo no período, entrega atual, parados, aguardando você, última
+   atividade) e, por projeto, o cronograma das entregas (concluídas, em andamento, paradas, backlog).
+   O seletor de projeto da barra lateral (`?projeto=<id>`) filtra Board, Cards, Analytics, Worktrees e
+   Prompts; a Sala de controle e os Terminais só mostram a etiqueta do projeto.
 
 Visual (escolha do Claude): tema escuro "grafite operacional", Geist + Geist Mono; cor reservada para
 dados. Providers têm cor fixa por identidade (Claude #3987E5, Codex #D95926, Kiro #199E70, validadas para
