@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useOverview, useSettings } from '../api/queries'
+import { useOverview, useProjects, useSettings } from '../api/queries'
 import { forCard, isLive, useTerminals, type TerminalInfo } from '../api/terminals'
 import { patch, post } from '../api/client'
 import type { ActiveSession, AgentSpend, Alert, Card, DomainEvent, SessionWithUsage, Total } from '../api/types'
+import { ProjectTag } from '../ui/ProjectTag'
+import type { Project } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
@@ -55,7 +57,7 @@ function AlertRow({ alert, onPause, pausing }: { alert: Alert; onPause: (key: st
   )
 }
 
-function ActiveCard({ s, terminalId }: { s: ActiveSession; terminalId?: string }) {
+function ActiveCard({ s, terminalId, projects }: { s: ActiveSession; terminalId?: string; projects: Project[] }) {
   const mins = minutesSince(s.started_at)
   return (
     <article style={{ ...panel, gap: 14 }}>
@@ -77,6 +79,7 @@ function ActiveCard({ s, terminalId }: { s: ActiveSession; terminalId?: string }
           </span>
         )}
       </div>
+      <ProjectTag project={projects.find((p) => p.id === s.project_id) ?? null} projects={projects} />
       <WorktreeTag path={s.worktree} linked={s.worktree_linked} branch={s.branch} />
       {s.card ? (
         <Link to={`/cards/${s.card.key}`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
@@ -241,6 +244,7 @@ export function ControlRoom() {
   }, [])
   const settings = useSettings().data
   const terminals = useTerminals().data
+  const projects = useProjects().data ?? []
   const qc = useQueryClient()
   const [error, setError] = useState('')
   const pause = useMutation({
@@ -311,7 +315,7 @@ export function ControlRoom() {
         <section aria-labelledby="ativos-t" style={{ flex: '3 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <h2 id="ativos-t" style={h2}>Agentes rodando agora</h2>
           {active.length === 0 && <p style={{ margin: 0, color: 'var(--text-2)' }}>Nenhum agente rodando agora.</p>}
-          {active.map((s) => <ActiveCard key={s.id} s={s} terminalId={s.pid_dead_at ? undefined : terminalFor(s, terminals, sessionPids)} />)}
+          {active.map((s) => <ActiveCard key={s.id} s={s} projects={projects} terminalId={s.pid_dead_at ? undefined : terminalFor(s, terminals, sessionPids)} />)}
         </section>
 
         <div style={{ flex: '2 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>

@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useWorktrees } from '../api/queries'
+import { useProjectFilter } from '../app/project'
 import type { ProjectWorktrees, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { StatusBadge } from '../ui/StatusBadge'
@@ -118,6 +119,7 @@ function ProjectSection({ p }: { p: ProjectWorktrees }) {
 
 export function Worktrees() {
   const { data, isPending, isError } = useWorktrees()
+  const { projectId } = useProjectFilter()
   if (isError) return <p role="alert" style={{ color: 'var(--err)' }}>Não foi possível carregar os worktrees.</p>
   if (isPending || !data) return <p className="placeholder">Carregando…</p>
   return (
@@ -133,7 +135,7 @@ export function Worktrees() {
           Nenhum projeto cadastrado. Cadastre com <span style={mono}>nobre project add</span> ou em <Link to="/config">Configuração</Link>.
         </p>
       )}
-      {data.map((p) => <ProjectSection key={p.project.id} p={p} />)}
+      {data.filter((p) => projectId === null || p.project.id === projectId).map((p) => <ProjectSection key={p.project.id} p={p} />)}
     </div>
   )
 }

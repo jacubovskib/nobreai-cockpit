@@ -1,6 +1,7 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useCards, useSessions, useSettings, useTotals } from '../api/queries'
+import { useProjectFilter } from '../app/project'
 import type { Total } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
@@ -42,9 +43,10 @@ export function Analytics() {
   const money = (usd: number) => formatMoney(usd, cur)
   const amount = (usd: number) => formatAmount(usd, cur)
   const symbol = moneySymbol(cur)
-  const dayAgent = useTotals('day_agent', from, to)
-  const byAgent = useTotals('agent', from, to)
-  const byCard = useTotals('card', from, to)
+  const { projectId } = useProjectFilter()
+  const dayAgent = useTotals('day_agent', from, to, projectId)
+  const byAgent = useTotals('agent', from, to, projectId)
+  const byCard = useTotals('card', from, to, projectId)
   const sessions = useSessions(200)
   const cards = useCards().data
 
@@ -68,6 +70,7 @@ export function Analytics() {
   const titleOf = (key: string) => cards?.find((c) => c.key === key)?.title ?? ''
   const cardKeyOf = (id: number | null) => cards?.find((c) => c.id === id)?.key ?? ''
   const periodSessions = (sessions.data ?? [])
+    .filter((s) => projectId === null || s.project_id === projectId)
     .filter((s) => ymd(new Date(s.started_at)) >= from && ymd(new Date(s.started_at)) < to)
     .slice(0, 20)
   const long = PERIODS.find((p) => p.id === period)!.long

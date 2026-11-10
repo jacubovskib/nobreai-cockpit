@@ -1,5 +1,9 @@
 import { Link, useSearchParams } from 'react-router-dom'
 import { isLive, useTerminals, type TerminalInfo } from '../api/terminals'
+import { useProjects } from '../api/queries'
+import type { Project } from '../api/types'
+import { projectForPath } from '../app/project'
+import { ProjectTag } from '../ui/ProjectTag'
 import { agentInfo } from '../ui/agents'
 import { LazyTerminalView } from '../ui/LazyTerminalView'
 import { minutesSince } from './board'
@@ -7,7 +11,7 @@ import { minutesSince } from './board'
 const th: React.CSSProperties = { textAlign: 'left', fontWeight: 500, fontSize: 12, color: 'var(--text-2)', padding: '6px 10px' }
 const td: React.CSSProperties = { padding: '8px 10px', borderTop: '1px solid var(--border)' }
 
-function Row({ t, selected, onSelect }: { t: TerminalInfo; selected: boolean; onSelect: () => void }) {
+function Row({ t, selected, onSelect, projects }: { t: TerminalInfo; selected: boolean; onSelect: () => void; projects: Project[] }) {
   const live = isLive(t)
   return (
     <tr style={{ background: selected ? '#1F232C' : undefined }}>
@@ -23,6 +27,7 @@ function Row({ t, selected, onSelect }: { t: TerminalInfo; selected: boolean; on
         </button>
       </td>
       <td style={td}>{t.card_key ? <Link to={`/cards/${t.card_key}`} className="mono">{t.card_key}</Link> : <span style={{ color: 'var(--text-2)' }}>sem card</span>}</td>
+      <td style={td}><ProjectTag project={t.dir ? projectForPath(projects, t.dir) : null} projects={projects} /></td>
       <td style={td}>{t.origin}</td>
       <td style={td}>há {minutesSince(t.started_at)} min</td>
       <td style={td}>
@@ -35,6 +40,7 @@ function Row({ t, selected, onSelect }: { t: TerminalInfo; selected: boolean; on
 
 export function Terminals() {
   const { data, isPending, isError } = useTerminals()
+  const projects = useProjects().data ?? []
   const [params, setParams] = useSearchParams()
   const selected = params.get('id') ?? ''
   const list = [...(data ?? [])].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
@@ -53,13 +59,13 @@ export function Terminals() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr>
-                <th style={th} scope="col">Agente</th><th style={th} scope="col">Card</th><th style={th} scope="col">Origem</th>
+                <th style={th} scope="col">Agente</th><th style={th} scope="col">Card</th><th style={th} scope="col">Projeto</th><th style={th} scope="col">Origem</th>
                 <th style={th} scope="col">Iniciado</th><th style={th} scope="col">Estado</th><th style={th} scope="col">Clientes</th>
               </tr>
             </thead>
             <tbody>
               {list.map((t) => (
-                <Row key={t.id} t={t} selected={t.id === selected} onSelect={() => setParams({ id: t.id })} />
+                <Row key={t.id} t={t} selected={t.id === selected} projects={projects} onSelect={() => setParams({ id: t.id })} />
               ))}
             </tbody>
           </table>

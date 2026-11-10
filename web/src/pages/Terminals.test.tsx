@@ -37,6 +37,19 @@ describe('Terminals', () => {
     expect(await screen.findByTestId('tv')).toHaveTextContent('r:true')
   })
 
+  it('com ?projeto=1 mantém terminal de outro projeto, com a etiqueta achada pelo diretório', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(
+      url === '/api/projects'
+        ? [{ id: 1, name: 'api', path: '/w/api', capture: true }, { id: 2, name: 'site', path: '/w/site', capture: true }]
+        : [info({ id: 'a', card_key: 'NAC-1', dir: '/w/site/sub' }), info({ id: 'b', card_key: 'NAC-2', dir: '/outro' })],
+    ), { status: 200 })))
+    renderAt('/terminals?projeto=1')
+    expect(await screen.findByRole('link', { name: 'NAC-1' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'NAC-2' })).toBeInTheDocument()
+    expect(await screen.findByText('site')).toBeInTheDocument()
+    expect(screen.getByText('Sem projeto')).toBeInTheDocument()
+  })
+
   it('mostra estado vazio', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', { status: 200 })))
     renderAt()
