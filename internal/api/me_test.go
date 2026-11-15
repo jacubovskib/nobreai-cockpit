@@ -385,3 +385,24 @@ func TestPatchProjectBaseBranch(t *testing.T) {
 		t.Fatalf("projeto = %+v", ps[0])
 	}
 }
+
+func TestMeStartBranchFollowsWorkingBranchNotBase(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	if err := a.st.SetProjectBase(p.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range []struct{ branch, want string }{{"main", ""}, {"feat/x", "feat/x"}} {
+		id, pid := "claude:s"+strconv.Itoa(i), 4300+i
+		if err := a.st.StartSession(domain.Session{ID: id, Agent: "claude", PID: pid, Cwd: "/w/api", Branch: c.branch, StartedAt: testNow}); err != nil {
+			t.Fatal(err)
+		}
+		rec := a.do(t, "POST", "/api/me/start", map[string]string{"title": "T" + c.branch}, pid)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("start = %d %s", rec.Code, rec.Body)
+		}
+		if got := decode[domain.Card](t, rec); got.Branch != c.want {
+			t.Fatalf("sessão em %q: branch do card = %q, quer %q", c.branch, got.Branch, c.want)
+		}
+	}
+}

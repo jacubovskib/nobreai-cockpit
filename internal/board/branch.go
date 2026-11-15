@@ -17,24 +17,23 @@ func ProjectBase(git gitinfo.BranchReader, p domain.Project) string {
 
 // SyncCardBranch faz o branch do card acompanhar o branch de trabalho da
 // sessão. Ignora "", "HEAD" (detached) e a base do projeto, para o card nunca
-// ficar na base. Devolve se o branch do card mudou.
+// ficar na base (sem git, só a base configurada conta). Devolve se o branch do card mudou.
 func SyncCardBranch(st *store.Store, git gitinfo.BranchReader, cardID int64, branch string) (bool, error) {
 	if branch == "" || branch == "HEAD" {
 		return false, nil
 	}
-	if git != nil {
-		c, err := st.GetCardByID(cardID)
-		if err != nil {
-			return false, err
-		}
-		ps, err := st.ListProjects()
-		if err != nil {
-			return false, err
-		}
-		for _, p := range ps {
-			if p.ID == c.ProjectID && ProjectBase(git, p) == branch {
-				return false, nil
-			}
+	c, err := st.GetCardByID(cardID)
+	if err != nil {
+		return false, err
+	}
+	ps, err := st.ListProjects()
+	if err != nil {
+		return false, err
+	}
+	for _, p := range ps {
+		// Sem git só vale a base configurada (ProjectBase não detecta com git nil).
+		if p.ID == c.ProjectID && ProjectBase(git, p) == branch {
+			return false, nil
 		}
 	}
 	return st.SetCardBranch(cardID, branch)
