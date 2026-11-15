@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
 func (c *cli) project(args []string) error {
@@ -28,29 +29,31 @@ func (c *cli) project(args []string) error {
 		if len(pos) > 1 {
 			return usagef(u)
 		}
-		path := "."
+		arg := ""
 		if len(pos) == 1 {
-			path = pos[0]
+			arg = pos[0]
 		}
-		if !filepath.IsAbs(path) {
-			wd, err := c.cwd()
-			if err != nil {
-				return err
-			}
-			path = filepath.Join(wd, path)
+		path, loc, err := c.projectPath(arg)
+		if err != nil {
+			return err
 		}
-		path = filepath.Clean(path)
-		// De dentro de um worktree ligado, cadastra o checkout principal.
-		if c.git != nil {
-			if main := c.git.Locate(path).Main; main != "" {
-				path = main
-			}
+		if c.git != nil && loc.Root == "" {
+			return fmt.Errorf("%s não é um repositório git: o NobreAI Cockpit só cadastra repositórios git", path)
 		}
 		p, err := c.client().AddProject(ctx(), *name, path)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(c.out, "Projeto %s cadastrado: %s (base %s, %d sessões religadas)\n", p.Name, p.Path, p.BaseBranch, p.Reassigned)
+		var info []string
+		if p.BaseBranch != "" {
+			info = append(info, "base "+p.BaseBranch)
+		}
+		if p.Reassigned == 1 {
+			info = append(info, "1 sessão religada")
+		} else {
+			info = append(info, fmt.Sprintf("%d sessões religadas", p.Reassigned))
+		}
+		fmt.Fprintf(c.out, "Projeto %s cadastrado: %s (%s)\n", p.Name, p.Path, strings.Join(info, ", "))
 	case "base":
 		pos, err := c.parse(flag.NewFlagSet("project base", flag.ContinueOnError), args[1:])
 		if err != nil {
@@ -59,30 +62,13 @@ func (c *cli) project(args []string) error {
 		if len(pos) < 1 || len(pos) > 2 {
 			return usagef(u)
 		}
-		path := "."
+		arg := ""
 		if len(pos) == 2 {
-			path = pos[1]
+			arg = pos[1]
 		}
-		if !filepath.IsAbs(path) {
-			wd, err := c.cwd()
-			if err != nil {
-				return err
-			}
-			path = filepath.Join(wd, path)
-		}
-		path = filepath.Clean(path)
-		ps, err := c.client().Projects(ctx())
+		found, err := c.findProject(arg)
 		if err != nil {
 			return err
-		}
-		var found *domain.Project
-		for i := range ps {
-			if filepath.Clean(ps[i].Path) == path {
-				found = &ps[i]
-			}
-		}
-		if found == nil {
-			return fmt.Errorf("projeto não cadastrado: %s (use nobre project add)", path)
 		}
 		if err := c.client().SetProjectBase(ctx(), found.ID, pos[0]); err != nil {
 			return err
@@ -197,37 +183,13 @@ func (c *cli) projectScan(u string, args []string) error {
 	if len(pos) > 1 {
 		return usagef("%s", u)
 	}
-	path := "."
+	arg := ""
 	if len(pos) == 1 {
-		path = pos[0]
+		arg = pos[0]
 	}
-	if !filepath.IsAbs(path) {
-		wd, err := c.cwd()
-		if err != nil {
-			return err
-		}
-		path = filepath.Join(wd, path)
-	}
-	path = filepath.Clean(path)
-	if c.git != nil { // de dentro de um worktree ligado, vale o checkout principal
-		if main := c.git.Locate(path).Main; main != "" {
-			path = main
-		}
-	}
-	ps, err := c.client().Projects(ctx())
+	found, err := c.findProject(arg)
 	if err != nil {
 		return err
-	}
-	var found *domain.Project
-	for i := range ps {
-		pp := filepath.Clean(ps[i].Path)
-		if (path == pp || strings.HasPrefix(path, pp+string(filepath.Separator))) &&
-			(found == nil || len(pp) > len(filepath.Clean(found.Path))) {
-			found = &ps[i]
-		}
-	}
-	if found == nil {
-		return fmt.Errorf("projeto não cadastrado: %s (use nobre project add)", path)
 	}
 	s, err := c.client().ScanProject(ctx(), found.ID)
 	if err != nil {
@@ -267,4 +229,59 @@ func (c *cli) projectScan(u string, args []string) error {
 		fmt.Fprintf(c.out, "  %s  [%s]  %s  %s\n", k.Key, k.Column, k.Title, k.Branch)
 	}
 	return nil
+}
+
+// projectPath resolve arg (vazio = cwd) como o hook resolve o cwd da sessão:
+// absoluto e, num worktree ligado, o mesmo lugar dentro do checkout principal.
+// Fora disso fica como veio (uma subpasta continua subpasta). Devolve também
+// onde o caminho fica no git (vazio sem git ou fora de repositório).
+func (c *cli) projectPath(arg string) (string, gitinfo.Location, error) {
+	path := arg
+	if path == "" {
+		path = "."
+	}
+	if !filepath.IsAbs(path) {
+		wd, err := c.cwd()
+		if err != nil {
+			return "", gitinfo.Location{}, err
+		}
+		path = filepath.Join(wd, path)
+	}
+	path = filepath.Clean(path)
+	if c.git == nil {
+		return path, gitinfo.Location{}, nil
+	}
+	loc := c.git.Locate(path)
+	if loc.Linked && loc.Main != "" {
+		if rel, err := filepath.Rel(loc.Root, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			path = filepath.Join(loc.Main, rel)
+		}
+	}
+	return path, loc, nil
+}
+
+// findProject acha o projeto que contém arg (vazio = cwd), resolvido como em
+// projectPath: o de caminho mais longo que é o próprio caminho ou o contém
+// (o mesmo limite de diretório de ProjectForPath).
+func (c *cli) findProject(arg string) (*domain.Project, error) {
+	path, _, err := c.projectPath(arg)
+	if err != nil {
+		return nil, err
+	}
+	ps, err := c.client().Projects(ctx())
+	if err != nil {
+		return nil, err
+	}
+	var found *domain.Project
+	for i := range ps {
+		pp := filepath.Clean(ps[i].Path)
+		if (path == pp || strings.HasPrefix(path, pp+string(filepath.Separator))) &&
+			(found == nil || len(pp) > len(filepath.Clean(found.Path))) {
+			found = &ps[i]
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("projeto não cadastrado: %s (use nobre project add)", path)
+	}
+	return found, nil
 }

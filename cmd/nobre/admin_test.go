@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -125,6 +126,130 @@ func TestCLIProjectScanPrintsSections(t *testing.T) {
 		"Planos com tarefas abertas", "docs/plan-x.md", "Sessões recentes com custo", "Cards que já existem", "NAC-1"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("faltou %q em:\n%s", want, r.stdout)
+		}
+	}
+}
+
+// mapWT é um git falso: mapeia o topo de cada worktree para o checkout
+// principal; Locate escolhe o topo mais profundo que contém o diretório.
+type mapWT map[string]string
+
+func (g mapWT) Locate(dir string) gitinfo.Location {
+	best := ""
+	for root := range g {
+		if (dir == root || strings.HasPrefix(dir, root+"/")) && len(root) > len(best) {
+			best = root
+		}
+	}
+	if best == "" {
+		return gitinfo.Location{}
+	}
+	return gitinfo.Location{Root: best, Main: g[best], Linked: best != g[best]}
+}
+func (g mapWT) Worktrees(string) ([]gitinfo.Worktree, error) { return nil, nil }
+
+var testRepos = mapWT{
+	"/w/api":                     "/w/api",
+	"/w/api/.claude/worktrees/x": "/w/api",
+	"/w/api-feat":                "/w/api",
+}
+
+// projectServer é o daemon falso com o projeto 3 em /w/api: grava o corpo do
+// POST /api/projects (respondendo reply) e o caminho de cada requisição.
+func projectServer(t *testing.T, reply string, body, paths *[]string) string {
+	return fake(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		*paths = append(*paths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/projects":
+			*body = append(*body, string(b))
+			w.WriteHeader(201)
+			w.Write([]byte(reply))
+		case r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":3,"name":"api","path":"/w/api"},{"id":4,"name":"outro","path":"/w/api-outro"}]`))
+		case r.URL.Path == "/api/projects/3/scan":
+			w.Write([]byte(`{"repo":"/w/api","base":"main","branches":[],"plans":[],"sessions":[],"cards":[]}`))
+		case r.URL.Path == "/api/projects/3":
+			w.Write([]byte(`{}`))
+		default:
+			t.Errorf("path = %s", r.URL.Path)
+		}
+	})
+}
+
+func runProjectCLI(t *testing.T, addr, cwd string, git gitinfo.WorktreeReader, args ...string) result {
+	t.Helper()
+	var out, errb bytes.Buffer
+	c := &cli{in: strings.NewReader(""), out: &out, err: &errb,
+		getenv: func(k string) string {
+			if k == "NOBRE_ADDR" {
+				return addr
+			}
+			return ""
+		},
+		cwd: func() (string, error) { return cwd, nil },
+		git: git}
+	code := c.run(args)
+	return result{code: code, stdout: out.String(), err: errb.String()}
+}
+
+func TestCLIProjectAddRefusesNonGit(t *testing.T) {
+	var body, paths []string
+	addr := projectServer(t, `{}`, &body, &paths)
+	r := runProjectCLI(t, addr, "/w/solto", testRepos, "project", "add")
+	if r.code == 0 || !strings.Contains(r.err, "não é um repositório git") || len(paths) != 0 {
+		t.Fatalf("%+v paths=%v", r, paths)
+	}
+}
+
+func TestCLIProjectAddResolvesLikeTheHook(t *testing.T) {
+	for _, c := range []struct{ cwd, arg, want string }{
+		{"/w/api", "packages/api", "/w/api/packages/api"},       // subpasta fica subpasta
+		{"/w/api/packages", "", "/w/api/packages"},              // idem pelo cwd
+		{"/w/api-feat", "", "/w/api"},                           // worktree ligado externo
+		{"/w/api-feat/packages/api", "", "/w/api/packages/api"}, // mesma subpasta no principal
+		{"/w/api/.claude/worktrees/x", "", "/w/api"},            // worktree aninhado
+	} {
+		var body, paths []string
+		addr := projectServer(t, `{"name":"api","path":"`+c.want+`"}`, &body, &paths)
+		args := []string{"project", "add"}
+		if c.arg != "" {
+			args = append(args, c.arg)
+		}
+		r := runProjectCLI(t, addr, c.cwd, testRepos, args...)
+		if r.code != 0 || len(body) != 1 || body[0] != `{"name":"","path":"`+c.want+`"}` {
+			t.Fatalf("cwd %s arg %q: %+v body=%v", c.cwd, c.arg, r, body)
+		}
+	}
+}
+
+func TestCLIProjectAddOutput(t *testing.T) {
+	for _, c := range []struct{ reply, want string }{
+		{`{"name":"api","path":"/w/api","reassigned":1}`, "Projeto api cadastrado: /w/api (1 sessão religada)\n"},
+		{`{"name":"api","path":"/w/api","base_branch":"main","reassigned":0}`, "Projeto api cadastrado: /w/api (base main, 0 sessões religadas)\n"},
+		{`{"name":"api","path":"/w/api","base_branch":"main","reassigned":3}`, "Projeto api cadastrado: /w/api (base main, 3 sessões religadas)\n"},
+	} {
+		var body, paths []string
+		addr := projectServer(t, c.reply, &body, &paths)
+		if r := runProjectCLI(t, addr, "/w/api", testRepos, "project", "add"); r.code != 0 || r.stdout != c.want {
+			t.Fatalf("%+v, quer %q", r, c.want)
+		}
+	}
+}
+
+// scan e base acham o projeto de uma subpasta e de um worktree ligado, como o hook.
+func TestCLIProjectScanAndBaseFindProjectFromSubdirAndWorktree(t *testing.T) {
+	for _, cwd := range []string{"/w/api/internal/api", "/w/api-feat", "/w/api-feat/internal", "/w/api/.claude/worktrees/x"} {
+		var body, paths []string
+		addr := projectServer(t, `{}`, &body, &paths)
+		if r := runProjectCLI(t, addr, cwd, testRepos, "project", "scan"); r.code != 0 || !strings.Contains(r.stdout, "Projeto: api") {
+			t.Fatalf("scan em %s: %+v", cwd, r)
+		}
+		if r := runProjectCLI(t, addr, cwd, testRepos, "project", "base", "develop"); r.code != 0 || r.stdout != "Base do projeto api: develop\n" {
+			t.Fatalf("base em %s: %+v", cwd, r)
+		}
+		if !slices.Contains(paths, "PATCH /api/projects/3") {
+			t.Fatalf("base em %s não chamou o projeto 3: %v", cwd, paths)
 		}
 	}
 }
