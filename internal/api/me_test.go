@@ -161,3 +161,65 @@ func TestMeStartWithoutProjectAsksTheUser(t *testing.T) {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestMeAnswerOwnCardQuestion(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	q := decode[map[string]any](t, a.do(t, "POST", "/api/me/ask", map[string]string{"text": "qual cookie?"}, 4242))
+	if q["id"] == nil || q["text"] != "qual cookie?" {
+		t.Fatalf("ask = %v", q)
+	}
+	rec := a.do(t, "POST", "/api/me/answer", map[string]any{"id": q["id"], "answer": "cookie"}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer = %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[map[string]any](t, rec); got["id"] != q["id"] || got["answer"] != "cookie" {
+		t.Fatalf("resposta = %v", got)
+	}
+	ct, _ := a.st.CardContent(c.ID)
+	if len(ct.Questions) != 1 || ct.Questions[0].Answer != "cookie" {
+		t.Fatalf("content = %+v", ct)
+	}
+	evs, _ := a.st.RecentEvents(10)
+	n := 0
+	for _, e := range evs {
+		if e.Kind == domain.EvAnswer {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("eventos answer = %d (%+v)", n, evs)
+	}
+}
+
+func TestMeAnswerOtherCardQuestion404(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	other, err := a.st.CreateCard(domain.Card{Title: "Outro", ProjectID: c.ProjectID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := a.st.AddQuestion(domain.Question{CardID: other.ID, Text: "?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/answer", map[string]any{"id": q.ID, "answer": "x"}, 4242)
+	if rec.Code != http.StatusNotFound || decode[map[string]string](t, rec)["error"] != "pergunta não encontrada neste card" {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if ct, _ := a.st.CardContent(other.ID); ct.Questions[0].Answer != "" {
+		t.Fatalf("resposta gravada: %+v", ct)
+	}
+}
+
+func TestMeAnswerEmpty400(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	q, _ := a.st.AddQuestion(domain.Question{CardID: c.ID, Text: "?"})
+	if rec := a.do(t, "POST", "/api/me/answer", map[string]any{"id": q.ID, "answer": "  "}, 4242); rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}

@@ -28,6 +28,7 @@ Agente (use dentro de uma sessão de agente):
   nobre todo add "<texto>"                                adiciona uma pendência
   nobre todo done <id>                                    conclui uma pendência
   nobre ask "<pergunta>"                                  registra uma pergunta em aberto
+  nobre answer <id> "<resposta>"                          responde uma pergunta do card
   nobre test "<como testar>"                              registra como testar
   nobre done                                              marca o card como pronto para revisão
   nobre status                                            mostra o card e a prontidão do handoff
@@ -111,7 +112,9 @@ func (c *cli) run(args []string) int {
 	case "note":
 		err = c.simple("note", "texto", rest, "text")
 	case "ask":
-		err = c.simple("ask", "pergunta", rest, "text")
+		err = c.ask(rest)
+	case "answer":
+		err = c.answer(rest)
 	case "test":
 		err = c.simple("test", "como testar", rest, "text")
 	case "decide":

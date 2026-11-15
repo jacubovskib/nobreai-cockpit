@@ -83,3 +83,12 @@ func TestBuildCostFormatPtBR(t *testing.T) {
 		t.Fatal(out)
 	}
 }
+
+func TestPackageQuestionsShowIDs(t *testing.T) {
+	c, ct := fixture()
+	ct.Questions = []domain.Question{{ID: 3, Text: "x"}, {ID: 4, Text: "y", Answer: "z"}}
+	out := Build(c, ct, nil, nil, "")
+	if !strings.Contains(out, "- [3] x") || strings.Contains(out, "- [4]") {
+		t.Fatalf("perguntas:\n%s", out)
+	}
+}

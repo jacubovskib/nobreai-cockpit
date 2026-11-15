@@ -65,6 +65,47 @@ func (c *cli) simple(action, what string, args []string, field string) error {
 	return nil
 }
 
+func (c *cli) ask(args []string) error {
+	pos, err := c.parse(flag.NewFlagSet("ask", flag.ContinueOnError), args)
+	if err != nil {
+		return err
+	}
+	text := joinText(pos)
+	if text == "" {
+		return usagef(`uso: nobre ask "<pergunta>"`)
+	}
+	q, err := c.client().Ask(ctx(), text)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Pergunta %d registrada.\n", q.ID)
+	return nil
+}
+
+func (c *cli) answer(args []string) error {
+	const u = `uso: nobre answer <id> "<resposta>"`
+	pos, err := c.parse(flag.NewFlagSet("answer", flag.ContinueOnError), args)
+	if err != nil {
+		return err
+	}
+	if len(pos) < 2 {
+		return usagef(u)
+	}
+	id, err := strconv.ParseInt(pos[0], 10, 64)
+	if err != nil {
+		return usagef(u)
+	}
+	text := joinText(pos[1:])
+	if text == "" {
+		return usagef(u)
+	}
+	if err := c.client().AnswerQuestion(ctx(), id, text); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.out, "Resposta registrada.")
+	return nil
+}
+
 func (c *cli) decide(args []string) error {
 	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
 	why := fs.String("why", "", "porquê da decisão")
@@ -156,6 +197,15 @@ func (c *cli) status() error {
 		if !it.OK {
 			fmt.Fprintf(c.out, "  falta: %s\n", it.Label)
 		}
+	}
+	var open []string
+	for _, q := range k.Content.Questions {
+		if q.Answer == "" {
+			open = append(open, fmt.Sprintf("- [%d] %s", q.ID, q.Text))
+		}
+	}
+	if len(open) > 0 {
+		fmt.Fprintf(c.out, "Perguntas em aberto:\n%s\n", strings.Join(open, "\n"))
 	}
 	return nil
 }

@@ -163,3 +163,48 @@ func TestOnlyLeadingDoubleDashConsumedInSimple(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIAnswer(t *testing.T) {
+	var path, body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bs, _ := json.Marshal(b)
+		path, body = r.URL.Path, string(bs)
+		w.Write([]byte(`{"id":3,"answer":"cookie"}`))
+	})
+	r := runCLI(t, addr, "", nil, "answer", "3", "cookie")
+	if r.code != 0 || path != "/api/me/answer" || body != `{"answer":"cookie","id":3}` || strings.TrimSpace(r.stdout) != "Resposta registrada." {
+		t.Fatalf("%+v path=%s body=%s", r, path, body)
+	}
+}
+
+func TestCLIAnswerUsage(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { t.Error("não deveria chamar a API") })
+	for _, args := range [][]string{{"answer", "abc", "x"}, {"answer", "3"}} {
+		if r := runCLI(t, addr, "", nil, args...); r.code != 2 {
+			t.Fatalf("%v: %+v", args, r)
+		}
+	}
+}
+
+func TestCLIAskPrintsID(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":7,"text":"como?"}`))
+	})
+	if r := runCLI(t, addr, "", nil, "ask", "como?"); r.code != 0 || strings.TrimSpace(r.stdout) != "Pergunta 7 registrada." {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestStatusListsOpenQuestions(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"session":{},"card":{"key":"NAC-7","title":"L","column":"em_andamento","readiness":{"met":0,"total":0,"items":[]},
+		"content":{"questions":[{"id":5,"text":"qual?","answer":""},{"id":6,"text":"feita","answer":"ok"}]}}}`))
+	})
+	r := runCLI(t, addr, "", nil, "status")
+	if !strings.Contains(r.stdout, "Perguntas em aberto:\n- [5] qual?") || strings.Contains(r.stdout, "feita") {
+		t.Fatalf("%s", r.stdout)
+	}
+}

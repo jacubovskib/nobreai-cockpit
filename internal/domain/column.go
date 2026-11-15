@@ -27,6 +27,7 @@ const (
 	EvEssentialFile = "essential_file"
 	EvTodo          = "todo"
 	EvQuestion      = "question"
+	EvAnswer        = "answer"
 	EvHeartbeat     = "heartbeat"
 	EvDone          = "done"        // nobre done: agente marcou o card como pronto para revisão
 	EvHowToTest     = "how_to_test" // nobre test: agente registrou "como testar"

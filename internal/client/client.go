@@ -135,6 +135,7 @@ func (c *Client) Hook(ctx context.Context, agent string, call adapter.HookCall) 
 type StatusCard struct {
 	domain.Card
 	Readiness domain.ReadinessResult `json:"readiness"`
+	Content   domain.Content         `json:"content"`
 }
 
 // Status é a resposta de GET /api/me/status.
@@ -168,6 +169,18 @@ func (c *Client) Resume(ctx context.Context, key string, force bool) (string, er
 // Me faz uma escrita simples numa rota /api/me/<action>.
 func (c *Client) Me(ctx context.Context, action string, body any) error {
 	return c.Do(ctx, "POST", "/api/me/"+action, body, nil)
+}
+
+// Ask registra uma pergunta em aberto e devolve a pergunta criada.
+func (c *Client) Ask(ctx context.Context, text string) (domain.Question, error) {
+	var q domain.Question
+	err := c.Do(ctx, "POST", "/api/me/ask", map[string]string{"text": text}, &q)
+	return q, err
+}
+
+// AnswerQuestion registra a resposta de uma pergunta do card da sessão.
+func (c *Client) AnswerQuestion(ctx context.Context, id int64, answer string) error {
+	return c.Do(ctx, "POST", "/api/me/answer", map[string]any{"id": id, "answer": answer}, nil)
 }
 
 // AddProject cadastra um projeto.

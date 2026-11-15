@@ -32,6 +32,7 @@ func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/file", s.withSessionCard(s.meContent(s.addFile)))
 	mux.HandleFunc("POST /api/me/todo", s.withSessionCard(s.meContent(s.addTodo)))
 	mux.HandleFunc("POST /api/me/ask", s.withSessionCard(s.meContent(s.addQuestion)))
+	mux.HandleFunc("POST /api/me/answer", s.withSessionCard(s.meAnswer))
 	mux.HandleFunc("POST /api/me/todo-done", s.withSessionCard(s.meTodoDone))
 	mux.HandleFunc("POST /api/me/test", s.withSessionCard(s.meTest))
 	mux.HandleFunc("POST /api/me/done", s.withSessionCard(s.meDone))
@@ -257,6 +258,40 @@ func (s *server) meTodoDone(w http.ResponseWriter, r *http.Request, sess domain.
 	s.recordEvent(sess.ID, domain.EvTodo, map[string]any{"id": in.ID, "done": true})
 	s.publish("cards")
 	writeJSON(w, http.StatusOK, map[string]any{"id": in.ID, "done": true})
+}
+
+func (s *server) meAnswer(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		ID     int64  `json:"id"`
+		Answer string `json:"answer"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Answer) == "" {
+		writeError(w, http.StatusBadRequest, "resposta obrigatória")
+		return
+	}
+	ct, err := s.st.CardContent(c.ID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	found := false
+	for _, q := range ct.Questions {
+		found = found || q.ID == in.ID
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "pergunta não encontrada neste card")
+		return
+	}
+	if err := s.st.AnswerQuestion(in.ID, in.Answer); err != nil {
+		writeStoreError(w, err, "pergunta não encontrada")
+		return
+	}
+	s.recordEvent(sess.ID, domain.EvAnswer, map[string]any{"id": in.ID, "answer": in.Answer})
+	s.publish("cards")
+	writeJSON(w, http.StatusOK, map[string]any{"id": in.ID, "answer": in.Answer})
 }
 
 func (s *server) meTest(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
