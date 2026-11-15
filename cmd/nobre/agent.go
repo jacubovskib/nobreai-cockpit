@@ -27,6 +27,34 @@ func (c *cli) start(args []string) error {
 	return nil
 }
 
+func (c *cli) card(args []string) error {
+	const u = `uso: nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado]`
+	if len(args) == 0 || args[0] != "add" {
+		return usagef(u)
+	}
+	fs := flag.NewFlagSet("card add", flag.ContinueOnError)
+	goal := fs.String("goal", "", "objetivo do card")
+	done := fs.String("done-when", "", "critério de pronto")
+	branch := fs.String("branch", "", "branch do card")
+	where := fs.String("where", "", `"Onde parei" do card`)
+	column := fs.String("column", "", "backlog (padrão) ou pausado")
+	pos, err := c.parse(fs, args[1:])
+	if err != nil {
+		return err
+	}
+	title := joinText(pos)
+	if title == "" {
+		return usagef(u)
+	}
+	card, err := c.client().AddCard(ctx(), map[string]string{"title": title, "goal": *goal, "done_when": *done,
+		"branch": *branch, "where_stopped": *where, "column": *column})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Card %s criado no %s (sessão não ligada).\n", card.Key, card.Column)
+	return nil
+}
+
 func (c *cli) resume(args []string) error {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	force := fs.Bool("force", false, "assume o card mesmo com outra sessão viva")
@@ -62,6 +90,63 @@ func (c *cli) simple(action, what string, args []string, field string) error {
 		return err
 	}
 	fmt.Fprintln(c.out, "Registrado.")
+	return nil
+}
+
+func (c *cli) ask(args []string) error {
+	pos, err := c.parse(flag.NewFlagSet("ask", flag.ContinueOnError), args)
+	if err != nil {
+		return err
+	}
+	text := joinText(pos)
+	if text == "" {
+		return usagef(`uso: nobre ask "<pergunta>"`)
+	}
+	q, err := c.client().Ask(ctx(), text)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Pergunta %d registrada.\n", q.ID)
+	return nil
+}
+
+func (c *cli) answer(args []string) error {
+	const u = `uso: nobre answer <id> "<resposta>"`
+	pos, err := c.parse(flag.NewFlagSet("answer", flag.ContinueOnError), args)
+	if err != nil {
+		return err
+	}
+	if len(pos) < 2 {
+		return usagef(u)
+	}
+	id, err := strconv.ParseInt(pos[0], 10, 64)
+	if err != nil {
+		return usagef(u)
+	}
+	text := joinText(pos[1:])
+	if text == "" {
+		return usagef(u)
+	}
+	if err := c.client().AnswerQuestion(ctx(), id, text); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.out, "Resposta registrada.")
+	return nil
+}
+
+func (c *cli) branch(args []string) error {
+	const u = `uso: nobre branch <nome>`
+	pos, err := c.parse(flag.NewFlagSet("branch", flag.ContinueOnError), args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usagef(u)
+	}
+	if err := c.client().SetBranch(ctx(), pos[0]); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.out, "Branch do card atualizado.")
 	return nil
 }
 
@@ -128,8 +213,17 @@ func (c *cli) todo(args []string) error {
 	return nil
 }
 
-func (c *cli) done() error {
-	if err := c.client().Me(ctx(), "done", map[string]string{}); err != nil {
+func (c *cli) done(args []string) error {
+	fs := flag.NewFlagSet("done", flag.ContinueOnError)
+	force := fs.Bool("force", false, "marca como pronto mesmo com pendências")
+	pos, err := c.parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 0 {
+		return usagef("uso: nobre done [--force]")
+	}
+	if err := c.client().Me(ctx(), "done", map[string]bool{"force": *force}); err != nil {
 		return err
 	}
 	fmt.Fprintln(c.out, "Card marcado como pronto para revisão.")
@@ -156,6 +250,15 @@ func (c *cli) status() error {
 		if !it.OK {
 			fmt.Fprintf(c.out, "  falta: %s\n", it.Label)
 		}
+	}
+	var open []string
+	for _, q := range k.Content.Questions {
+		if q.Answer == "" {
+			open = append(open, fmt.Sprintf("- [%d] %s", q.ID, q.Text))
+		}
+	}
+	if len(open) > 0 {
+		fmt.Fprintf(c.out, "Perguntas em aberto:\n%s\n", strings.Join(open, "\n"))
 	}
 	return nil
 }

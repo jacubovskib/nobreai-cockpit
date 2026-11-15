@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
@@ -145,5 +146,44 @@ func TestGetCardByID(t *testing.T) {
 	}
 	if _, err := s.GetCardByID(999); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSetCardBranchResetsMarks(t *testing.T) {
+	s := newTestStore(t)
+	p, _ := s.CreateProject("api", "/w/api")
+	c, err := s.CreateCard(domain.Card{Title: "x", ProjectID: p.ID, Branch: "feat/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetBranchHead(c.ID, "feat/x", "abc", true); err != nil || !ok {
+		t.Fatalf("SetBranchHead = %v, %v", ok, err)
+	}
+	at := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	if ok, err := s.MarkBranchMerged(c.ID, "feat/x", at); err != nil || !ok {
+		t.Fatalf("MarkBranchMerged = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkBranchMerged(c.ID, "feat/x", at); err != nil || ok {
+		t.Fatalf("2ª marca = %v, %v", ok, err)
+	}
+	if ok, err := s.SetBranchHead(c.ID, "feat/outro", "def", true); err != nil || ok {
+		t.Fatalf("head em outro branch = %v, %v", ok, err)
+	}
+	got, _ := s.GetCardByID(c.ID)
+	if got.BranchHead != "abc" || !got.BranchDiverged || got.BranchMergedAt == nil || !got.BranchMergedAt.Equal(at) {
+		t.Fatalf("marcas = %+v", got)
+	}
+	if ch, err := s.SetCardBranch(c.ID, "feat/x"); err != nil || ch {
+		t.Fatalf("mesmo branch = %v, %v", ch, err)
+	}
+	if got, _ = s.GetCardByID(c.ID); got.BranchHead != "abc" {
+		t.Fatal("mesmo branch não deveria zerar")
+	}
+	if ch, err := s.SetCardBranch(c.ID, "feat/y"); err != nil || !ch {
+		t.Fatalf("novo branch = %v, %v", ch, err)
+	}
+	got, _ = s.GetCardByID(c.ID)
+	if got.Branch != "feat/y" || got.BranchHead != "" || got.BranchDiverged || got.BranchMergedAt != nil {
+		t.Fatalf("marcas não zeradas: %+v", got)
 	}
 }

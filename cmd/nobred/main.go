@@ -149,6 +149,14 @@ func run(dbPath string, seedDemo bool) error {
 	// Em qualquer retorno (inclusive falha precoce do servidor) o reconciliador
 	// para e termina antes de st.Close (defers rodam em ordem inversa).
 	defer func() { stop(); <-recDone }()
+	// Integração a cada 2 min: nota branches de cards que entraram na base.
+	intDone := make(chan struct{})
+	go func() {
+		defer close(intDone)
+		board.RunIntegrations(ctx, st, git, 2*time.Minute, time.Now,
+			func() { hub.Publish("cards") }, log.Printf)
+	}()
+	defer func() { stop(); <-intDone }()
 	go monitor.Sampler.Run(ctx, 5*time.Second)
 	go monitor.Meter.Run(ctx)
 

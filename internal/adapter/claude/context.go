@@ -3,11 +3,15 @@ package claude
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -16,11 +20,18 @@ import (
 // registrada no board; a skill global só usa o nobre quando a vê.
 const registeredPhrase = "NobreAI Cockpit: esta sessão é registrada no board"
 
+// unregisteredPhrase abre o aviso do SessionStart num repositório git que
+// ainda não está no board.
+const unregisteredPhrase = "NobreAI Cockpit: este repositório não está cadastrado no board"
+
 // instructions é o começo do contexto injetado no SessionStart: quando criar
 // card (spec 6.0) e os comandos nobre.
-const instructions = registeredPhrase + `.
-Crie um card com nobre start "<título>" quando começar algo que precisa de histórico: tarefa de várias etapas, mudanças em vários arquivos ou trabalho que outro agente pode continuar. Se o usuário pedir um card, crie; se citar uma chave NAC-, use nobre resume <KEY>. Perguntas rápidas não viram card.
-Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
+const instructions = registeredPhrase + ".\n" + guidance
+
+// guidance são as instruções sem a frase de sessão registrada (o aviso de
+// repositório não cadastrado termina nelas).
+const guidance = `Crie um card com nobre start "<título>" quando começar algo que precisa de histórico: tarefa de várias etapas, mudanças em vários arquivos ou trabalho que outro agente pode continuar. Se o usuário pedir um card, crie; se citar uma chave NAC-, use nobre resume <KEY>. Perguntas rápidas não viram card.
+Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
 
 // resumeEnv é a variável de ambiente com que a UI abre o agente para
 // continuar um card.
@@ -48,18 +59,35 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 			if err != nil {
 				return adapter.HookReply{}, err
 			}
+			// O card passa a acompanhar o branch de trabalho desta sessão
+			// antes de o pacote de retomada ser montado.
+			sess.CardID = &c.ID
+			a.syncCardBranch(sess)
+			if c, err = a.st.GetCard(key); err != nil {
+				return adapter.HookReply{}, err
+			}
 			if pkg, err = a.resumePackage(c, sess.ID); err != nil {
 				return adapter.HookReply{}, err
 			}
 			resumed = &c
-			sess.CardID = &c.ID
 		}
 	}
 	// Compactação numa sessão com card: o pacote de retomada some do
 	// contexto junto com o resto e é reinjetado.
 	compacted := p.Source == "compact" && resumed == nil && sess.CardID != nil
 	if !sess.FullCapture && resumed == nil && notFound == "" && !compacted {
-		return adapter.HookReply{}, nil
+		if sess.ProjectID != nil {
+			return adapter.HookReply{}, nil
+		}
+		root := a.unregisteredRoot(sess.Cwd)
+		if root == "" {
+			return adapter.HookReply{}, nil
+		}
+		return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
+			"hookEventName": "SessionStart",
+			"additionalContext": unregisteredPhrase + " (" + root + ").\nAntes de seguir com o pedido do usuário, cadastre com nobre project add " + root +
+				" e faça o levantamento com nobre project scan; crie os cards importantes com nobre card add (veja a skill nobre-cockpit). O cadastro liga esta sessão ao board.\n\n" + guidance,
+		}})
 	}
 
 	var b strings.Builder
@@ -106,11 +134,45 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	}})
 }
 
-// pausedCards lista os cards pausados do projeto e do branch da sessão
-// (exceto o que acabou de ser retomado).
+// unregisteredRoot devolve a raiz do repositório git de cwd quando vale
+// avisar que ele não está cadastrado; "" quando não há repositório, a raiz é o
+// HOME ou já existe projeto para ela (mesmo com captura desligada, que funciona
+// como "ignorar").
+func (a *Adapter) unregisteredRoot(cwd string) string {
+	wr, ok := a.deps.Git.(gitinfo.WorktreeReader)
+	if !ok || cwd == "" {
+		return ""
+	}
+	root := wr.Locate(cwd).Main
+	if root == "" {
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == filepath.Clean(root) {
+		return ""
+	}
+	if p, err := a.st.ProjectForPath(root); err != nil || p != nil {
+		return ""
+	}
+	return root
+}
+
+// pausedCards lista os cards pausados do projeto da sessão (exceto o que
+// acabou de ser retomado). Num branch de trabalho, só os desse branch e os sem
+// branch; na base (ou sem branch), todos: o card nunca guarda a base.
 func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domain.Card, error) {
 	if sess.ProjectID == nil {
 		return nil, nil
+	}
+	ps, err := a.st.ListProjects()
+	if err != nil {
+		return nil, err
+	}
+	onBase := sess.Branch == ""
+	br, _ := a.deps.Git.(gitinfo.BranchReader) // nil: só a base configurada conta
+	for _, p := range ps {
+		if p.ID == *sess.ProjectID && !onBase {
+			onBase = board.ProjectBase(br, p) == sess.Branch
+		}
 	}
 	cards, err := a.st.ListCards(store.CardFilter{ProjectID: *sess.ProjectID})
 	if err != nil {
@@ -118,7 +180,10 @@ func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domai
 	}
 	var out []domain.Card
 	for _, c := range cards {
-		if c.Column == domain.Pausado && c.Branch == sess.Branch && (except == nil || c.ID != except.ID) {
+		if c.Column != domain.Pausado || (except != nil && c.ID == except.ID) {
+			continue
+		}
+		if onBase || c.Branch == sess.Branch || c.Branch == "" {
 			out = append(out, c)
 		}
 	}

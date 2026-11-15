@@ -135,6 +135,7 @@ func (c *Client) Hook(ctx context.Context, agent string, call adapter.HookCall) 
 type StatusCard struct {
 	domain.Card
 	Readiness domain.ReadinessResult `json:"readiness"`
+	Content   domain.Content         `json:"content"`
 }
 
 // Status é a resposta de GET /api/me/status.
@@ -170,9 +171,32 @@ func (c *Client) Me(ctx context.Context, action string, body any) error {
 	return c.Do(ctx, "POST", "/api/me/"+action, body, nil)
 }
 
+// Ask registra uma pergunta em aberto e devolve a pergunta criada.
+func (c *Client) Ask(ctx context.Context, text string) (domain.Question, error) {
+	var q domain.Question
+	err := c.Do(ctx, "POST", "/api/me/ask", map[string]string{"text": text}, &q)
+	return q, err
+}
+
+// AnswerQuestion registra a resposta de uma pergunta do card da sessão.
+func (c *Client) AnswerQuestion(ctx context.Context, id int64, answer string) error {
+	return c.Do(ctx, "POST", "/api/me/answer", map[string]any{"id": id, "answer": answer}, nil)
+}
+
+// SetBranch informa o branch de trabalho do card da sessão.
+func (c *Client) SetBranch(ctx context.Context, branch string) error {
+	return c.Do(ctx, "POST", "/api/me/branch", map[string]string{"branch": branch}, nil)
+}
+
+// SetProjectBase grava o branch base de um projeto.
+func (c *Client) SetProjectBase(ctx context.Context, id int64, base string) error {
+	return c.Do(ctx, "PATCH", "/api/projects/"+strconv.FormatInt(id, 10), map[string]string{"base_branch": base}, nil)
+}
+
 // AddProject cadastra um projeto.
-func (c *Client) AddProject(ctx context.Context, name, path string) (domain.Project, error) {
-	var p domain.Project
+// Reassigned é quantas sessões abertas foram religadas ao projeto.
+func (c *Client) AddProject(ctx context.Context, name, path string) (AddedProject, error) {
+	var p AddedProject
 	err := c.Do(ctx, "POST", "/api/projects", map[string]string{"name": name, "path": path}, &p)
 	return p, err
 }
@@ -181,6 +205,61 @@ func (c *Client) AddProject(ctx context.Context, name, path string) (domain.Proj
 func (c *Client) Projects(ctx context.Context) ([]domain.Project, error) {
 	var ps []domain.Project
 	return ps, c.Do(ctx, "GET", "/api/projects", nil, &ps)
+}
+
+// ScanBranch, ScanPlan, ScanSession e ScanCard espelham GET /api/projects/{id}/scan.
+type ScanBranch struct {
+	Name       string    `json:"name"`
+	Subject    string    `json:"subject"`
+	Worktree   string    `json:"worktree"`
+	LastCommit time.Time `json:"last_commit"`
+	Ahead      int       `json:"ahead"`
+	Recent     bool      `json:"recent"`
+}
+
+type ScanPlan struct {
+	Path     string    `json:"path"`
+	Open     int       `json:"open"`
+	Done     int       `json:"done"`
+	Modified time.Time `json:"modified"`
+}
+
+type ScanSession struct {
+	ID        string     `json:"id"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at"`
+	Branch    string     `json:"branch"`
+	Cwd       string     `json:"cwd"`
+	CostUSD   float64    `json:"cost_usd"`
+}
+
+type ScanCard struct {
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Column string `json:"column"`
+	Branch string `json:"branch"`
+}
+
+// Scan é o levantamento do histórico de um projeto.
+type Scan struct {
+	Repo     string        `json:"repo"`
+	Base     string        `json:"base"`
+	Branches []ScanBranch  `json:"branches"`
+	Plans    []ScanPlan    `json:"plans"`
+	Sessions []ScanSession `json:"sessions"`
+	Cards    []ScanCard    `json:"cards"`
+}
+
+// ScanProject pede o levantamento só de leitura do projeto.
+func (c *Client) ScanProject(ctx context.Context, id int64) (Scan, error) {
+	var s Scan
+	return s, c.Do(ctx, "GET", "/api/projects/"+strconv.FormatInt(id, 10)+"/scan", nil, &s)
+}
+
+// AddCard cria um card no projeto da sessão sem ligar a sessão a ele.
+func (c *Client) AddCard(ctx context.Context, in map[string]string) (domain.Card, error) {
+	var card domain.Card
+	return card, c.Do(ctx, "POST", "/api/me/cards", in, &card)
 }
 
 // Prompts lista os prompts.
@@ -203,4 +282,10 @@ func (c *Client) SavePrompt(ctx context.Context, p domain.Prompt) (domain.Prompt
 	var out domain.Prompt
 	err := c.Do(ctx, "POST", "/api/prompts", p, &out)
 	return out, err
+}
+
+// AddedProject é a resposta de AddProject: o projeto e as sessões religadas.
+type AddedProject struct {
+	domain.Project
+	Reassigned int `json:"reassigned"`
 }

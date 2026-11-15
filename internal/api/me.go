@@ -3,12 +3,15 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -20,11 +23,13 @@ const (
 	agentPIDHeader = "X-Nobre-Agent-PID"
 	msgNoSession   = "nenhuma sessão de agente encontrada para este processo"
 	msgNoCard      = `Esta sessão ainda não tem card. Use nobre start "<título>" ou nobre resume <KEY>.`
-	msgNoProject   = "Este repositório não está cadastrado no NobreAI Cockpit. Peça ao usuário para cadastrar (nobre project add); não cadastre por conta própria."
+	msgNoProject   = "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan (veja a skill nobre-cockpit)."
+	msgNotGit      = "Esta pasta não é um repositório git e não pode ser cadastrada no NobreAI Cockpit; a sessão segue sem card."
 )
 
 func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/start", s.withSession(s.meStart))
+	mux.HandleFunc("POST /api/me/cards", s.withSession(s.meCards))
 	mux.HandleFunc("POST /api/me/resume", s.withSession(s.meResume))
 	mux.HandleFunc("GET /api/me/status", s.withSession(s.meStatus))
 	mux.HandleFunc("POST /api/me/note", s.withSessionCard(s.meNote))
@@ -32,8 +37,10 @@ func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/file", s.withSessionCard(s.meContent(s.addFile)))
 	mux.HandleFunc("POST /api/me/todo", s.withSessionCard(s.meContent(s.addTodo)))
 	mux.HandleFunc("POST /api/me/ask", s.withSessionCard(s.meContent(s.addQuestion)))
+	mux.HandleFunc("POST /api/me/answer", s.withSessionCard(s.meAnswer))
 	mux.HandleFunc("POST /api/me/todo-done", s.withSessionCard(s.meTodoDone))
 	mux.HandleFunc("POST /api/me/test", s.withSessionCard(s.meTest))
+	mux.HandleFunc("POST /api/me/branch", s.withSessionCard(s.meBranch))
 	mux.HandleFunc("POST /api/me/done", s.withSessionCard(s.meDone))
 }
 
@@ -117,6 +124,28 @@ func (s *server) recordEvent(sessionID, kind string, data map[string]any) {
 	s.publish("sessions")
 }
 
+// sessionProject devolve o projeto da sessão (o ligado ou o do cwd) ou
+// responde 409: fora de um repositório git não sugere cadastrar.
+func (s *server) sessionProject(w http.ResponseWriter, sess domain.Session) (int64, bool) {
+	if sess.ProjectID != nil {
+		return *sess.ProjectID, true
+	}
+	p, err := s.st.ProjectForPath(sess.Cwd)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return 0, false
+	}
+	if p != nil {
+		return p.ID, true
+	}
+	msg := msgNoProject
+	if wr, ok := s.deps.Git.(gitinfo.WorktreeReader); ok && wr.Locate(sess.Cwd).Root == "" {
+		msg = msgNotGit
+	}
+	writeError(w, http.StatusConflict, msg)
+	return 0, false
+}
+
 func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Session) {
 	var in struct {
 		Title    string `json:"title"`
@@ -130,28 +159,75 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeError(w, http.StatusBadRequest, "título obrigatório")
 		return
 	}
-	var projectID int64
-	if sess.ProjectID != nil {
-		projectID = *sess.ProjectID
-	} else {
-		p, err := s.st.ProjectForPath(sess.Cwd)
-		if err != nil {
-			writeStoreError(w, err, "")
-			return
-		}
-		if p == nil {
-			writeError(w, http.StatusConflict, msgNoProject)
-			return
-		}
-		projectID = p.ID
+	projectID, ok := s.sessionProject(w, sess)
+	if !ok {
+		return
 	}
 	c, err := s.st.CreateCardAndAttach(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
-		Branch: sess.Branch, ProjectID: projectID}, sess.ID)
+		ProjectID: projectID}, sess.ID) // o branch vem do syncBranch: a base nunca vira branch do card
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
 	}
+	s.syncBranch(c.ID, s.liveBranch(sess).Branch)
 	s.publish("cards", "sessions")
+	s.writeCard(w, http.StatusCreated, c.Key)
+}
+
+// meCards cria um card no projeto da sessão sem ligar a sessão a ele (o
+// agente cadastra o histórico do repositório sem sair do card atual).
+func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Session) {
+	var in struct {
+		Title        string `json:"title"`
+		Goal         string `json:"goal"`
+		DoneWhen     string `json:"done_when"`
+		Branch       string `json:"branch"`
+		WhereStopped string `json:"where_stopped"`
+		Column       string `json:"column"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		writeError(w, http.StatusBadRequest, "título obrigatório")
+		return
+	}
+	col := domain.Column(in.Column)
+	switch col {
+	case "":
+		col = domain.Backlog
+	case domain.Backlog, domain.Pausado:
+	default:
+		writeError(w, http.StatusBadRequest, "coluna inválida (use backlog ou pausado)")
+		return
+	}
+	projectID, ok := s.sessionProject(w, sess)
+	if !ok {
+		return
+	}
+	branch := strings.TrimSpace(in.Branch)
+	if branch != "" {
+		base, err := s.projectBase(projectID)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if branch == base { // o card nunca guarda a base
+			branch = ""
+		}
+	}
+	card := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, Branch: branch,
+		ProjectID: projectID, Column: col}
+	if w := strings.TrimSpace(in.WhereStopped); w != "" {
+		now := s.now()
+		card.WhereStopped, card.WhereStoppedAt = w, &now
+	}
+	c, err := s.st.CreateCard(card)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	s.publish("cards")
 	s.writeCard(w, http.StatusCreated, c.Key)
 }
 
@@ -181,6 +257,13 @@ func (s *server) meResume(w http.ResponseWriter, r *http.Request, sess domain.Se
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
+	// O card passa a acompanhar o branch de trabalho desta sessão.
+	if s.syncBranch(c.ID, s.liveBranch(sess).Branch) {
+		if c, err = s.st.GetCard(in.Key); err != nil {
+			writeStoreError(w, err, msgCardNotFound)
+			return
+		}
+	}
 	// A base do diff é a sessão anterior: a desta chamada acabou de entrar.
 	md, err := resume.ForCard(s.st, s.deps.Git, c, sess.ID)
 	if err != nil {
@@ -188,6 +271,97 @@ func (s *server) meResume(w http.ResponseWriter, r *http.Request, sess domain.Se
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"key": c.Key, "markdown": md})
+}
+
+// branchReader é o Git do daemon como BranchReader (nil se não souber ler branches).
+func (s *server) branchReader() gitinfo.BranchReader {
+	br, _ := s.deps.Git.(gitinfo.BranchReader)
+	return br
+}
+
+// syncBranch faz o branch do card acompanhar branch (ver board.SyncCardBranch).
+// Falha só vai para o log; devolve se o branch do card mudou.
+func (s *server) syncBranch(cardID int64, branch string) bool {
+	changed, err := board.SyncCardBranch(s.st, s.branchReader(), cardID, branch)
+	if err != nil {
+		log.Printf("branch do card %d: %v", cardID, err)
+		return false
+	}
+	if changed {
+		s.publish("cards")
+	}
+	return changed
+}
+
+// projectBase devolve a base do projeto id (ver board.ProjectBase; "" se o
+// projeto não existe ou não tem base).
+func (s *server) projectBase(id int64) (string, error) {
+	ps, err := s.st.ListProjects()
+	if err != nil {
+		return "", err
+	}
+	for _, p := range ps {
+		if p.ID == id {
+			return board.ProjectBase(s.branchReader(), p), nil
+		}
+	}
+	return "", nil
+}
+
+// liveBranch relê o branch atual do cwd da sessão (o agente pode ter trocado de
+// branch sem mudar de diretório, com git switch) e grava na sessão se mudou.
+// Falha ao gravar só vai para o log: o branch lido vale mesmo assim.
+func (s *server) liveBranch(sess domain.Session) domain.Session {
+	if s.deps.Git == nil || sess.Cwd == "" {
+		return sess
+	}
+	b := s.deps.Git.Branch(sess.Cwd)
+	if b == "" || b == sess.Branch {
+		return sess
+	}
+	l := store.SessionLocation{Cwd: sess.Cwd, Branch: b, GitHead: s.deps.Git.Head(sess.Cwd),
+		Worktree: sess.Worktree, WorktreeLinked: sess.WorktreeLinked}
+	sess.Branch, sess.GitHead = l.Branch, l.GitHead
+	if err := s.st.UpdateSessionLocation(sess.ID, l); err != nil {
+		log.Printf("branch da sessão %s: %v", sess.ID, err)
+		return sess
+	}
+	s.publish("sessions")
+	return sess
+}
+
+// meBranch troca o branch do card (o agente informa o branch de trabalho). A
+// base do projeto é recusada: o card guarda o branch de trabalho.
+func (s *server) meBranch(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		Branch string `json:"branch"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	b := strings.TrimSpace(in.Branch)
+	if b == "" {
+		writeError(w, http.StatusBadRequest, "branch obrigatório")
+		return
+	}
+	// A sessão fica com o branch atual: senão o PostToolUse deste mesmo comando
+	// veria a diferença e trocaria o branch que o agente acabou de informar.
+	s.liveBranch(sess)
+	base, err := s.projectBase(c.ProjectID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	if base == b {
+		writeError(w, http.StatusConflict, fmt.Sprintf("%q é a base do projeto; o card fica com o branch de trabalho", b))
+		return
+	}
+	if _, err := board.SyncCardBranch(s.st, s.branchReader(), c.ID, b); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	s.publish("cards")
+	s.writeCard(w, http.StatusOK, c.Key)
 }
 
 func (s *server) meStatus(w http.ResponseWriter, r *http.Request, sess domain.Session) {
@@ -259,6 +433,40 @@ func (s *server) meTodoDone(w http.ResponseWriter, r *http.Request, sess domain.
 	writeJSON(w, http.StatusOK, map[string]any{"id": in.ID, "done": true})
 }
 
+func (s *server) meAnswer(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		ID     int64  `json:"id"`
+		Answer string `json:"answer"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Answer) == "" {
+		writeError(w, http.StatusBadRequest, "resposta obrigatória")
+		return
+	}
+	ct, err := s.st.CardContent(c.ID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	found := false
+	for _, q := range ct.Questions {
+		found = found || q.ID == in.ID
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "pergunta não encontrada neste card")
+		return
+	}
+	if err := s.st.AnswerQuestion(in.ID, in.Answer); err != nil {
+		writeStoreError(w, err, "pergunta não encontrada")
+		return
+	}
+	s.recordEvent(sess.ID, domain.EvAnswer, map[string]any{"id": in.ID, "answer": in.Answer})
+	s.publish("cards")
+	writeJSON(w, http.StatusOK, map[string]any{"id": in.ID, "answer": in.Answer})
+}
+
 func (s *server) meTest(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
 	var in struct {
 		Text string `json:"text"`
@@ -280,9 +488,61 @@ func (s *server) meTest(w http.ResponseWriter, r *http.Request, sess domain.Sess
 	s.writeCard(w, http.StatusOK, c.Key)
 }
 
+// doneProblems lista o que impede o done: "Como testar" vazio ou anterior à
+// última edição de arquivo, e perguntas sem resposta.
+func (s *server) doneProblems(c domain.Card) ([]string, error) {
+	var problems []string
+	if strings.TrimSpace(c.HowToTest) == "" {
+		problems = append(problems, `"Como testar" vazio: registre com nobre test`)
+	} else {
+		edit, err := s.st.LastEventAt(c.ID, domain.EvFileEdit)
+		if err != nil {
+			return nil, err
+		}
+		test, err := s.st.LastEventAt(c.ID, domain.EvHowToTest)
+		if err != nil {
+			return nil, err
+		}
+		if edit != nil && test != nil && edit.After(*test) {
+			problems = append(problems, `"Como testar" é anterior à última edição de arquivo: atualize com nobre test`)
+		}
+	}
+	ct, err := s.st.CardContent(c.ID)
+	if err != nil {
+		return nil, err
+	}
+	open := 0
+	for _, q := range ct.Questions {
+		if strings.TrimSpace(q.Answer) == "" {
+			open++
+		}
+	}
+	if open > 0 {
+		problems = append(problems, fmt.Sprintf("%d pergunta(s) sem resposta: responda com nobre answer <id>", open))
+	}
+	return problems, nil
+}
+
 // meDone aplica a transição AgentDone (em_andamento → revisao) e registra o
 // evento done (mesmo se o card já não estava em andamento).
 func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		Force bool `json:"force"`
+	}
+	if !readJSON(w, r, &in) { // corpo vazio é aceito (force=false)
+		return
+	}
+	if !in.Force {
+		problems, err := s.doneProblems(c)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if len(problems) > 0 {
+			writeError(w, http.StatusConflict, strings.Join(problems, "; ")+" (ou nobre done --force)")
+			return
+		}
+	}
 	if next := domain.NextColumn(c.Column, domain.AgentDone); next != c.Column {
 		if err := s.st.MoveCard(c.Key, next); err != nil {
 			writeStoreError(w, err, msgCardNotFound)

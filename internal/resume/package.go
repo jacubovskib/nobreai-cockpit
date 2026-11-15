@@ -82,7 +82,7 @@ func Build(c domain.Card, ct domain.Content, sessions []domain.Session, totals [
 	var qs []string
 	for _, q := range ct.Questions {
 		if q.Answer == "" {
-			qs = append(qs, "- "+q.Text)
+			qs = append(qs, fmt.Sprintf("- [%d] %s", q.ID, q.Text))
 		}
 	}
 	section("Perguntas em aberto", strings.Join(qs, "\n"))

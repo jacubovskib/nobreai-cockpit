@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -28,7 +29,8 @@ func TestAgentCommandsCallAPI(t *testing.T) {
 		{[]string{"todo", "done", "5"}, "/api/me/todo-done", `{"id":5}`},
 		{[]string{"ask", "como?"}, "/api/me/ask", `{"text":"como?"}`},
 		{[]string{"test", "rode go test"}, "/api/me/test", `{"text":"rode go test"}`},
-		{[]string{"done"}, "/api/me/done", `{}`},
+		{[]string{"done"}, "/api/me/done", `{"force":false}`},
+		{[]string{"done", "--force"}, "/api/me/done", `{"force":true}`},
 		{[]string{"start", "Novo", "--goal", "g", "--done-when", "d"}, "/api/me/start", `{"done_when":"d","goal":"g","title":"Novo"}`},
 		{[]string{"resume", "NAC-1", "--force"}, "/api/me/resume", `{"force":true,"key":"NAC-1"}`},
 	}
@@ -161,5 +163,116 @@ func TestOnlyLeadingDoubleDashConsumedInSimple(t *testing.T) {
 		if r := runCLI(t, addr, "", nil, c.args...); r.code != 0 || last != c.want {
 			t.Fatalf("%v: %+v last=%q", c.args, r, last)
 		}
+	}
+}
+
+func TestCLIAnswer(t *testing.T) {
+	var path, body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bs, _ := json.Marshal(b)
+		path, body = r.URL.Path, string(bs)
+		w.Write([]byte(`{"id":3,"answer":"cookie"}`))
+	})
+	r := runCLI(t, addr, "", nil, "answer", "3", "cookie")
+	if r.code != 0 || path != "/api/me/answer" || body != `{"answer":"cookie","id":3}` || strings.TrimSpace(r.stdout) != "Resposta registrada." {
+		t.Fatalf("%+v path=%s body=%s", r, path, body)
+	}
+}
+
+func TestCLIAnswerUsage(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { t.Error("não deveria chamar a API") })
+	for _, args := range [][]string{{"answer", "abc", "x"}, {"answer", "3"}} {
+		if r := runCLI(t, addr, "", nil, args...); r.code != 2 {
+			t.Fatalf("%v: %+v", args, r)
+		}
+	}
+}
+
+func TestCLIAskPrintsID(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":7,"text":"como?"}`))
+	})
+	if r := runCLI(t, addr, "", nil, "ask", "como?"); r.code != 0 || strings.TrimSpace(r.stdout) != "Pergunta 7 registrada." {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestStatusListsOpenQuestions(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"session":{},"card":{"key":"NAC-7","title":"L","column":"em_andamento","readiness":{"met":0,"total":0,"items":[]},
+		"content":{"questions":[{"id":5,"text":"qual?","answer":""},{"id":6,"text":"feita","answer":"ok"}]}}}`))
+	})
+	r := runCLI(t, addr, "", nil, "status")
+	if !strings.Contains(r.stdout, "Perguntas em aberto:\n- [5] qual?") || strings.Contains(r.stdout, "feita") {
+		t.Fatalf("%s", r.stdout)
+	}
+}
+
+func TestCLIDoneForce(t *testing.T) {
+	var body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.Write([]byte(`{}`))
+	})
+	if r := runCLI(t, addr, "", nil, "done", "--force"); r.code != 0 || strings.TrimSpace(body) != `{"force":true}` {
+		t.Fatalf("%+v body=%q", r, body)
+	}
+}
+
+func TestCLIBranchAndProjectBase(t *testing.T) {
+	type seen struct{ method, path, body string }
+	var calls []seen
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bs, _ := json.Marshal(b)
+		calls = append(calls, seen{r.Method, r.URL.Path, string(bs)})
+		if r.Method == "GET" {
+			w.Write([]byte(`[{"id":1,"name":"outro","path":"/w/outro"},{"id":7,"name":"api","path":"/w/api"}]`))
+			return
+		}
+		w.Write([]byte(`{"key":"NAC-1"}`))
+	})
+	if r := runCLI(t, addr, "", nil, "branch", "feat/x"); r.code != 0 || calls[0] != (seen{"POST", "/api/me/branch", `{"branch":"feat/x"}`}) {
+		t.Fatalf("%+v %+v", r, calls)
+	}
+	calls = nil
+	r := runCLI(t, addr, "", nil, "project", "base", "develop", "/w/api")
+	if r.code != 0 || len(calls) != 2 || calls[1] != (seen{"PATCH", "/api/projects/7", `{"base_branch":"develop"}`}) {
+		t.Fatalf("%+v %+v", r, calls)
+	}
+	if r := runCLI(t, addr, "", nil, "project", "base", "develop", "/w/nada"); r.code != 1 || !strings.Contains(r.err, "não cadastrado") {
+		t.Fatalf("%+v", r)
+	}
+	if r := runCLI(t, addr, "", nil, "branch"); r.code != 2 {
+		t.Fatalf("uso: %+v", r)
+	}
+}
+
+func TestCLICardAdd(t *testing.T) {
+	var body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/me/cards" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.WriteHeader(201)
+		w.Write([]byte(`{"key":"NAC-2","column":"pausado"}`))
+	})
+	r := runCLI(t, addr, "", nil, "card", "add", "B", "--column", "pausado", "--where", "x")
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	want := `{"branch":"","column":"pausado","done_when":"","goal":"","title":"B","where_stopped":"x"}`
+	if body != want {
+		t.Fatalf("body = %s", body)
+	}
+	if r.stdout != "Card NAC-2 criado no pausado (sessão não ligada).\n" {
+		t.Fatalf("out = %q", r.stdout)
 	}
 }

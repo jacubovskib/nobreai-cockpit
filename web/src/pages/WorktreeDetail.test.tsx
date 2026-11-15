@@ -28,7 +28,7 @@ function wrap(path = '/worktrees/detalhe?project=1&path=%2Fw%2Fapi-oauth') {
 afterEach(() => vi.unstubAllGlobals())
 
 const detail: WorktreeDetail = {
-  project: { id: 1, name: 'api', path: '/w/api', capture: true },
+  project: { id: 1, name: 'api', path: '/w/api', capture: true, base_branch: '' },
   worktree: {
     ...wt, path: '/w/api-oauth', branch: 'feat/oauth', main: false, locked: true, lock_reason: 'disco externo', cards: [], sessions: [],
     resources: res({ cpu_pct: 180, rss_bytes: 1288490188, procs: 3, disk: { bytes: 3650722201, measured_at: ago(4), pending: false } }),

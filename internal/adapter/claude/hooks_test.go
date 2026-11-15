@@ -797,6 +797,11 @@ func (g wtGit) Locate(dir string) gitinfo.Location {
 
 func (g wtGit) Worktrees(string) ([]gitinfo.Worktree, error) { return nil, nil }
 
+// wtGit também é BranchReader: a base detectada é sempre main.
+func (g wtGit) DetectBase(string) string                { return "main" }
+func (g wtGit) BranchTip(string, string) (string, bool) { return "", false }
+func (g wtGit) IsAncestor(string, string, string) bool  { return false }
+
 func newWorktreeEnv(t *testing.T) *env {
 	t.Helper()
 	e := newEnv(t)
@@ -892,5 +897,104 @@ func TestSubagentWorktreeDoesNotMoveSession(t *testing.T) {
 	e.call(t, "stop", sub, with("agent_id", "a1"))
 	if s, _ := e.st.GetSession(sessID); s.WorktreeLinked {
 		t.Fatalf("evento com agent_id moveu a sessão: %+v", s)
+	}
+}
+
+func TestMoveSessionSyncsCardBranch(t *testing.T) {
+	e := newWorktreeEnv(t)
+	p := e.project(t)
+	c, err := e.st.CreateCard(domain.Card{Title: "x", ProjectID: p.ID, Branch: "main", Column: domain.EmAndamento})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.call(t, "session_start")
+	if err := e.st.AttachSession(sessID, c.Key, true); err != nil {
+		t.Fatal(err)
+	}
+	// Ainda no checkout principal, em main (a base): nada muda.
+	e.a.deps.Git = wtGit{fakeGit: fakeGit{branch: "main"}, locs: e.a.deps.Git.(wtGit).locs}
+	e.call(t, "user_prompt_submit")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "main" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+	// O agente entra num worktree em feat/x: o card acompanha.
+	e.a.deps.Git = wtGit{fakeGit: fakeGit{branch: "feat/x"}, locs: e.a.deps.Git.(wtGit).locs}
+	e.call(t, "user_prompt_submit", with("cwd", "/w/api/.claude/worktrees/x"))
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/x" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+	if !e.published("cards") {
+		t.Fatal("cards deveria ser publicado")
+	}
+}
+
+func TestSessionStartResumeEnvSyncsBranch(t *testing.T) {
+	e := newWorktreeEnv(t)
+	p := e.project(t)
+	if _, err := e.st.CreateCard(domain.Card{Title: "x", ProjectID: p.ID, Branch: "main", Column: domain.Pausado}); err != nil {
+		t.Fatal(err)
+	}
+	e.call(t, "session_start", withEnv("NOBRE_RESUME", "NAC-1"))
+	if got, _ := e.st.GetCard("NAC-1"); got.Branch != "feat/x" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+}
+
+// git switch no mesmo diretório: o PostToolUse do Bash percebe o branch novo,
+// grava na sessão e o card acompanha.
+func TestPostToolUseBashFollowsBranchSwitch(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	e.a.deps.Git = fakeGit{branch: "feat/new"}
+	e.call(t, "post_tool_use_bash")
+	if s, _ := e.st.GetSession(sessID); s.Branch != "feat/new" || s.Cwd != "/w/api" {
+		t.Fatalf("sessão = %+v", s)
+	}
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/new" {
+		t.Fatalf("branch do card = %q", got.Branch)
+	}
+	if len(e.events(t, domain.EvCommand)) != 1 {
+		t.Fatal("o comando deveria continuar registrado")
+	}
+}
+
+// pausedFixture cadastra /w/api com base main e cards pausados em feat/a,
+// feat/x e sem branch.
+func (e *env) pausedFixture(t *testing.T) {
+	t.Helper()
+	p := e.project(t)
+	if err := e.st.SetProjectBase(p.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range []string{"feat/a", "feat/x", ""} {
+		if _, err := e.st.CreateCard(domain.Card{Title: "T" + b, ProjectID: p.ID, Branch: b, Column: domain.Pausado}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Na base (o card nunca guarda a base), a sessão vê todos os pausados do projeto.
+func TestSessionStartOnBaseListsAllPausedCards(t *testing.T) {
+	e := newEnv(t)
+	e.pausedFixture(t)
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	for _, k := range []string{"NAC-1", "NAC-2", "NAC-3"} {
+		if !strings.Contains(ctx, k+" · ") {
+			t.Fatalf("contexto sem %s:\n%s", k, ctx)
+		}
+	}
+}
+
+// Num branch de trabalho, só os pausados desse branch e os sem branch.
+func TestSessionStartOnWorkBranchListsBranchAndUnbranchedPaused(t *testing.T) {
+	e := newEnv(t)
+	e.a.deps.Git = fakeGit{branch: "feat/x"}
+	e.pausedFixture(t)
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if !strings.Contains(ctx, "NAC-2 · ") || !strings.Contains(ctx, "NAC-3 · ") || strings.Contains(ctx, "NAC-1 · ") {
+		t.Fatalf("contexto:\n%s", ctx)
 	}
 }

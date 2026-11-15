@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/client"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
 const defaultAddr = "127.0.0.1:7420"
@@ -21,6 +22,7 @@ const usage = `nobre: CLI do NobreAI Cockpit
 
 Agente (use dentro de uma sessão de agente):
   nobre start "<título>" [--goal ...] [--done-when ...]   cria um card e liga esta sessão
+  nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado]  cria um card sem ligar esta sessão
   nobre resume <KEY> [--force]                            liga esta sessão ao card e imprime o pacote
   nobre note "<onde parei>"                               atualiza "Onde parei"
   nobre decide "<decisão>" --why "<porquê>"               registra uma decisão
@@ -28,12 +30,16 @@ Agente (use dentro de uma sessão de agente):
   nobre todo add "<texto>"                                adiciona uma pendência
   nobre todo done <id>                                    conclui uma pendência
   nobre ask "<pergunta>"                                  registra uma pergunta em aberto
+  nobre branch <nome>                                     informa o branch de trabalho do card
+  nobre answer <id> "<resposta>"                          responde uma pergunta do card
   nobre test "<como testar>"                              registra como testar
-  nobre done                                              marca o card como pronto para revisão
+  nobre done [--force]                                    marca o card como pronto para revisão
   nobre status                                            mostra o card e a prontidão do handoff
 
 Administração:
   nobre project add [path] [--name <nome>]                cadastra um projeto (padrão: diretório atual)
+  nobre project scan [path]                               levanta branches, planos, sessões e cards do projeto (só leitura)
+  nobre project base <branch> [path]                      define o branch base do projeto
   nobre project list                                      lista os projetos
   nobre prompt list                                       lista os prompts
   nobre prompt use <slug> [--card KEY]                    imprime o prompt preenchido e marca o uso
@@ -65,10 +71,12 @@ type cli struct {
 	// spawn entrega o payload dos limites a um processo destacado; nil = envia
 	// na hora, com 300 ms (testes).
 	spawn func(payload []byte)
+	// git acha o repositório principal de um diretório; nil = não resolve.
+	git gitinfo.WorktreeReader
 }
 
 func newCLI() *cli {
-	c := &cli{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, cwd: os.Getwd,
+	c := &cli{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, cwd: os.Getwd, git: gitinfo.Exec{},
 		opener: func(url string) error { return exec.Command("xdg-open", url).Start() }}
 	c.spawn = func(p []byte) { spawnStatuslineSender(c.addr())(p) }
 	return c
@@ -108,10 +116,16 @@ func (c *cli) run(args []string) int {
 		err = c.start(rest)
 	case "resume":
 		err = c.resume(rest)
+	case "card":
+		err = c.card(rest)
 	case "note":
 		err = c.simple("note", "texto", rest, "text")
 	case "ask":
-		err = c.simple("ask", "pergunta", rest, "text")
+		err = c.ask(rest)
+	case "branch":
+		err = c.branch(rest)
+	case "answer":
+		err = c.answer(rest)
 	case "test":
 		err = c.simple("test", "como testar", rest, "text")
 	case "decide":
@@ -121,7 +135,7 @@ func (c *cli) run(args []string) int {
 	case "todo":
 		err = c.todo(rest)
 	case "done":
-		err = c.done()
+		err = c.done(rest)
 	case "status":
 		err = c.status()
 	case "project":

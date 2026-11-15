@@ -1,7 +1,7 @@
 import { projectColor, projectForPath, withProject } from './project'
 import type { Project } from '../api/types'
 
-const P = (id: number, path = '/p' + id): Project => ({ id, name: 'p' + id, path, capture: true })
+const P = (id: number, path = '/p' + id): Project => ({ id, name: 'p' + id, path, capture: true, base_branch: '' })
 
 describe('withProject', () => {
   it('acrescenta o parâmetro respeitando ? existente', () => {

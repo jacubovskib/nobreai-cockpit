@@ -2,9 +2,16 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
 func TestSettingsPutMergesOverCurrent(t *testing.T) {
@@ -112,5 +119,164 @@ func TestPutPriceCacheNull(t *testing.T) {
 	}
 	if rec := a.do(t, "PUT", "/api/prices", map[string]any{"model": "m", "input_per_m": 3, "output_per_m": 15, "cache_read_per_m": -1}, 0); rec.Code != http.StatusBadRequest {
 		t.Fatalf("negativo = %d", rec.Code)
+	}
+}
+
+func TestCreateProjectReassignsAndSetsBase(t *testing.T) {
+	main, _ := gitRepoWithWorktree(t)
+	gitRun(t, main, "branch", "develop")
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Git: gitinfo.Exec{}})}
+	now := testNow
+	if err := st.StartSession(domain.Session{ID: "claude:1", Agent: "claude", ProviderSessionID: "1", PID: 5, Cwd: main, StartedAt: now, LastEventAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/projects", map[string]any{"path": main}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("projeto = %d %s", rec.Code, rec.Body)
+	}
+	out := decode[map[string]any](t, rec)
+	if out["reassigned"] != float64(1) || out["base_branch"] != "develop" {
+		t.Fatalf("resposta = %v", out)
+	}
+	x, err := st.GetSession("claude:1")
+	if err != nil || x.ProjectID == nil || !x.FullCapture {
+		t.Fatalf("sessão = %+v, %v", x, err)
+	}
+}
+
+func TestCreateProjectReassignsLinkedWorktreeSession(t *testing.T) {
+	main, wt := gitRepoWithWorktree(t)
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Git: gitinfo.Exec{}})}
+	now := testNow
+	if err := st.StartSession(domain.Session{ID: "claude:1", Agent: "claude", ProviderSessionID: "1", PID: 5, Cwd: wt,
+		Worktree: wt, WorktreeLinked: true, Branch: "feat/wt", StartedAt: now, LastEventAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/projects", map[string]any{"path": main}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("projeto = %d %s", rec.Code, rec.Body)
+	}
+	if out := decode[map[string]any](t, rec); out["reassigned"] != float64(1) {
+		t.Fatalf("resposta = %v", out)
+	}
+	x, err := st.GetSession("claude:1")
+	if err != nil || x.ProjectID == nil || !x.FullCapture {
+		t.Fatalf("sessão = %+v, %v", x, err)
+	}
+	if rec := a.do(t, "POST", "/api/me/start", map[string]any{"title": "Novo"}, 5); rec.Code != http.StatusCreated {
+		t.Fatalf("start = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestScanEndpoint(t *testing.T) {
+	main, _ := gitRepoWithWorktree(t)
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Git: gitinfo.Exec{}})}
+	p, err := st.CreateProject("api", main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, main, "checkout", "-q", "-b", "feat/z")
+	if err := os.WriteFile(filepath.Join(main, "z.txt"), []byte("z"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, main, "add", ".")
+	gitRun(t, main, "commit", "-q", "-m", "z")
+	gitRun(t, main, "checkout", "-q", "main")
+	if _, err := st.CreateCard(domain.Card{Title: "Existente", ProjectID: p.ID, Branch: "feat/z"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "GET", "/api/projects/"+strconv.FormatInt(p.ID, 10)+"/scan", nil, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
+	}
+	out := decode[struct {
+		Base     string
+		Branches []struct{ Name string }
+		Sessions []map[string]any
+		Cards    []struct{ Key, Title, Column, Branch string }
+	}](t, rec)
+	if out.Base != "main" || len(out.Branches) < 1 || out.Branches[0].Name != "feat/z" && out.Branches[0].Name != "feat/wt" {
+		t.Fatalf("scan = %s", rec.Body)
+	}
+	if len(out.Cards) != 1 || out.Cards[0].Key != "NAC-1" || out.Cards[0].Column != "backlog" || out.Cards[0].Branch != "feat/z" {
+		t.Fatalf("cards = %+v", out.Cards)
+	}
+	if rec := a.do(t, "GET", "/api/projects/999/scan", nil, 0); rec.Code != http.StatusNotFound {
+		t.Fatalf("inexistente = %d", rec.Code)
+	}
+}
+
+func TestScanEndpointMissingBase409(t *testing.T) {
+	main, _ := gitRepoWithWorktree(t)
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Git: gitinfo.Exec{}})}
+	p, _ := st.CreateProject("api", main)
+	if err := st.SetProjectBase(p.ID, "develop"); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "GET", "/api/projects/"+strconv.FormatInt(p.ID, 10)+"/scan", nil, 0)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "nobre project base") {
+		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A pasta pessoal, a raiz e qualquer pasta acima da pessoal nunca viram projeto
+// (cadastro irreversível que engoliria todas as sessões).
+func TestCreateProjectRefusesHomeAndAncestors(t *testing.T) {
+	a := newTestAPI(t)
+	home := filepath.Join(t.TempDir(), "casa", "nobre")
+	t.Setenv("HOME", home)
+	for _, path := range []string{home, filepath.Dir(home), "/", home + "/"} {
+		rec := a.do(t, "POST", "/api/projects", map[string]any{"path": path}, 0)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(decode[map[string]string](t, rec)["error"], "pasta pessoal") {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	if ps, _ := a.st.ListProjects(); len(ps) != 0 {
+		t.Fatalf("projetos = %+v", ps)
+	}
+	if rec := a.do(t, "POST", "/api/projects", map[string]any{"path": filepath.Join(home, "proj")}, 0); rec.Code != http.StatusCreated {
+		t.Fatalf("subpasta do HOME = %d %s", rec.Code, rec.Body)
+	}
+	p, _ := a.st.ListProjects()
+	rec := a.do(t, "PATCH", "/api/projects/"+strconv.FormatInt(p[0].ID, 10), map[string]any{"path": home}, 0)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH para o HOME = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestScanEndpointNoBase409(t *testing.T) {
+	a := newTestAPI(t) // sem Git: nenhuma base detectável
+	p := a.project(t)
+	rec := a.do(t, "GET", "/api/projects/"+strconv.FormatInt(p.ID, 10)+"/scan", nil, 0)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "nobre project base") {
+		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
 	}
 }

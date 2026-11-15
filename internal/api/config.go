@@ -2,14 +2,33 @@ package api
 
 import (
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
-const msgPriceRequired = "Informe os preços de entrada e saída (maiores que zero)"
+const (
+	msgPriceRequired = "Informe os preços de entrada e saída (maiores que zero)"
+	msgHomeProject   = "a pasta pessoal, a raiz e as pastas acima da pessoal não podem ser cadastradas como projeto"
+)
+
+// homeOrAncestor diz se path (limpo) é a raiz, a pasta pessoal ou uma pasta
+// que a contém: cadastrá-la engoliria todas as sessões do usuário.
+func homeOrAncestor(path string) bool {
+	if path == string(filepath.Separator) {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	home = filepath.Clean(home)
+	return home == path || strings.HasPrefix(home, path+string(filepath.Separator))
+}
 
 func (s *server) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings", s.getSettings)
@@ -23,6 +42,7 @@ func (s *server) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects", s.createProject)
 	mux.HandleFunc("PATCH /api/projects/{id}", s.patchProject)
 	mux.HandleFunc("DELETE /api/projects/{id}", s.deleteProject)
+	mux.HandleFunc("GET /api/projects/{id}/scan", s.scanProject)
 }
 
 func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
@@ -172,8 +192,9 @@ func (s *server) listProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name string `json:"name"`
-		Path string `json:"path"`
+		Name       string `json:"name"`
+		Path       string `json:"path"`
+		BaseBranch string `json:"base_branch"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -183,6 +204,10 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Path = filepath.Clean(in.Path)
+	if homeOrAncestor(in.Path) {
+		writeError(w, http.StatusBadRequest, msgHomeProject)
+		return
+	}
 	if strings.TrimSpace(in.Name) == "" {
 		in.Name = filepath.Base(in.Path)
 	}
@@ -195,8 +220,49 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "")
 		return
 	}
-	s.publish("config")
-	writeJSON(w, http.StatusCreated, p)
+	base := strings.TrimSpace(in.BaseBranch)
+	if base == "" {
+		if br := s.branchReader(); br != nil {
+			base = br.DetectBase(p.Path)
+		}
+	}
+	if base != "" {
+		if err := s.st.SetProjectBase(p.ID, base); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		p.BaseBranch = base
+	}
+	// A sessão aberta antes do cadastro passa a pertencer ao projeto.
+	n, err := s.st.ReassignSessions(p.ID, p.Path)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	// Sessões em worktrees ligados (fora do diretório do projeto) também.
+	if wr, ok := s.deps.Git.(gitinfo.WorktreeReader); ok {
+		wts, err := s.st.UnassignedLinkedWorktrees()
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		for _, wt := range wts {
+			if filepath.Clean(wr.Locate(wt).Main) != p.Path {
+				continue
+			}
+			m, err := s.st.AssignSessionsInWorktree(p.ID, wt)
+			if err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+			n += m
+		}
+	}
+	s.publish("config", "sessions", "cards")
+	writeJSON(w, http.StatusCreated, struct {
+		domain.Project
+		Reassigned int `json:"reassigned"`
+	}{p, n})
 }
 
 func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +292,10 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.Path = filepath.Clean(p.Path)
+	if homeOrAncestor(p.Path) {
+		writeError(w, http.StatusBadRequest, msgHomeProject)
+		return
+	}
 	err = s.st.UpdateProject(*p)
 	if isConstraint(err, "UNIQUE") {
 		writeError(w, http.StatusConflict, "já existe um projeto com esse caminho")
