@@ -121,7 +121,7 @@ func TestCLIProjectScanPrintsSections(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("%+v", r)
 	}
-	for _, want := range []string{"Base: main", "Branches com trabalho fora da base", "feat/a", "3 à frente", "faz a", "/w/api-a",
+	for _, want := range []string{"Base: main", "Branches com trabalho fora da base", "feat/a (recente)", "3 à frente", "faz a", "/w/api-a",
 		"Planos com tarefas abertas", "docs/plan-x.md", "Sessões recentes com custo", "Cards que já existem", "NAC-1"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("faltou %q em:\n%s", want, r.stdout)

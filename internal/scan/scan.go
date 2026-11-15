@@ -57,11 +57,49 @@ func Run(repo, base string, now time.Time) (Result, error) {
 		}
 		res.Branches = bs
 	}
-	res.Plans = plans(repo, now)
+	roots := []string{repo}
+	for _, b := range res.Branches {
+		if b.Worktree != "" {
+			roots = append(roots, b.Worktree)
+		}
+	}
+	res.Plans = plans(repo, roots, now)
 	return res, nil
 }
 
+// BaseError indica que a base não existe no repositório (nem local nem em origin).
+type BaseError struct{ Base string }
+
+func (e *BaseError) Error() string {
+	return `base "` + e.Base + `" não existe neste repositório; ajuste com nobre project base <branch>`
+}
+
+func resolves(repo, ref string) bool {
+	_, err := gitinfo.ReadOnly(repo, "rev-parse", "--verify", "-q", ref+"^{commit}")
+	return err == nil
+}
+
+// baseRefs devolve as refs que delimitam a base: a base local e origin/<base>
+// quando existem (a base local pode estar atrasada em relação ao origin).
+func baseRefs(repo, base string) ([]string, error) {
+	var refs []string
+	if resolves(repo, base) {
+		refs = append(refs, base)
+	}
+	if o := "origin/" + strings.TrimPrefix(base, "origin/"); o != base && resolves(repo, o) {
+		refs = append(refs, o)
+	}
+	if len(refs) == 0 {
+		return nil, &BaseError{Base: base}
+	}
+	return refs, nil
+}
+
 func branches(repo, base string, now time.Time) ([]Branch, error) {
+	refs, err := baseRefs(repo, base)
+	if err != nil {
+		return nil, err
+	}
 	out, err := gitinfo.ReadOnly(repo, "for-each-ref", "refs/heads",
 		"--format=%(refname:short)%09%(committerdate:unix)%09%(subject)")
 	if err != nil {
@@ -88,7 +126,7 @@ func branches(repo, base string, now time.Time) ([]Branch, error) {
 		if last.Before(since) {
 			continue
 		}
-		cnt, err := gitinfo.ReadOnly(repo, "rev-list", "--count", base+"..refs/heads/"+name)
+		cnt, err := gitinfo.ReadOnly(repo, append([]string{"rev-list", "--count", "refs/heads/" + name, "--not"}, refs...)...)
 		if err != nil {
 			continue
 		}
@@ -125,8 +163,24 @@ func worktrees(repo string) map[string]string {
 	return m
 }
 
-func plans(repo string, now time.Time) []Plan {
-	docs := filepath.Join(repo, "docs")
+// plans lê os docs/ de cada raiz (o repositório e os worktrees dos branches).
+// Path é relativo ao repo quando o arquivo está dentro dele, senão absoluto.
+func plans(repo string, roots []string, now time.Time) []Plan {
+	ps := []Plan{}
+	seen := map[string]bool{}
+	for _, root := range roots {
+		root = filepath.Clean(root)
+		if seen[root] {
+			continue
+		}
+		seen[root] = true
+		ps = append(ps, plansIn(repo, root, now)...)
+	}
+	return ps
+}
+
+func plansIn(repo, root string, now time.Time) []Plan {
+	docs := filepath.Join(root, "docs")
 	since := now.Add(-window)
 	ps := []Plan{}
 	_ = filepath.WalkDir(docs, func(p string, d fs.DirEntry, err error) error {
@@ -165,8 +219,11 @@ func plans(repo string, now time.Time) []Plan {
 		if open == 0 {
 			return nil
 		}
-		r, _ := filepath.Rel(repo, p)
-		ps = append(ps, Plan{Path: filepath.ToSlash(r), Open: open, Done: done, Modified: info.ModTime()})
+		shown := p
+		if r, err := filepath.Rel(repo, p); err == nil && !strings.HasPrefix(r, "..") {
+			shown = r
+		}
+		ps = append(ps, Plan{Path: filepath.ToSlash(shown), Open: open, Done: done, Modified: info.ModTime()})
 		return nil
 	})
 	sort.SliceStable(ps, func(i, j int) bool { return ps[i].Modified.After(ps[j].Modified) })

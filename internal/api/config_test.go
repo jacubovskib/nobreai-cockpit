@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,5 +224,25 @@ func TestScanEndpoint(t *testing.T) {
 	}
 	if rec := a.do(t, "GET", "/api/projects/999/scan", nil, 0); rec.Code != http.StatusNotFound {
 		t.Fatalf("inexistente = %d", rec.Code)
+	}
+}
+
+func TestScanEndpointMissingBase409(t *testing.T) {
+	main, _ := gitRepoWithWorktree(t)
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Git: gitinfo.Exec{}})}
+	p, _ := st.CreateProject("api", main)
+	if err := st.SetProjectBase(p.ID, "develop"); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "GET", "/api/projects/"+strconv.FormatInt(p.ID, 10)+"/scan", nil, 0)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "nobre project base") {
+		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
 	}
 }

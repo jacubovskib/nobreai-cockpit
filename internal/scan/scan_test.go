@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,6 +87,53 @@ func TestScanPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(res.Plans) != 1 || res.Plans[0].Path != "docs/plan-x.md" || res.Plans[0].Open != 1 || res.Plans[0].Done != 1 {
+		t.Fatalf("plans = %+v", res.Plans)
+	}
+}
+
+func TestScanMissingBaseErrors(t *testing.T) {
+	d := newRepo(t)
+	_, err := Run(d, "develop", time.Now())
+	var be *BaseError
+	if !errors.As(err, &be) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestScanAheadUsesOriginBase(t *testing.T) {
+	d := newRepo(t)
+	commitOn(t, d, "main", "m2.txt", time.Hour)
+	git(t, d, nil, "update-ref", "refs/remotes/origin/main", "main")
+	commitOn(t, d, "main", "m3.txt", time.Hour)
+	git(t, d, nil, "update-ref", "refs/remotes/origin/main", "main")
+	git(t, d, nil, "reset", "-q", "--hard", "HEAD~2") // main local atrasada
+	git(t, d, nil, "branch", "feat/x", "origin/main")
+	commitOn(t, d, "feat/x", "x.txt", 0)
+	res, err := Run(d, "main", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Branches) != 1 || res.Branches[0].Ahead != 1 {
+		t.Fatalf("branches = %+v", res.Branches)
+	}
+}
+
+func TestScanPlansInBranchWorktree(t *testing.T) {
+	d := newRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	git(t, d, nil, "worktree", "add", "-q", "-b", "feat/w", wt)
+	commitOn(t, wt, "feat/w", "w.txt", 0)
+	if err := os.MkdirAll(filepath.Join(wt, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "docs", "plan-x.md"), []byte("- [ ] a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(d, "main", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Plans) != 1 || res.Plans[0].Path != filepath.Join(wt, "docs", "plan-x.md") {
 		t.Fatalf("plans = %+v", res.Plans)
 	}
 }

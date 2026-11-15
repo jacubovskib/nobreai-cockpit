@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -51,6 +52,11 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.now()
 	res, err := scan.Run(p.Path, board.ProjectBase(s.branchReader(), *p), now)
+	var be *scan.BaseError
+	if errors.As(err, &be) {
+		writeError(w, http.StatusConflict, be.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "levantamento falhou: "+err.Error())
 		return

@@ -248,7 +248,11 @@ func (c *cli) projectScan(u string, args []string) error {
 		if b.Worktree != "" {
 			wt = "  [worktree " + b.Worktree + "]"
 		}
-		fmt.Fprintf(c.out, "  %s  %s, %d à frente  \"%s\"%s\n", b.Name, age(b.LastCommit), b.Ahead, b.Subject, wt)
+		rec := ""
+		if b.Recent {
+			rec = " (recente)"
+		}
+		fmt.Fprintf(c.out, "  %s%s  %s, %d à frente  \"%s\"%s\n", b.Name, rec, age(b.LastCommit), b.Ahead, b.Subject, wt)
 	}
 	fmt.Fprintf(c.out, "\nPlanos com tarefas abertas (%d):\n", len(s.Plans))
 	for _, p := range s.Plans {
