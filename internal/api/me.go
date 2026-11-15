@@ -205,7 +205,18 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 	if !ok {
 		return
 	}
-	card := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, Branch: strings.TrimSpace(in.Branch),
+	branch := strings.TrimSpace(in.Branch)
+	if branch != "" {
+		base, err := s.projectBase(projectID)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if branch == base { // o card nunca guarda a base
+			branch = ""
+		}
+	}
+	card := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, Branch: branch,
 		ProjectID: projectID, Column: col}
 	if w := strings.TrimSpace(in.WhereStopped); w != "" {
 		now := s.now()
@@ -282,6 +293,21 @@ func (s *server) syncBranch(cardID int64, branch string) bool {
 	return changed
 }
 
+// projectBase devolve a base do projeto id (ver board.ProjectBase; "" se o
+// projeto não existe ou não tem base).
+func (s *server) projectBase(id int64) (string, error) {
+	ps, err := s.st.ListProjects()
+	if err != nil {
+		return "", err
+	}
+	for _, p := range ps {
+		if p.ID == id {
+			return board.ProjectBase(s.branchReader(), p), nil
+		}
+	}
+	return "", nil
+}
+
 // liveBranch relê o branch atual do cwd da sessão (o agente pode ter trocado de
 // branch sem mudar de diretório, com git switch) e grava na sessão se mudou.
 // Falha ao gravar só vai para o log: o branch lido vale mesmo assim.
@@ -321,16 +347,14 @@ func (s *server) meBranch(w http.ResponseWriter, r *http.Request, sess domain.Se
 	// A sessão fica com o branch atual: senão o PostToolUse deste mesmo comando
 	// veria a diferença e trocaria o branch que o agente acabou de informar.
 	s.liveBranch(sess)
-	ps, err := s.st.ListProjects()
+	base, err := s.projectBase(c.ProjectID)
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
 	}
-	for _, p := range ps {
-		if p.ID == c.ProjectID && board.ProjectBase(s.branchReader(), p) == b {
-			writeError(w, http.StatusConflict, fmt.Sprintf("%q é a base do projeto; o card fica com o branch de trabalho", b))
-			return
-		}
+	if base == b {
+		writeError(w, http.StatusConflict, fmt.Sprintf("%q é a base do projeto; o card fica com o branch de trabalho", b))
+		return
 	}
 	if _, err := board.SyncCardBranch(s.st, s.branchReader(), c.ID, b); err != nil {
 		writeStoreError(w, err, msgCardNotFound)

@@ -552,3 +552,20 @@ func TestMeStartNonGitCwdDoesNotSuggestRegister(t *testing.T) {
 		}
 	}
 }
+
+// O card nunca guarda a base: nobre card add --branch <base> cria sem branch.
+func TestMeCardsDropsBaseBranch(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	if err := a.st.SetProjectBase(p.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, "")
+	rec := a.do(t, "POST", "/api/me/cards", map[string]string{"title": "B", "branch": "main"}, 4242)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[domain.Card](t, rec); got.Branch != "" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+}
