@@ -40,8 +40,11 @@ func TestSessionStartUnregisteredRepoWarns(t *testing.T) {
 	if !strings.HasPrefix(ctx, unregisteredPhrase) || !strings.Contains(ctx, "nobre project add "+repo) {
 		t.Fatalf("contexto = %q", ctx)
 	}
-	if !strings.HasSuffix(ctx, instructions) {
+	if !strings.HasSuffix(ctx, guidance) {
 		t.Fatalf("contexto não termina nas instruções: %q", ctx)
+	}
+	if strings.Contains(ctx, registeredPhrase) {
+		t.Fatalf("aviso de não cadastrado não pode dizer que a sessão é registrada: %q", ctx)
 	}
 }
 

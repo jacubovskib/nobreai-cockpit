@@ -960,3 +960,41 @@ func TestPostToolUseBashFollowsBranchSwitch(t *testing.T) {
 		t.Fatal("o comando deveria continuar registrado")
 	}
 }
+
+// pausedFixture cadastra /w/api com base main e cards pausados em feat/a,
+// feat/x e sem branch.
+func (e *env) pausedFixture(t *testing.T) {
+	t.Helper()
+	p := e.project(t)
+	if err := e.st.SetProjectBase(p.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range []string{"feat/a", "feat/x", ""} {
+		if _, err := e.st.CreateCard(domain.Card{Title: "T" + b, ProjectID: p.ID, Branch: b, Column: domain.Pausado}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Na base (o card nunca guarda a base), a sessão vê todos os pausados do projeto.
+func TestSessionStartOnBaseListsAllPausedCards(t *testing.T) {
+	e := newEnv(t)
+	e.pausedFixture(t)
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	for _, k := range []string{"NAC-1", "NAC-2", "NAC-3"} {
+		if !strings.Contains(ctx, k+" · ") {
+			t.Fatalf("contexto sem %s:\n%s", k, ctx)
+		}
+	}
+}
+
+// Num branch de trabalho, só os pausados desse branch e os sem branch.
+func TestSessionStartOnWorkBranchListsBranchAndUnbranchedPaused(t *testing.T) {
+	e := newEnv(t)
+	e.a.deps.Git = fakeGit{branch: "feat/x"}
+	e.pausedFixture(t)
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if !strings.Contains(ctx, "NAC-2 · ") || !strings.Contains(ctx, "NAC-3 · ") || strings.Contains(ctx, "NAC-1 · ") {
+		t.Fatalf("contexto:\n%s", ctx)
+	}
+}

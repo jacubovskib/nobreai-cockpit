@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
@@ -25,8 +26,11 @@ const unregisteredPhrase = "NobreAI Cockpit: este repositório não está cadast
 
 // instructions é o começo do contexto injetado no SessionStart: quando criar
 // card (spec 6.0) e os comandos nobre.
-const instructions = registeredPhrase + `.
-Crie um card com nobre start "<título>" quando começar algo que precisa de histórico: tarefa de várias etapas, mudanças em vários arquivos ou trabalho que outro agente pode continuar. Se o usuário pedir um card, crie; se citar uma chave NAC-, use nobre resume <KEY>. Perguntas rápidas não viram card.
+const instructions = registeredPhrase + ".\n" + guidance
+
+// guidance são as instruções sem a frase de sessão registrada (o aviso de
+// repositório não cadastrado termina nelas).
+const guidance = `Crie um card com nobre start "<título>" quando começar algo que precisa de histórico: tarefa de várias etapas, mudanças em vários arquivos ou trabalho que outro agente pode continuar. Se o usuário pedir um card, crie; se citar uma chave NAC-, use nobre resume <KEY>. Perguntas rápidas não viram card.
 Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
 
 // resumeEnv é a variável de ambiente com que a UI abre o agente para
@@ -82,7 +86,7 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "SessionStart",
 			"additionalContext": unregisteredPhrase + " (" + root + ").\nAntes de seguir com o pedido do usuário, cadastre com nobre project add " + root +
-				" e faça o levantamento com nobre project scan; crie os cards importantes com nobre card add (veja a skill nobre-cockpit). O cadastro liga esta sessão ao board.\n\n" + instructions,
+				" e faça o levantamento com nobre project scan; crie os cards importantes com nobre card add (veja a skill nobre-cockpit). O cadastro liga esta sessão ao board.\n\n" + guidance,
 		}})
 	}
 
@@ -152,11 +156,23 @@ func (a *Adapter) unregisteredRoot(cwd string) string {
 	return root
 }
 
-// pausedCards lista os cards pausados do projeto e do branch da sessão
-// (exceto o que acabou de ser retomado).
+// pausedCards lista os cards pausados do projeto da sessão (exceto o que
+// acabou de ser retomado). Num branch de trabalho, só os desse branch e os sem
+// branch; na base (ou sem branch), todos: o card nunca guarda a base.
 func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domain.Card, error) {
 	if sess.ProjectID == nil {
 		return nil, nil
+	}
+	ps, err := a.st.ListProjects()
+	if err != nil {
+		return nil, err
+	}
+	onBase := sess.Branch == ""
+	br, _ := a.deps.Git.(gitinfo.BranchReader) // nil: só a base configurada conta
+	for _, p := range ps {
+		if p.ID == *sess.ProjectID && !onBase {
+			onBase = board.ProjectBase(br, p) == sess.Branch
+		}
 	}
 	cards, err := a.st.ListCards(store.CardFilter{ProjectID: *sess.ProjectID})
 	if err != nil {
@@ -164,7 +180,10 @@ func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domai
 	}
 	var out []domain.Card
 	for _, c := range cards {
-		if c.Column == domain.Pausado && c.Branch == sess.Branch && (except == nil || c.ID != except.ID) {
+		if c.Column != domain.Pausado || (except != nil && c.ID == except.ID) {
+			continue
+		}
+		if onBase || c.Branch == sess.Branch || c.Branch == "" {
 			out = append(out, c)
 		}
 	}
