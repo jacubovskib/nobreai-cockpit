@@ -12,9 +12,10 @@ import (
 )
 
 // CheckIntegrations percorre os cards em em_andamento, pausado ou revisao com
-// branch ainda não integrado e registra quando o branch entrou na base do
-// projeto (local ou origin/<base>). Só o card em revisao vai para concluido; os
-// demais ganham apenas o registro. Erros por card não interrompem os outros
+// branch e registra quando o branch entrou na base do projeto (local ou
+// origin/<base>). Só o card em revisao vai para concluido; os demais ganham
+// apenas o registro. Branch já integrada que ganha commit novo fora da base
+// perde a marca e volta a ser acompanhada. Erros por card não interrompem os outros
 // (voltam juntos via errors.Join). changed diz se algo foi gravado.
 func CheckIntegrations(st *store.Store, git gitinfo.BranchReader, now time.Time) (changed bool, err error) {
 	if git == nil {
@@ -57,13 +58,20 @@ func checkCardIntegration(st *store.Store, git gitinfo.BranchReader, now time.Ti
 	}
 	var merged string // commit com que o branch entrou na base
 	tip, ok := git.BranchTip(p.Path, c.Branch)
+	if c.BranchMergedAt != nil {
+		// Já integrada: só volta a contar se o branch ganhou commit novo fora da base.
+		if ok && tip != c.BranchHead && !in(tip) {
+			return st.SetBranchHead(c.ID, c.Branch, tip, true)
+		}
+		return false, nil
+	}
 	switch {
 	case ok && !in(tip):
 		// Tem commits próprios: só grava se mudou (evita escrita e publicação a cada passada).
 		if c.BranchHead == tip && c.BranchDiverged {
 			return false, nil
 		}
-		return true, st.SetBranchHead(c.ID, tip, true)
+		return st.SetBranchHead(c.ID, c.Branch, tip, true)
 	case ok && c.BranchDiverged && c.BranchHead != "" && in(c.BranchHead):
 		// Exige o último tip divergente visto também na base: tip na base com head
 		// fora dela é reset/recriação do branch, não merge.
@@ -73,23 +81,13 @@ func checkCardIntegration(st *store.Store, git gitinfo.BranchReader, now time.Ti
 	default:
 		return false, nil
 	}
-	if err := st.MarkBranchMerged(c.ID, now); err != nil {
-		return false, err
-	}
-	if _, err := st.AddDecision(domain.Decision{
-		CardID: c.ID,
-		What:   fmt.Sprintf("Branch %s integrada em %s (%s)", c.Branch, base, merged[:min(7, len(merged))]),
-		Why:    "detectado pelo Cockpit",
-		At:     now,
-	}); err != nil {
-		return true, err
-	}
-	if c.Column == domain.Revisao {
-		if err := st.MoveCard(c.Key, domain.Concluido); err != nil {
-			return true, err
-		}
-	}
-	return true, nil
+	// Marca, decisão e ida para concluido (só se ainda em revisao) numa
+	// transação, condicionadas ao branch lido: a leitura pode estar velha.
+	return st.RecordIntegration(c.ID, c.Branch, now, domain.Decision{
+		What: fmt.Sprintf("Branch %s integrada em %s (%s)", c.Branch, base, merged[:min(7, len(merged))]),
+		Why:  "detectado pelo Cockpit",
+		At:   now,
+	})
 }
 
 // RunIntegrations chama CheckIntegrations a cada every até ctx terminar

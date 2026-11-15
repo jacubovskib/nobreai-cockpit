@@ -156,12 +156,18 @@ func TestSetCardBranchResetsMarks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetBranchHead(c.ID, "abc", true); err != nil {
-		t.Fatal(err)
+	if ok, err := s.SetBranchHead(c.ID, "feat/x", "abc", true); err != nil || !ok {
+		t.Fatalf("SetBranchHead = %v, %v", ok, err)
 	}
 	at := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
-	if err := s.MarkBranchMerged(c.ID, at); err != nil {
-		t.Fatal(err)
+	if ok, err := s.MarkBranchMerged(c.ID, "feat/x", at); err != nil || !ok {
+		t.Fatalf("MarkBranchMerged = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkBranchMerged(c.ID, "feat/x", at); err != nil || ok {
+		t.Fatalf("2ª marca = %v, %v", ok, err)
+	}
+	if ok, err := s.SetBranchHead(c.ID, "feat/outro", "def", true); err != nil || ok {
+		t.Fatalf("head em outro branch = %v, %v", ok, err)
 	}
 	got, _ := s.GetCardByID(c.ID)
 	if got.BranchHead != "abc" || !got.BranchDiverged || got.BranchMergedAt == nil || !got.BranchMergedAt.Equal(at) {

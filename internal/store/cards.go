@@ -179,10 +179,11 @@ func (s *Store) ListCards(f CardFilter) ([]domain.Card, error) {
 	return out, rows.Err()
 }
 
-// ListIntegrationCandidates lista os cards com branch ainda não integrado que
-// estão em em_andamento, pausado ou revisao.
+// ListIntegrationCandidates lista os cards com branch que estão em
+// em_andamento, pausado ou revisao (inclusive os já integrados: o branch pode
+// ganhar commits novos e voltar a ser acompanhado).
 func (s *Store) ListIntegrationCandidates() ([]domain.Card, error) {
-	rows, err := s.DB.Query(`SELECT ` + cardCols + ` FROM cards WHERE col IN ('em_andamento','pausado','revisao') AND branch<>'' AND branch_merged_at IS NULL ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT ` + cardCols + ` FROM cards WHERE col IN ('em_andamento','pausado','revisao') AND branch<>'' ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -221,22 +222,67 @@ func (s *Store) SetCardBranch(cardID int64, branch string) (bool, error) {
 	return n > 0, err
 }
 
-// SetBranchHead grava o último commit visto no branch do card e se divergiu.
-func (s *Store) SetBranchHead(cardID int64, head string, diverged bool) error {
-	res, err := s.DB.Exec(`UPDATE cards SET branch_head=?, branch_diverged=? WHERE id=?`, head, diverged, cardID)
+// SetBranchHead grava o último commit visto no branch do card e se divergiu,
+// e zera a marca de integração (commit novo fora da base reabre o
+// acompanhamento). Só grava se o card ainda está em branch (a leitura pode
+// estar velha); devolve se gravou.
+func (s *Store) SetBranchHead(cardID int64, branch, head string, diverged bool) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE cards SET branch_head=?, branch_diverged=?, branch_merged_at=NULL WHERE id=? AND branch=?`,
+		head, diverged, cardID, branch)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return requireAffected(res)
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
-// MarkBranchMerged registra quando o branch do card entrou na base.
-func (s *Store) MarkBranchMerged(cardID int64, at time.Time) error {
-	res, err := s.DB.Exec(`UPDATE cards SET branch_merged_at=? WHERE id=?`, fmtTime(at), cardID)
+// MarkBranchMerged registra quando o branch do card entrou na base. Só grava se
+// o card ainda está em branch e não foi marcado; devolve se gravou.
+func (s *Store) MarkBranchMerged(cardID int64, branch string, at time.Time) (bool, error) {
+	return markBranchMerged(s.DB, cardID, branch, at)
+}
+
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func markBranchMerged(db execer, cardID int64, branch string, at time.Time) (bool, error) {
+	res, err := db.Exec(`UPDATE cards SET branch_merged_at=? WHERE id=? AND branch=? AND branch_merged_at IS NULL`,
+		fmtTime(at), cardID, branch)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return requireAffected(res)
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// RecordIntegration registra numa transação que o branch do card entrou na
+// base: a marca (MarkBranchMerged), a decisão d e, se o card ainda está em
+// revisao, a ida para concluido. Se a marca não pega (o branch do card mudou ou
+// já estava marcado), nada é gravado. Devolve se gravou.
+func (s *Store) RecordIntegration(cardID int64, branch string, at time.Time, d domain.Decision) (bool, error) {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	marked, err := markBranchMerged(tx, cardID, branch, at)
+	if err != nil || !marked {
+		return false, err
+	}
+	d.CardID = cardID
+	if d.At.IsZero() {
+		d.At = at
+	}
+	if _, err := tx.Exec(`INSERT INTO decisions(card_id, what, why, session_id, at) VALUES (?, ?, ?, ?, ?)`,
+		d.CardID, d.What, d.Why, d.SessionID, fmtTime(d.At)); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(`UPDATE cards SET col=?, updated_at=? WHERE id=? AND col=?`,
+		string(domain.Concluido), fmtTime(time.Now()), cardID, string(domain.Revisao)); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 // MoveCard move o card manualmente, sem aplicar regras.

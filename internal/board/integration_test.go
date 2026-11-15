@@ -197,3 +197,105 @@ func TestIntegrationIgnoresBranchResetOntoBase(t *testing.T) {
 		t.Fatalf("card = %+v", got)
 	}
 }
+
+// Branch integrada que ganha commit novo volta a ser acompanhada: a marca some
+// e, depois do novo merge, o card em revisão conclui (NAC-5 da spec).
+func TestIntegrationRearmsAfterNewCommit(t *testing.T) {
+	st, d, c := integFixture(t, domain.EmAndamento, "feat/x")
+	runCheck(t, st)
+	mergeFeat(t, d)
+	if !runCheck(t, st) {
+		t.Fatal("merge deveria mudar")
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if got.BranchMergedAt == nil || got.Column != domain.EmAndamento {
+		t.Fatalf("após merge: %+v", got)
+	}
+	if runCheck(t, st) {
+		t.Fatal("passada ociosa com branch integrada não deveria mudar")
+	}
+	if n := len(decisionsOf(t, st, c)); n != 1 {
+		t.Fatalf("decisões após passada ociosa = %d", n)
+	}
+	gitI(t, d, "checkout", "-q", "feat/x")
+	gitI(t, d, "commit", "-q", "--allow-empty", "-m", "parte 2")
+	gitI(t, d, "checkout", "-q", "main")
+	tip2 := gitI(t, d, "rev-parse", "feat/x")
+	if !runCheck(t, st) {
+		t.Fatal("commit novo deveria rearmar")
+	}
+	got, _ = st.GetCardByID(c.ID)
+	if got.BranchMergedAt != nil || got.BranchHead != tip2 || !got.BranchDiverged {
+		t.Fatalf("não rearmou: %+v", got)
+	}
+	if err := st.MoveCard(c.Key, domain.Revisao); err != nil {
+		t.Fatal(err)
+	}
+	mergeFeat(t, d)
+	if !runCheck(t, st) {
+		t.Fatal("2º merge deveria mudar")
+	}
+	got, _ = st.GetCardByID(c.ID)
+	if got.Column != domain.Concluido || got.BranchMergedAt == nil {
+		t.Fatalf("após 2º merge: %+v", got)
+	}
+	ds := decisionsOf(t, st, c)
+	if len(ds) != 2 || ds[1] != "Branch feat/x integrada em main ("+tip2[:7]+")" {
+		t.Fatalf("decisões = %v", ds)
+	}
+}
+
+// O card saiu de revisão entre a leitura e a gravação: registra a integração,
+// mas não conclui.
+func TestIntegrationStaleColumnNotConcluded(t *testing.T) {
+	st, d, c := integFixture(t, domain.Revisao, "feat/x")
+	runCheck(t, st)
+	snap, _ := st.GetCardByID(c.ID)
+	mergeFeat(t, d)
+	if err := st.MoveCard(c.Key, domain.EmAndamento); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := st.ListProjects()
+	if _, err := checkCardIntegration(st, gitinfo.Exec{}, integNow, p[0], snap); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if got.Column != domain.EmAndamento || got.BranchMergedAt == nil || len(decisionsOf(t, st, c)) != 1 {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+// O branch do card mudou entre a leitura e a gravação: nada é gravado no
+// branch novo (nem o head, nem a integração).
+func TestIntegrationStaleBranchWritesNothing(t *testing.T) {
+	st, d, c := integFixture(t, domain.Revisao, "feat/x")
+	p, _ := st.ListProjects()
+	snap, _ := st.GetCardByID(c.ID)
+	if _, err := st.SetCardBranch(c.ID, "feat/y"); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := checkCardIntegration(st, gitinfo.Exec{}, integNow, p[0], snap); err != nil || ch {
+		t.Fatalf("head no branch velho = %v, %v", ch, err)
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if got.Branch != "feat/y" || got.BranchHead != "" || got.BranchDiverged {
+		t.Fatalf("head gravado no branch novo: %+v", got)
+	}
+	// Mesmo caso na integração: snapshot divergente em feat/x, card já em feat/y.
+	if _, err := st.SetCardBranch(c.ID, "feat/x"); err != nil {
+		t.Fatal(err)
+	}
+	runCheck(t, st)
+	snap, _ = st.GetCardByID(c.ID)
+	if _, err := st.SetCardBranch(c.ID, "feat/y"); err != nil {
+		t.Fatal(err)
+	}
+	mergeFeat(t, d)
+	if ch, err := checkCardIntegration(st, gitinfo.Exec{}, integNow, p[0], snap); err != nil || ch {
+		t.Fatalf("integração no branch velho = %v, %v", ch, err)
+	}
+	got, _ = st.GetCardByID(c.ID)
+	if got.BranchMergedAt != nil || got.Column != domain.Revisao || len(decisionsOf(t, st, c)) != 0 {
+		t.Fatalf("integração gravada no branch novo: %+v", got)
+	}
+}
