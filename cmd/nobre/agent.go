@@ -169,8 +169,17 @@ func (c *cli) todo(args []string) error {
 	return nil
 }
 
-func (c *cli) done() error {
-	if err := c.client().Me(ctx(), "done", map[string]string{}); err != nil {
+func (c *cli) done(args []string) error {
+	fs := flag.NewFlagSet("done", flag.ContinueOnError)
+	force := fs.Bool("force", false, "marca como pronto mesmo com pendências")
+	pos, err := c.parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 0 {
+		return usagef("uso: nobre done [--force]")
+	}
+	if err := c.client().Me(ctx(), "done", map[string]bool{"force": *force}); err != nil {
 		return err
 	}
 	fmt.Fprintln(c.out, "Card marcado como pronto para revisão.")

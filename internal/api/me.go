@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -315,9 +316,61 @@ func (s *server) meTest(w http.ResponseWriter, r *http.Request, sess domain.Sess
 	s.writeCard(w, http.StatusOK, c.Key)
 }
 
+// doneProblems lista o que impede o done: "Como testar" vazio ou anterior à
+// última edição de arquivo, e perguntas sem resposta.
+func (s *server) doneProblems(c domain.Card) ([]string, error) {
+	var problems []string
+	if strings.TrimSpace(c.HowToTest) == "" {
+		problems = append(problems, `"Como testar" vazio: registre com nobre test`)
+	} else {
+		edit, err := s.st.LastEventAt(c.ID, domain.EvFileEdit)
+		if err != nil {
+			return nil, err
+		}
+		test, err := s.st.LastEventAt(c.ID, domain.EvHowToTest)
+		if err != nil {
+			return nil, err
+		}
+		if edit != nil && test != nil && edit.After(*test) {
+			problems = append(problems, `"Como testar" é anterior à última edição de arquivo: atualize com nobre test`)
+		}
+	}
+	ct, err := s.st.CardContent(c.ID)
+	if err != nil {
+		return nil, err
+	}
+	open := 0
+	for _, q := range ct.Questions {
+		if strings.TrimSpace(q.Answer) == "" {
+			open++
+		}
+	}
+	if open > 0 {
+		problems = append(problems, fmt.Sprintf("%d pergunta(s) sem resposta: responda com nobre answer <id>", open))
+	}
+	return problems, nil
+}
+
 // meDone aplica a transição AgentDone (em_andamento → revisao) e registra o
 // evento done (mesmo se o card já não estava em andamento).
 func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		Force bool `json:"force"`
+	}
+	if !readJSON(w, r, &in) { // corpo vazio é aceito (force=false)
+		return
+	}
+	if !in.Force {
+		problems, err := s.doneProblems(c)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if len(problems) > 0 {
+			writeError(w, http.StatusConflict, strings.Join(problems, "; ")+" (ou nobre done --force)")
+			return
+		}
+	}
 	if next := domain.NextColumn(c.Column, domain.AgentDone); next != c.Column {
 		if err := s.st.MoveCard(c.Key, next); err != nil {
 			writeStoreError(w, err, msgCardNotFound)

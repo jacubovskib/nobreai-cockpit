@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,9 @@ func TestMeDoneMovesToRevisao(t *testing.T) {
 	a.liveSession(t, "claude:s", 4242, c.Key)
 	if err := a.st.TouchSession("claude:s", testNow.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/me/test", map[string]string{"text": "go test"}, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("test = %d %s", rec.Code, rec.Body)
 	}
 	if rec := a.do(t, "POST", "/api/me/done", nil, 4242); rec.Code != http.StatusOK {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
@@ -221,5 +225,122 @@ func TestMeAnswerEmpty400(t *testing.T) {
 	q, _ := a.st.AddQuestion(domain.Question{CardID: c.ID, Text: "?"})
 	if rec := a.do(t, "POST", "/api/me/answer", map[string]any{"id": q.ID, "answer": "  "}, 4242); rec.Code != http.StatusBadRequest {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// doingCard devolve um card em_andamento com sessão viva ligada.
+func (a *testAPI) doingCard(t *testing.T) domain.Card {
+	t.Helper()
+	c := a.card(t)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	if err := a.st.MoveCard(c.Key, domain.EmAndamento); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func (a *testAPI) event(t *testing.T, c domain.Card, kind string, at time.Time) {
+	t.Helper()
+	if err := a.st.AddEvent(domain.Event{SessionID: "claude:s", CardID: &c.ID, Kind: kind, At: at}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (a *testAPI) wantDoneRefused(t *testing.T, c domain.Card, body any, contains ...string) {
+	t.Helper()
+	rec := a.do(t, "POST", "/api/me/done", body, 4242)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	msg := decode[map[string]string](t, rec)["error"]
+	for _, w := range append(contains, " (ou nobre done --force)") {
+		if !strings.Contains(msg, w) {
+			t.Fatalf("falta %q em %q", w, msg)
+		}
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Column != domain.EmAndamento {
+		t.Fatalf("column = %s", got.Column)
+	}
+}
+
+func TestMeDoneRefusesWithoutHowToTest(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.doingCard(t)
+	a.wantDoneRefused(t, c, nil, `"Como testar" vazio: registre com nobre test`)
+	a.wantDoneRefused(t, c, map[string]bool{"force": false}, "registre com nobre test")
+}
+
+func TestMeDoneRefusesStaleHowToTest(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.doingCard(t)
+	a.event(t, c, domain.EvHowToTest, testNow.Add(-2*time.Hour))
+	a.event(t, c, domain.EvFileEdit, testNow.Add(-time.Hour))
+	got, _ := a.st.GetCard(c.Key)
+	got.HowToTest = "antigo"
+	if err := a.st.UpdateCard(got); err != nil {
+		t.Fatal(err)
+	}
+	a.wantDoneRefused(t, c, nil, `"Como testar" é anterior à última edição de arquivo: atualize com nobre test`)
+}
+
+func TestMeDoneRefusesOpenQuestion(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.doingCard(t)
+	if rec := a.do(t, "POST", "/api/me/test", map[string]string{"text": "go test"}, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("test = %d %s", rec.Code, rec.Body)
+	}
+	q, _ := a.st.AddQuestion(domain.Question{CardID: c.ID, Text: "?"})
+	a.wantDoneRefused(t, c, nil, "1 pergunta(s) sem resposta: responda com nobre answer <id>")
+	if err := a.st.AnswerQuestion(q.ID, "sim"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/me/done", nil, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMeDoneCombinesProblems(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.doingCard(t)
+	a.st.AddQuestion(domain.Question{CardID: c.ID, Text: "?"})
+	a.wantDoneRefused(t, c, nil, `registre com nobre test; 1 pergunta(s)`)
+}
+
+func TestMeDoneOKWhenCurrent(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.doingCard(t)
+	a.event(t, c, domain.EvFileEdit, testNow.Add(-2*time.Hour))
+	if rec := a.do(t, "POST", "/api/me/test", map[string]string{"text": "go test"}, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("test = %d %s", rec.Code, rec.Body)
+	}
+	if rec := a.do(t, "POST", "/api/me/done", nil, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Column != domain.Revisao {
+		t.Fatalf("column = %s", got.Column)
+	}
+}
+
+func TestMeDoneHowToTestFromUIWithoutEventIsCurrent(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.doingCard(t)
+	got, _ := a.st.GetCard(c.Key)
+	got.HowToTest = "da UI"
+	a.st.UpdateCard(got)
+	a.event(t, c, domain.EvFileEdit, testNow.Add(-time.Hour))
+	if rec := a.do(t, "POST", "/api/me/done", nil, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMeDoneForce(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.doingCard(t)
+	a.st.AddQuestion(domain.Question{CardID: c.ID, Text: "?"})
+	if rec := a.do(t, "POST", "/api/me/done", map[string]bool{"force": true}, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Column != domain.Revisao {
+		t.Fatalf("column = %s", got.Column)
 	}
 }

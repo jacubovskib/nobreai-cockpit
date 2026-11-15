@@ -30,7 +30,7 @@ Agente (use dentro de uma sessão de agente):
   nobre ask "<pergunta>"                                  registra uma pergunta em aberto
   nobre answer <id> "<resposta>"                          responde uma pergunta do card
   nobre test "<como testar>"                              registra como testar
-  nobre done                                              marca o card como pronto para revisão
+  nobre done [--force]                                    marca o card como pronto para revisão
   nobre status                                            mostra o card e a prontidão do handoff
 
 Administração:
@@ -124,7 +124,7 @@ func (c *cli) run(args []string) int {
 	case "todo":
 		err = c.todo(rest)
 	case "done":
-		err = c.done()
+		err = c.done(rest)
 	case "status":
 		err = c.status()
 	case "project":

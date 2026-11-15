@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -28,7 +29,8 @@ func TestAgentCommandsCallAPI(t *testing.T) {
 		{[]string{"todo", "done", "5"}, "/api/me/todo-done", `{"id":5}`},
 		{[]string{"ask", "como?"}, "/api/me/ask", `{"text":"como?"}`},
 		{[]string{"test", "rode go test"}, "/api/me/test", `{"text":"rode go test"}`},
-		{[]string{"done"}, "/api/me/done", `{}`},
+		{[]string{"done"}, "/api/me/done", `{"force":false}`},
+		{[]string{"done", "--force"}, "/api/me/done", `{"force":true}`},
 		{[]string{"start", "Novo", "--goal", "g", "--done-when", "d"}, "/api/me/start", `{"done_when":"d","goal":"g","title":"Novo"}`},
 		{[]string{"resume", "NAC-1", "--force"}, "/api/me/resume", `{"force":true,"key":"NAC-1"}`},
 	}
@@ -206,5 +208,17 @@ func TestStatusListsOpenQuestions(t *testing.T) {
 	r := runCLI(t, addr, "", nil, "status")
 	if !strings.Contains(r.stdout, "Perguntas em aberto:\n- [5] qual?") || strings.Contains(r.stdout, "feita") {
 		t.Fatalf("%s", r.stdout)
+	}
+}
+
+func TestCLIDoneForce(t *testing.T) {
+	var body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.Write([]byte(`{}`))
+	})
+	if r := runCLI(t, addr, "", nil, "done", "--force"); r.code != 0 || strings.TrimSpace(body) != `{"force":true}` {
+		t.Fatalf("%+v body=%q", r, body)
 	}
 }
