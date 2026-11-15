@@ -49,16 +49,18 @@ type Result struct {
 	Plans    []Plan   `json:"plans"`
 }
 
-// Run levanta repo em relação a base. Todo git é só de leitura.
+// Run levanta repo em relação a base. Todo git é só de leitura. Base vazia
+// (nenhuma detectável) ou inválida é BaseError, como base inexistente.
 func Run(repo, base string, now time.Time) (Result, error) {
 	res := Result{Repo: repo, Base: base, Branches: []Branch{}, Plans: []Plan{}}
-	if base != "" && !strings.HasPrefix(base, "-") {
-		bs, err := branches(repo, base, now)
-		if err != nil {
-			return res, err
-		}
-		res.Branches = bs
+	if base == "" || strings.HasPrefix(base, "-") {
+		return res, &BaseError{Base: base}
 	}
+	bs, err := branches(repo, base, now)
+	if err != nil {
+		return res, err
+	}
+	res.Branches = bs
 	roots := []string{repo}
 	for _, b := range res.Branches {
 		if b.Worktree != "" {
@@ -69,10 +71,14 @@ func Run(repo, base string, now time.Time) (Result, error) {
 	return res, nil
 }
 
-// BaseError indica que a base não existe no repositório (nem local nem em origin).
+// BaseError indica que a base não existe no repositório (nem local nem em
+// origin) ou que nenhuma foi detectada (Base vazia).
 type BaseError struct{ Base string }
 
 func (e *BaseError) Error() string {
+	if e.Base == "" {
+		return "nenhuma base detectada neste repositório (develop, origin/HEAD, main ou master); defina com nobre project base <branch>"
+	}
 	return `base "` + e.Base + `" não existe neste repositório; ajuste com nobre project base <branch>`
 }
 

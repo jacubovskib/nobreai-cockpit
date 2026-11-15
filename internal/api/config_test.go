@@ -271,3 +271,12 @@ func TestCreateProjectRefusesHomeAndAncestors(t *testing.T) {
 		t.Fatalf("PATCH para o HOME = %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestScanEndpointNoBase409(t *testing.T) {
+	a := newTestAPI(t) // sem Git: nenhuma base detectável
+	p := a.project(t)
+	rec := a.do(t, "GET", "/api/projects/"+strconv.FormatInt(p.ID, 10)+"/scan", nil, 0)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "nobre project base") {
+		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
+	}
+}

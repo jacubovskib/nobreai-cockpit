@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -174,5 +175,22 @@ func TestScanPlansDedupedAcrossWorktrees(t *testing.T) {
 	}
 	if res.Plans[0].Path != newer {
 		t.Fatalf("copia escolhida = %s, quer %s", res.Plans[0].Path, newer)
+	}
+}
+
+// Sem base detectável o levantamento não sai pela metade: é o mesmo erro de
+// base inexistente, com texto próprio.
+func TestScanEmptyBaseErrors(t *testing.T) {
+	d := newRepo(t)
+	for _, base := range []string{"", "-x"} {
+		_, err := Run(d, base, time.Now())
+		var be *BaseError
+		if !errors.As(err, &be) {
+			t.Fatalf("base %q: err = %v", base, err)
+		}
+	}
+	_, err := Run(d, "", time.Now())
+	if err == nil || !strings.Contains(err.Error(), "nenhuma base") || !strings.Contains(err.Error(), "nobre project base") {
+		t.Fatalf("mensagem = %v", err)
 	}
 }
