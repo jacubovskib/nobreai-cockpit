@@ -137,3 +137,42 @@ func TestScanPlansInBranchWorktree(t *testing.T) {
 		t.Fatalf("plans = %+v", res.Plans)
 	}
 }
+
+func TestScanPlansDedupedAcrossWorktrees(t *testing.T) {
+	d := newRepo(t)
+	write := func(dir, name string, mt time.Time) string {
+		if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, "docs", name)
+		if err := os.WriteFile(p, []byte("- [ ] a\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	now := time.Now()
+	var newer string
+	for i, n := range []string{"w1", "w2"} {
+		wt := filepath.Join(t.TempDir(), n)
+		git(t, d, nil, "worktree", "add", "-q", "-b", "feat/"+n, wt)
+		commitOn(t, wt, "feat/"+n, n+".txt", 0)
+		p := write(wt, "plan-x.md", now.Add(-time.Duration(2-i)*time.Hour))
+		if i == 1 {
+			newer = p
+			write(wt, "plan-so-w2.md", now.Add(-5*time.Hour))
+		}
+	}
+	res, err := Run(d, "main", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Plans) != 2 {
+		t.Fatalf("plans = %+v", res.Plans)
+	}
+	if res.Plans[0].Path != newer {
+		t.Fatalf("copia escolhida = %s, quer %s", res.Plans[0].Path, newer)
+	}
+}

@@ -37,6 +37,8 @@ type Plan struct {
 	Open     int       `json:"open"`
 	Done     int       `json:"done"`
 	Modified time.Time `json:"modified"`
+
+	rel string // caminho relativo à raiz em que foi achado (chave de deduplicação)
 }
 
 // Result é o levantamento de um repositório.
@@ -176,6 +178,21 @@ func plans(repo string, roots []string, now time.Time) []Plan {
 		seen[root] = true
 		ps = append(ps, plansIn(repo, root, now)...)
 	}
+	// O mesmo plano herdado da base aparece em cada worktree: fica a cópia
+	// mais recente de cada caminho relativo à raiz.
+	best := map[string]int{}
+	var uniq []Plan
+	for _, p := range ps {
+		i, ok := best[p.rel]
+		switch {
+		case !ok:
+			best[p.rel] = len(uniq)
+			uniq = append(uniq, p)
+		case p.Modified.After(uniq[i].Modified):
+			uniq[i] = p
+		}
+	}
+	ps = uniq
 	return ps
 }
 
@@ -219,11 +236,12 @@ func plansIn(repo, root string, now time.Time) []Plan {
 		if open == 0 {
 			return nil
 		}
+		relRoot, _ := filepath.Rel(root, p)
 		shown := p
 		if r, err := filepath.Rel(repo, p); err == nil && !strings.HasPrefix(r, "..") {
 			shown = r
 		}
-		ps = append(ps, Plan{Path: filepath.ToSlash(shown), Open: open, Done: done, Modified: info.ModTime()})
+		ps = append(ps, Plan{Path: filepath.ToSlash(shown), Open: open, Done: done, Modified: info.ModTime(), rel: filepath.ToSlash(relRoot)})
 		return nil
 	})
 	sort.SliceStable(ps, func(i, j int) bool { return ps[i].Modified.After(ps[j].Modified) })
