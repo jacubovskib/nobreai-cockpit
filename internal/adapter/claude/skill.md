@@ -9,9 +9,21 @@ O Cockpit é o quadro (kanban) onde o trabalho dos agentes fica registrado em ca
 
 ## Antes de tudo: esta sessão é registrada?
 
-- Use os comandos `nobre` só quando o contexto desta sessão contiver a frase "NobreAI Cockpit: esta sessão é registrada no board". Ela chega no início da sessão quando o repositório está cadastrado no Cockpit.
-- Sem essa frase, não rode `nobre start`, `nobre resume` nem os outros comandos, e não cadastre o repositório (`nobre project add`) por conta própria. Se o usuário pedir um card, diga que o repositório não está cadastrado e que ele mesmo pode cadastrar com `nobre project add`.
-- Se um comando `nobre` responder que o repositório não está cadastrado, avise o usuário e siga sem card; não cadastre por conta própria.
+- Use os comandos `nobre` só quando o contexto desta sessão contiver a frase "NobreAI Cockpit: esta sessão é registrada no board" (repositório cadastrado) ou a frase "NobreAI Cockpit: este repositório não está cadastrado no board" (veja "Repositório não cadastrado").
+- Sem nenhuma das duas frases, não rode comandos `nobre`.
+- Se um comando `nobre` responder que o repositório não está cadastrado, siga "Repositório não cadastrado".
+
+## Repositório não cadastrado
+
+Quando o contexto trouxer a frase "NobreAI Cockpit: este repositório não está cadastrado no board", cadastre sem perguntar ao usuário, antes de seguir com o pedido dele:
+
+1. `nobre project add <raiz>`: use a raiz que a frase indica. Dentro de um worktree, cadastra o checkout principal. Imprime o branch base e as sessões religadas; esta sessão passa a ser registrada.
+2. `nobre project scan`: levanta o branch base, os branches com trabalho fora da base (`(recente)` = últimos 14 dias), os planos com tarefas abertas, as sessões recentes com custo e os cards que já existem.
+3. Escolha até 5 cards: entregas com branch recente (14 dias) ou worktree ativo, e planos com tarefas abertas. Agrupe branches da mesma entrega num só card. Não duplique cards que já existem. Ignore o que está parado há mais de 30 dias.
+4. Crie cada um com `nobre card add "<título>" --goal "<objetivo>" --done-when "<critério>" --branch <branch>`. Informe `--branch` sempre que houver branch. Se o trabalho já começou (branch com commits), acrescente `--column pausado --where "<onde parei>"`; o resto fica no Backlog (padrão). O comando não liga esta sessão ao card.
+5. Diga ao usuário, em poucas linhas, o que cadastrou e quais cards criou, e siga com o pedido dele.
+
+Se o usuário não quiser o repositório no board, ele desliga a captura do projeto na Configuração. Se o `nobre project add` falhar, avise o usuário e siga sem card.
 
 ## Quando criar um card
 
@@ -30,14 +42,20 @@ O Cockpit é o quadro (kanban) onde o trabalho dos agentes fica registrado em ca
 - `nobre file auth/oauth.go --why "fluxo do callback" --lines L12-96`: marca um arquivo essencial (`--lines` é opcional).
 - `nobre todo add "cobrir o erro de state inválido"`: adiciona uma pendência; `nobre todo done 3` conclui a pendência 3.
 - `nobre ask "Usar cookie ou localStorage para o token?"`: registra uma pergunta que precisa do usuário.
+- `nobre answer 4 "cookie httpOnly"`: responde a pergunta 4 do card (os ids aparecem em `nobre ask`, `nobre status` e no pacote de retomada como `- [4] <texto>`).
+- `nobre branch feat/oauth`: informa o branch de trabalho do card; rode ao criar ou entrar no branch ou worktree do card. Recusa o branch base do projeto.
 - `nobre test "go test ./auth/..."`: registra como testar.
-- `nobre done`: marca o card como pronto para revisão.
+- `nobre done`: marca o card como pronto para revisão. Recusa se "Como testar" estiver vazio ou mais antigo que a última edição de arquivo, ou se houver pergunta sem resposta. `nobre done --force` ignora essas recusas; use só depois de registrar o motivo com `nobre note`.
+- `nobre card add "Migrar sessões" --goal "..." --done-when "..." --branch feat/sessoes --where "parei na migration 3" --column pausado`: cria um card sem ligar esta sessão (`--column` aceita `backlog` ou `pausado`).
+- `nobre project scan`: levantamento só de leitura do projeto; `nobre project base main`: define o branch base (`nobre project base <branch> [path]`).
 - `nobre status`: mostra o card, "Onde parei" e o que falta para o handoff.
 
 ## Como manter o card útil
 
 - Atualize "Onde parei" com `nobre note` a cada passo relevante e antes de parar. Escreva o essencial: o que está feito, o que vem agora e qualquer armadilha.
 - Marque com `nobre file` os arquivos essenciais, sempre com o motivo.
-- Registre decisões com o porquê, e perguntas em aberto com `nobre ask`.
+- Registre decisões com o porquê, e perguntas em aberto com `nobre ask`; assim que uma pergunta for decidida, responda com `nobre answer <id> "<resposta>"`.
+- Rode `nobre branch <nome>` ao criar ou entrar no branch ou worktree do card, para o card acompanhar o trabalho.
+- Atualize "Como testar" (`nobre test`) depois da última mudança de código e antes de `nobre done`; um "Como testar" mais antigo que a última edição bloqueia o `done`.
 - Antes de `nobre done`, confira `nobre status`: objetivo, como testar, arquivo essencial e pendências.
 - Não pergunte ao usuário o que já está no card: leia o pacote de retomada e continue a partir dele.

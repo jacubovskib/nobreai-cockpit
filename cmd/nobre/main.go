@@ -22,8 +22,7 @@ const usage = `nobre: CLI do NobreAI Cockpit
 
 Agente (use dentro de uma sessão de agente):
   nobre start "<título>" [--goal ...] [--done-when ...]   cria um card e liga esta sessão
-  nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado]
-                                                          cria um card sem ligar esta sessão
+  nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado]  cria um card sem ligar esta sessão
   nobre resume <KEY> [--force]                            liga esta sessão ao card e imprime o pacote
   nobre note "<onde parei>"                               atualiza "Onde parei"
   nobre decide "<decisão>" --why "<porquê>"               registra uma decisão
