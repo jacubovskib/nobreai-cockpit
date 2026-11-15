@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
 const msgPriceRequired = "Informe os preços de entrada e saída (maiores que zero)"
@@ -214,6 +215,25 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
+	}
+	// Sessões em worktrees ligados (fora do diretório do projeto) também.
+	if wr, ok := s.deps.Git.(gitinfo.WorktreeReader); ok {
+		wts, err := s.st.UnassignedLinkedWorktrees()
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		for _, wt := range wts {
+			if filepath.Clean(wr.Locate(wt).Main) != p.Path {
+				continue
+			}
+			m, err := s.st.AssignSessionsInWorktree(p.ID, wt)
+			if err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+			n += m
+		}
 	}
 	s.publish("config", "sessions", "cards")
 	writeJSON(w, http.StatusCreated, struct {

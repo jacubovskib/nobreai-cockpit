@@ -146,3 +146,34 @@ func TestCreateProjectReassignsAndSetsBase(t *testing.T) {
 		t.Fatalf("sessão = %+v, %v", x, err)
 	}
 }
+
+func TestCreateProjectReassignsLinkedWorktreeSession(t *testing.T) {
+	main, wt := gitRepoWithWorktree(t)
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Git: gitinfo.Exec{}})}
+	now := testNow
+	if err := st.StartSession(domain.Session{ID: "claude:1", Agent: "claude", ProviderSessionID: "1", PID: 5, Cwd: wt,
+		Worktree: wt, WorktreeLinked: true, Branch: "feat/wt", StartedAt: now, LastEventAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/projects", map[string]any{"path": main}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("projeto = %d %s", rec.Code, rec.Body)
+	}
+	if out := decode[map[string]any](t, rec); out["reassigned"] != float64(1) {
+		t.Fatalf("resposta = %v", out)
+	}
+	x, err := st.GetSession("claude:1")
+	if err != nil || x.ProjectID == nil || !x.FullCapture {
+		t.Fatalf("sessão = %+v, %v", x, err)
+	}
+	if rec := a.do(t, "POST", "/api/me/start", map[string]any{"title": "Novo"}, 5); rec.Code != http.StatusCreated {
+		t.Fatalf("start = %d %s", rec.Code, rec.Body)
+	}
+}

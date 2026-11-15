@@ -102,3 +102,35 @@ func (s *Store) ReassignSessions(projectID int64, root string) (int, error) {
 	n, err := res.RowsAffected()
 	return int(n), err
 }
+
+// UnassignedLinkedWorktrees lista os worktrees (distintos) das sessões sem
+// projeto que rodam num worktree ligado.
+func (s *Store) UnassignedLinkedWorktrees() ([]string, error) {
+	rows, err := s.DB.Query(`SELECT DISTINCT worktree FROM sessions
+		WHERE project_id IS NULL AND worktree_linked=1 AND worktree<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var w string
+		if err := rows.Scan(&w); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// AssignSessionsInWorktree liga ao projeto as sessões sem projeto que rodam
+// no worktree e liga a captura completa. Devolve quantas mudaram.
+func (s *Store) AssignSessionsInWorktree(projectID int64, worktree string) (int, error) {
+	res, err := s.DB.Exec(`UPDATE sessions SET project_id=?, full_capture=1
+		WHERE project_id IS NULL AND worktree_linked=1 AND worktree=?`, projectID, worktree)
+	if err != nil {
+		return 0, fmt.Errorf("religar sessões do worktree: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
