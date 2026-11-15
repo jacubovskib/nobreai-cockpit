@@ -157,7 +157,7 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeStoreError(w, err, "")
 		return
 	}
-	s.syncBranch(c.ID, sess.Branch)
+	s.syncBranch(c.ID, s.liveBranch(sess).Branch)
 	s.publish("cards", "sessions")
 	s.writeCard(w, http.StatusCreated, c.Key)
 }
@@ -246,7 +246,7 @@ func (s *server) meResume(w http.ResponseWriter, r *http.Request, sess domain.Se
 		return
 	}
 	// O card passa a acompanhar o branch de trabalho desta sessão.
-	if s.syncBranch(c.ID, sess.Branch) {
+	if s.syncBranch(c.ID, s.liveBranch(sess).Branch) {
 		if c, err = s.st.GetCard(in.Key); err != nil {
 			writeStoreError(w, err, msgCardNotFound)
 			return
@@ -281,6 +281,28 @@ func (s *server) syncBranch(cardID int64, branch string) bool {
 	return changed
 }
 
+// liveBranch relê o branch atual do cwd da sessão (o agente pode ter trocado de
+// branch sem mudar de diretório, com git switch) e grava na sessão se mudou.
+// Falha ao gravar só vai para o log: o branch lido vale mesmo assim.
+func (s *server) liveBranch(sess domain.Session) domain.Session {
+	if s.deps.Git == nil || sess.Cwd == "" {
+		return sess
+	}
+	b := s.deps.Git.Branch(sess.Cwd)
+	if b == "" || b == sess.Branch {
+		return sess
+	}
+	l := store.SessionLocation{Cwd: sess.Cwd, Branch: b, GitHead: s.deps.Git.Head(sess.Cwd),
+		Worktree: sess.Worktree, WorktreeLinked: sess.WorktreeLinked}
+	sess.Branch, sess.GitHead = l.Branch, l.GitHead
+	if err := s.st.UpdateSessionLocation(sess.ID, l); err != nil {
+		log.Printf("branch da sessão %s: %v", sess.ID, err)
+		return sess
+	}
+	s.publish("sessions")
+	return sess
+}
+
 // meBranch troca o branch do card (o agente informa o branch de trabalho). A
 // base do projeto é recusada: o card guarda o branch de trabalho.
 func (s *server) meBranch(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
@@ -295,6 +317,9 @@ func (s *server) meBranch(w http.ResponseWriter, r *http.Request, sess domain.Se
 		writeError(w, http.StatusBadRequest, "branch obrigatório")
 		return
 	}
+	// A sessão fica com o branch atual: senão o PostToolUse deste mesmo comando
+	// veria a diferença e trocaria o branch que o agente acabou de informar.
+	s.liveBranch(sess)
 	ps, err := s.st.ListProjects()
 	if err != nil {
 		writeStoreError(w, err, "")

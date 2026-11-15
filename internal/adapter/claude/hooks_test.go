@@ -939,3 +939,24 @@ func TestSessionStartResumeEnvSyncsBranch(t *testing.T) {
 		t.Fatalf("branch = %q", got.Branch)
 	}
 }
+
+// git switch no mesmo diretório: o PostToolUse do Bash percebe o branch novo,
+// grava na sessão e o card acompanha.
+func TestPostToolUseBashFollowsBranchSwitch(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	e.a.deps.Git = fakeGit{branch: "feat/new"}
+	e.call(t, "post_tool_use_bash")
+	if s, _ := e.st.GetSession(sessID); s.Branch != "feat/new" || s.Cwd != "/w/api" {
+		t.Fatalf("sessão = %+v", s)
+	}
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/new" {
+		t.Fatalf("branch do card = %q", got.Branch)
+	}
+	if len(e.events(t, domain.EvCommand)) != 1 {
+		t.Fatal("o comando deveria continuar registrado")
+	}
+}

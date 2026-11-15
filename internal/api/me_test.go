@@ -457,3 +457,80 @@ func TestMeCardsNoProject409(t *testing.T) {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// gitAPI é o testAPI com um Git falso cujo branch atual o teste controla.
+func gitAPI(t *testing.T, g *fakeGit) *testAPI {
+	t.Helper()
+	a := newTestAPI(t)
+	a.h = New(a.st, Deps{Now: func() time.Time { return testNow }, Hub: a.hub, Git: g})
+	return a
+}
+
+// staleSession cria a sessão viva gravada em feat/old no projeto /w/api (base main).
+func (a *testAPI) staleSession(t *testing.T, pid int) domain.Project {
+	t.Helper()
+	p := a.project(t)
+	if err := a.st.SetProjectBase(p.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.StartSession(domain.Session{ID: "claude:s", Agent: "claude", PID: pid, Cwd: "/w/api",
+		Branch: "feat/old", StartedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// O agente trocou de branch no mesmo diretório (git switch -c): nobre start
+// usa o branch atual, não o gravado na sessão.
+func TestMeStartUsesLiveBranch(t *testing.T) {
+	a := gitAPI(t, &fakeGit{branch: "feat/new"})
+	a.staleSession(t, 4242)
+	rec := a.do(t, "POST", "/api/me/start", map[string]string{"title": "T"}, 4242)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("start = %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[domain.Card](t, rec); got.Branch != "feat/new" {
+		t.Fatalf("branch do card = %q", got.Branch)
+	}
+	if s, _ := a.st.GetSession("claude:s"); s.Branch != "feat/new" || s.Cwd != "/w/api" {
+		t.Fatalf("sessão = %+v", s)
+	}
+}
+
+func TestMeResumeUsesLiveBranch(t *testing.T) {
+	a := gitAPI(t, &fakeGit{branch: "feat/new"})
+	p := a.staleSession(t, 4242)
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: p.ID, Column: domain.Pausado})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/me/resume", map[string]string{"key": c.Key}, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("resume = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Branch != "feat/new" {
+		t.Fatalf("branch do card = %q", got.Branch)
+	}
+}
+
+// nobre branch grava o branch informado no card, mas a sessão passa a ter o
+// branch atual: o PostToolUse do próprio comando não desfaz a escolha.
+func TestMeBranchRefreshesSessionBranch(t *testing.T) {
+	a := gitAPI(t, &fakeGit{branch: "feat/live"})
+	p := a.staleSession(t, 4242)
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.AttachSession("claude:s", c.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/me/branch", map[string]string{"branch": "feat/x"}, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("branch = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Branch != "feat/x" {
+		t.Fatalf("branch do card = %q", got.Branch)
+	}
+	if s, _ := a.st.GetSession("claude:s"); s.Branch != "feat/live" {
+		t.Fatalf("branch da sessão = %q", s.Branch)
+	}
+}

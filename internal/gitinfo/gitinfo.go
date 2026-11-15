@@ -33,16 +33,16 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Branch devolve o branch atual.
+// Branch devolve o branch atual (só leitura: roda a cada comando do agente).
 func (Exec) Branch(dir string) string {
-	out, _ := git(dir, "rev-parse", "--abbrev-ref", "HEAD")
-	return out
+	out, _ := gitRO(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	return strings.TrimSpace(out)
 }
 
 // Head devolve o hash do commit atual.
 func (Exec) Head(dir string) string {
-	out, _ := git(dir, "rev-parse", "HEAD")
-	return out
+	out, _ := gitRO(dir, "rev-parse", "HEAD")
+	return strings.TrimSpace(out)
 }
 
 // DiffStat resume as mudanças da árvore de trabalho desde o commit since
