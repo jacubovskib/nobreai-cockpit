@@ -797,6 +797,11 @@ func (g wtGit) Locate(dir string) gitinfo.Location {
 
 func (g wtGit) Worktrees(string) ([]gitinfo.Worktree, error) { return nil, nil }
 
+// wtGit também é BranchReader: a base detectada é sempre main.
+func (g wtGit) DetectBase(string) string                { return "main" }
+func (g wtGit) BranchTip(string, string) (string, bool) { return "", false }
+func (g wtGit) IsAncestor(string, string, string) bool  { return false }
+
 func newWorktreeEnv(t *testing.T) *env {
 	t.Helper()
 	e := newEnv(t)
@@ -892,5 +897,45 @@ func TestSubagentWorktreeDoesNotMoveSession(t *testing.T) {
 	e.call(t, "stop", sub, with("agent_id", "a1"))
 	if s, _ := e.st.GetSession(sessID); s.WorktreeLinked {
 		t.Fatalf("evento com agent_id moveu a sessão: %+v", s)
+	}
+}
+
+func TestMoveSessionSyncsCardBranch(t *testing.T) {
+	e := newWorktreeEnv(t)
+	p := e.project(t)
+	c, err := e.st.CreateCard(domain.Card{Title: "x", ProjectID: p.ID, Branch: "main", Column: domain.EmAndamento})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.call(t, "session_start")
+	if err := e.st.AttachSession(sessID, c.Key, true); err != nil {
+		t.Fatal(err)
+	}
+	// Ainda no checkout principal, em main (a base): nada muda.
+	e.a.deps.Git = wtGit{fakeGit: fakeGit{branch: "main"}, locs: e.a.deps.Git.(wtGit).locs}
+	e.call(t, "user_prompt_submit")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "main" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+	// O agente entra num worktree em feat/x: o card acompanha.
+	e.a.deps.Git = wtGit{fakeGit: fakeGit{branch: "feat/x"}, locs: e.a.deps.Git.(wtGit).locs}
+	e.call(t, "user_prompt_submit", with("cwd", "/w/api/.claude/worktrees/x"))
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/x" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+	if !e.published("cards") {
+		t.Fatal("cards deveria ser publicado")
+	}
+}
+
+func TestSessionStartResumeEnvSyncsBranch(t *testing.T) {
+	e := newWorktreeEnv(t)
+	p := e.project(t)
+	if _, err := e.st.CreateCard(domain.Card{Title: "x", ProjectID: p.ID, Branch: "main", Column: domain.Pausado}); err != nil {
+		t.Fatal(err)
+	}
+	e.call(t, "session_start", withEnv("NOBRE_RESUME", "NAC-1"))
+	if got, _ := e.st.GetCard("NAC-1"); got.Branch != "feat/x" {
+		t.Fatalf("branch = %q", got.Branch)
 	}
 }

@@ -158,7 +158,25 @@ func (a *Adapter) moveSession(sess domain.Session, cwd string) (domain.Session, 
 	}
 	a.publish("sessions")
 	sess.Cwd, sess.Branch, sess.GitHead, sess.Worktree, sess.WorktreeLinked = l.Cwd, l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
+	a.syncCardBranch(sess)
 	return sess, nil
+}
+
+// syncCardBranch faz o branch do card da sessão acompanhar o da sessão (a
+// base do projeto nunca vira branch do card). Falha só vai para o log.
+func (a *Adapter) syncCardBranch(sess domain.Session) {
+	if sess.CardID == nil {
+		return
+	}
+	br, _ := a.deps.Git.(gitinfo.BranchReader) // nil quando o Git não lê branches
+	changed, err := board.SyncCardBranch(a.st, br, *sess.CardID, sess.Branch)
+	if err != nil {
+		log.Printf("hook claude: branch do card da sessão %s: %v", sess.ID, err)
+		return
+	}
+	if changed {
+		a.publish("cards")
+	}
 }
 
 // locate consulta o git sobre cwd: branch, HEAD e worktree (este só quando o

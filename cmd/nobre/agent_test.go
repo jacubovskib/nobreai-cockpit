@@ -222,3 +222,33 @@ func TestCLIDoneForce(t *testing.T) {
 		t.Fatalf("%+v body=%q", r, body)
 	}
 }
+
+func TestCLIBranchAndProjectBase(t *testing.T) {
+	type seen struct{ method, path, body string }
+	var calls []seen
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bs, _ := json.Marshal(b)
+		calls = append(calls, seen{r.Method, r.URL.Path, string(bs)})
+		if r.Method == "GET" {
+			w.Write([]byte(`[{"id":1,"name":"outro","path":"/w/outro"},{"id":7,"name":"api","path":"/w/api"}]`))
+			return
+		}
+		w.Write([]byte(`{"key":"NAC-1"}`))
+	})
+	if r := runCLI(t, addr, "", nil, "branch", "feat/x"); r.code != 0 || calls[0] != (seen{"POST", "/api/me/branch", `{"branch":"feat/x"}`}) {
+		t.Fatalf("%+v %+v", r, calls)
+	}
+	calls = nil
+	r := runCLI(t, addr, "", nil, "project", "base", "develop", "/w/api")
+	if r.code != 0 || len(calls) != 2 || calls[1] != (seen{"PATCH", "/api/projects/7", `{"base_branch":"develop"}`}) {
+		t.Fatalf("%+v %+v", r, calls)
+	}
+	if r := runCLI(t, addr, "", nil, "project", "base", "develop", "/w/nada"); r.code != 1 || !strings.Contains(r.err, "não cadastrado") {
+		t.Fatalf("%+v", r)
+	}
+	if r := runCLI(t, addr, "", nil, "branch"); r.code != 2 {
+		t.Fatalf("uso: %+v", r)
+	}
+}

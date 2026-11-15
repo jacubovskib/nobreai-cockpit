@@ -9,7 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -36,6 +38,7 @@ func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/answer", s.withSessionCard(s.meAnswer))
 	mux.HandleFunc("POST /api/me/todo-done", s.withSessionCard(s.meTodoDone))
 	mux.HandleFunc("POST /api/me/test", s.withSessionCard(s.meTest))
+	mux.HandleFunc("POST /api/me/branch", s.withSessionCard(s.meBranch))
 	mux.HandleFunc("POST /api/me/done", s.withSessionCard(s.meDone))
 }
 
@@ -153,6 +156,7 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeStoreError(w, err, "")
 		return
 	}
+	s.syncBranch(c.ID, sess.Branch)
 	s.publish("cards", "sessions")
 	s.writeCard(w, http.StatusCreated, c.Key)
 }
@@ -183,6 +187,13 @@ func (s *server) meResume(w http.ResponseWriter, r *http.Request, sess domain.Se
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
+	// O card passa a acompanhar o branch de trabalho desta sessão.
+	if s.syncBranch(c.ID, sess.Branch) {
+		if c, err = s.st.GetCard(in.Key); err != nil {
+			writeStoreError(w, err, msgCardNotFound)
+			return
+		}
+	}
 	// A base do diff é a sessão anterior: a desta chamada acabou de entrar.
 	md, err := resume.ForCard(s.st, s.deps.Git, c, sess.ID)
 	if err != nil {
@@ -190,6 +201,59 @@ func (s *server) meResume(w http.ResponseWriter, r *http.Request, sess domain.Se
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"key": c.Key, "markdown": md})
+}
+
+// branchReader é o Git do daemon como BranchReader (nil se não souber ler branches).
+func (s *server) branchReader() gitinfo.BranchReader {
+	br, _ := s.deps.Git.(gitinfo.BranchReader)
+	return br
+}
+
+// syncBranch faz o branch do card acompanhar branch (ver board.SyncCardBranch).
+// Falha só vai para o log; devolve se o branch do card mudou.
+func (s *server) syncBranch(cardID int64, branch string) bool {
+	changed, err := board.SyncCardBranch(s.st, s.branchReader(), cardID, branch)
+	if err != nil {
+		log.Printf("branch do card %d: %v", cardID, err)
+		return false
+	}
+	if changed {
+		s.publish("cards")
+	}
+	return changed
+}
+
+// meBranch troca o branch do card (o agente informa o branch de trabalho). A
+// base do projeto é recusada: o card guarda o branch de trabalho.
+func (s *server) meBranch(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		Branch string `json:"branch"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	b := strings.TrimSpace(in.Branch)
+	if b == "" {
+		writeError(w, http.StatusBadRequest, "branch obrigatório")
+		return
+	}
+	ps, err := s.st.ListProjects()
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	for _, p := range ps {
+		if p.ID == c.ProjectID && board.ProjectBase(s.branchReader(), p) == b {
+			writeError(w, http.StatusConflict, fmt.Sprintf("%q é a base do projeto; o card fica com o branch de trabalho", b))
+			return
+		}
+	}
+	if _, err := board.SyncCardBranch(s.st, s.branchReader(), c.ID, b); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	s.publish("cards")
+	s.writeCard(w, http.StatusOK, c.Key)
 }
 
 func (s *server) meStatus(w http.ResponseWriter, r *http.Request, sess domain.Session) {

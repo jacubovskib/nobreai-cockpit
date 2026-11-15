@@ -48,11 +48,17 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 			if err != nil {
 				return adapter.HookReply{}, err
 			}
+			// O card passa a acompanhar o branch de trabalho desta sessão
+			// antes de o pacote de retomada ser montado.
+			sess.CardID = &c.ID
+			a.syncCardBranch(sess)
+			if c, err = a.st.GetCard(key); err != nil {
+				return adapter.HookReply{}, err
+			}
 			if pkg, err = a.resumePackage(c, sess.ID); err != nil {
 				return adapter.HookReply{}, err
 			}
 			resumed = &c
-			sess.CardID = &c.ID
 		}
 	}
 	// Compactação numa sessão com card: o pacote de retomada some do

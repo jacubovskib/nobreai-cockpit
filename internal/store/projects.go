@@ -22,7 +22,7 @@ func (s *Store) CreateProject(name, path string) (domain.Project, error) {
 
 // ListProjects lista os projetos por id.
 func (s *Store) ListProjects() ([]domain.Project, error) {
-	rows, err := s.DB.Query(`SELECT id, name, path, capture FROM projects ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, path, capture, base_branch FROM projects ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func (s *Store) ListProjects() ([]domain.Project, error) {
 	var out []domain.Project
 	for rows.Next() {
 		var p domain.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -40,7 +40,16 @@ func (s *Store) ListProjects() ([]domain.Project, error) {
 
 // UpdateProject atualiza nome, caminho e captura.
 func (s *Store) UpdateProject(p domain.Project) error {
-	res, err := s.DB.Exec(`UPDATE projects SET name=?, path=?, capture=? WHERE id=?`, p.Name, p.Path, p.Capture, p.ID)
+	res, err := s.DB.Exec(`UPDATE projects SET name=?, path=?, capture=?, base_branch=? WHERE id=?`, p.Name, p.Path, p.Capture, p.BaseBranch, p.ID)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
+}
+
+// SetProjectBase grava o branch base do projeto ("" volta a detectar pelo git).
+func (s *Store) SetProjectBase(id int64, base string) error {
+	res, err := s.DB.Exec(`UPDATE projects SET base_branch=? WHERE id=?`, base, id)
 	if err != nil {
 		return err
 	}

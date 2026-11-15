@@ -19,7 +19,7 @@ type CardFilter struct {
 	Agent     string // cards com alguma sessão desse agente
 }
 
-const cardCols = `id, key, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, project_id, col, created_at, updated_at`
+const cardCols = `id, key, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, project_id, col, created_at, updated_at, branch_head, branch_diverged, branch_merged_at`
 
 func requireAffected(res sql.Result) error {
 	n, err := res.RowsAffected()
@@ -38,10 +38,18 @@ func scanCard(sc interface{ Scan(...any) error }) (domain.Card, error) {
 	var c domain.Card
 	var stopAt sql.NullString
 	var created, updated string
+	var mergedAt sql.NullString
 	err := sc.Scan(&c.ID, &c.Key, &c.Title, &c.Goal, &c.DoneWhen, &c.WhereStopped, &stopAt,
-		&c.HowToTest, &c.Branch, &c.ProjectID, &c.Column, &created, &updated)
+		&c.HowToTest, &c.Branch, &c.ProjectID, &c.Column, &created, &updated, &c.BranchHead, &c.BranchDiverged, &mergedAt)
 	if err != nil {
 		return c, err
+	}
+	if mergedAt.Valid {
+		t, err := time.Parse(time.RFC3339Nano, mergedAt.String)
+		if err != nil {
+			return c, err
+		}
+		c.BranchMergedAt = &t
 	}
 	if stopAt.Valid {
 		t, err := time.Parse(time.RFC3339Nano, stopAt.String)
@@ -176,6 +184,36 @@ func (s *Store) UpdateCard(c domain.Card) error {
 	res, err := s.DB.Exec(`UPDATE cards SET title=?, goal=?, done_when=?, where_stopped=?, where_stopped_at=?, how_to_test=?, branch=?, project_id=?, col=?, updated_at=? WHERE id=?`,
 		c.Title, c.Goal, c.DoneWhen, c.WhereStopped, nullableTime(c.WhereStoppedAt), c.HowToTest, c.Branch,
 		c.ProjectID, string(c.Column), fmtTime(time.Now()), c.ID)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
+}
+
+// SetCardBranch troca o branch do card se for diferente do atual; nesse caso
+// zera as marcas do branch anterior (head, divergência, merge). Devolve se mudou.
+func (s *Store) SetCardBranch(cardID int64, branch string) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE cards SET branch=?, branch_head='', branch_diverged=0, branch_merged_at=NULL, updated_at=? WHERE id=? AND branch<>?`,
+		branch, fmtTime(time.Now()), cardID, branch)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetBranchHead grava o último commit visto no branch do card e se divergiu.
+func (s *Store) SetBranchHead(cardID int64, head string, diverged bool) error {
+	res, err := s.DB.Exec(`UPDATE cards SET branch_head=?, branch_diverged=? WHERE id=?`, head, diverged, cardID)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
+}
+
+// MarkBranchMerged registra quando o branch do card entrou na base.
+func (s *Store) MarkBranchMerged(cardID int64, at time.Time) error {
+	res, err := s.DB.Exec(`UPDATE cards SET branch_merged_at=? WHERE id=?`, fmtTime(at), cardID)
 	if err != nil {
 		return err
 	}

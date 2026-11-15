@@ -11,6 +11,8 @@ type Project struct {
 	Name    string `json:"name"`
 	Path    string `json:"path"`
 	Capture bool   `json:"capture"`
+	// BaseBranch é o branch base do projeto ("" = detectar pelo git).
+	BaseBranch string `json:"base_branch"`
 }
 
 type Card struct {
@@ -23,6 +25,11 @@ type Card struct {
 	WhereStoppedAt *time.Time `json:"where_stopped_at"`
 	HowToTest      string     `json:"how_to_test"`
 	Branch         string     `json:"branch"`
+	// BranchHead é o último commit visto no branch do card; BranchDiverged
+	// marca divergência do que foi visto; BranchMergedAt, quando o branch entrou na base.
+	BranchHead     string     `json:"branch_head"`
+	BranchDiverged bool       `json:"branch_diverged"`
+	BranchMergedAt *time.Time `json:"branch_merged_at"`
 	ProjectID      int64      `json:"project_id"`
 	Column         Column     `json:"column"`
 	CreatedAt      time.Time  `json:"created_at"`

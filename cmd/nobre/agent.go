@@ -106,6 +106,22 @@ func (c *cli) answer(args []string) error {
 	return nil
 }
 
+func (c *cli) branch(args []string) error {
+	const u = `uso: nobre branch <nome>`
+	pos, err := c.parse(flag.NewFlagSet("branch", flag.ContinueOnError), args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usagef(u)
+	}
+	if err := c.client().SetBranch(ctx(), pos[0]); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.out, "Branch do card atualizado.")
+	return nil
+}
+
 func (c *cli) decide(args []string) error {
 	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
 	why := fs.String("why", "", "porquê da decisão")

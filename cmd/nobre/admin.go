@@ -12,7 +12,7 @@ import (
 )
 
 func (c *cli) project(args []string) error {
-	const u = "uso: nobre project add [path] [--name <nome>] | nobre project list"
+	const u = "uso: nobre project add [path] [--name <nome>] | nobre project base <branch> [path] | nobre project list"
 	if len(args) == 0 {
 		return usagef(u)
 	}
@@ -43,6 +43,43 @@ func (c *cli) project(args []string) error {
 			return err
 		}
 		fmt.Fprintf(c.out, "Projeto %s cadastrado: %s\n", p.Name, p.Path)
+	case "base":
+		pos, err := c.parse(flag.NewFlagSet("project base", flag.ContinueOnError), args[1:])
+		if err != nil {
+			return err
+		}
+		if len(pos) < 1 || len(pos) > 2 {
+			return usagef(u)
+		}
+		path := "."
+		if len(pos) == 2 {
+			path = pos[1]
+		}
+		if !filepath.IsAbs(path) {
+			wd, err := c.cwd()
+			if err != nil {
+				return err
+			}
+			path = filepath.Join(wd, path)
+		}
+		path = filepath.Clean(path)
+		ps, err := c.client().Projects(ctx())
+		if err != nil {
+			return err
+		}
+		var found *domain.Project
+		for i := range ps {
+			if filepath.Clean(ps[i].Path) == path {
+				found = &ps[i]
+			}
+		}
+		if found == nil {
+			return fmt.Errorf("projeto não cadastrado: %s (use nobre project add)", path)
+		}
+		if err := c.client().SetProjectBase(ctx(), found.ID, pos[0]); err != nil {
+			return err
+		}
+		fmt.Fprintf(c.out, "Base do projeto %s: %s\n", found.Name, pos[0])
 	case "list":
 		ps, err := c.client().Projects(ctx())
 		if err != nil {

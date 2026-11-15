@@ -5,7 +5,7 @@ export type Column = 'backlog' | 'em_andamento' | 'pausado' | 'revisao' | 'concl
 
 export interface Health { ok: boolean; version: string }
 
-export interface Project { id: number; name: string; path: string; capture: boolean }
+export interface Project { id: number; name: string; path: string; capture: boolean; base_branch: string }
 
 export interface Card {
   id: number
@@ -17,6 +17,9 @@ export interface Card {
   where_stopped_at: string | null
   how_to_test: string
   branch: string
+  branch_head: string
+  branch_diverged: boolean
+  branch_merged_at: string | null
   project_id: number
   column: Column
   created_at: string

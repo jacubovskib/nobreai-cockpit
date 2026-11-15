@@ -183,6 +183,16 @@ func (c *Client) AnswerQuestion(ctx context.Context, id int64, answer string) er
 	return c.Do(ctx, "POST", "/api/me/answer", map[string]any{"id": id, "answer": answer}, nil)
 }
 
+// SetBranch informa o branch de trabalho do card da sessão.
+func (c *Client) SetBranch(ctx context.Context, branch string) error {
+	return c.Do(ctx, "POST", "/api/me/branch", map[string]string{"branch": branch}, nil)
+}
+
+// SetProjectBase grava o branch base de um projeto.
+func (c *Client) SetProjectBase(ctx context.Context, id int64, base string) error {
+	return c.Do(ctx, "PATCH", "/api/projects/"+strconv.FormatInt(id, 10), map[string]string{"base_branch": base}, nil)
+}
+
 // AddProject cadastra um projeto.
 func (c *Client) AddProject(ctx context.Context, name, path string) (domain.Project, error) {
 	var p domain.Project

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -342,5 +343,45 @@ func TestMeDoneForce(t *testing.T) {
 	}
 	if got, _ := a.st.GetCard(c.Key); got.Column != domain.Revisao {
 		t.Fatalf("column = %s", got.Column)
+	}
+}
+
+func TestMeBranch(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	if err := a.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/branch", map[string]string{"branch": "feat/x"}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Branch != "feat/x" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+	rec = a.do(t, "POST", "/api/me/branch", map[string]string{"branch": "main"}, 4242)
+	want := `"main" é a base do projeto; o card fica com o branch de trabalho`
+	if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != want {
+		t.Fatalf("base = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Branch != "feat/x" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+	if rec := a.do(t, "POST", "/api/me/branch", map[string]string{"branch": " "}, 4242); rec.Code != http.StatusBadRequest {
+		t.Fatalf("vazio = %d", rec.Code)
+	}
+}
+
+func TestPatchProjectBaseBranch(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	rec := a.do(t, "PATCH", "/api/projects/"+strconv.FormatInt(p.ID, 10), map[string]string{"base_branch": "develop"}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	ps, _ := a.st.ListProjects()
+	if ps[0].BaseBranch != "develop" || ps[0].Name != p.Name {
+		t.Fatalf("projeto = %+v", ps[0])
 	}
 }

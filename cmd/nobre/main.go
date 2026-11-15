@@ -28,6 +28,7 @@ Agente (use dentro de uma sessão de agente):
   nobre todo add "<texto>"                                adiciona uma pendência
   nobre todo done <id>                                    conclui uma pendência
   nobre ask "<pergunta>"                                  registra uma pergunta em aberto
+  nobre branch <nome>                                     informa o branch de trabalho do card
   nobre answer <id> "<resposta>"                          responde uma pergunta do card
   nobre test "<como testar>"                              registra como testar
   nobre done [--force]                                    marca o card como pronto para revisão
@@ -35,6 +36,7 @@ Agente (use dentro de uma sessão de agente):
 
 Administração:
   nobre project add [path] [--name <nome>]                cadastra um projeto (padrão: diretório atual)
+  nobre project base <branch> [path]                      define o branch base do projeto
   nobre project list                                      lista os projetos
   nobre prompt list                                       lista os prompts
   nobre prompt use <slug> [--card KEY]                    imprime o prompt preenchido e marca o uso
@@ -113,6 +115,8 @@ func (c *cli) run(args []string) int {
 		err = c.simple("note", "texto", rest, "text")
 	case "ask":
 		err = c.ask(rest)
+	case "branch":
+		err = c.branch(rest)
 	case "answer":
 		err = c.answer(rest)
 	case "test":
