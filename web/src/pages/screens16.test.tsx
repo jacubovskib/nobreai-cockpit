@@ -22,9 +22,9 @@ function mock(routes: Record<string, Reply>) {
 }
 const calls = (fn: ReturnType<typeof mock>, method: string, url: string) =>
   fn.mock.calls.filter(([u, i]) => u === url && (i?.method ?? 'GET') === method).map(([, i]) => JSON.parse(i?.body ?? '{}'))
-function wrap(ui: React.ReactNode) {
+function wrap(ui: React.ReactNode, at = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={qc}><MemoryRouter>{ui}</MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={qc}><MemoryRouter initialEntries={[at]}>{ui}</MemoryRouter></QueryClientProvider>)
 }
 afterEach(() => vi.unstubAllGlobals())
 
@@ -222,7 +222,55 @@ describe('Prompts', () => {
   })
 })
 
+describe('Prompts · projeto', () => {
+  const mk = (id: number, name: string, project_id: number | null) =>
+    ({ id, name, slug: name.toLowerCase(), tag: '', description: '', body: 'x', agents: ['claude'], project_id, is_default_handoff: false, uses: 0, last_used_at: null })
+  const routes = {
+    '/api/prompts': [mk(1, 'Global', null), mk(2, 'DoApi', 1), mk(3, 'DoWeb', 2)],
+    '/api/projects': [{ id: 1, name: 'api', path: '/w/api', capture: true }, { id: 2, name: 'web', path: '/w/web', capture: true }],
+    '/api/cards': [], '/api/events?kind=prompt&limit=50': [],
+  }
+  it('com ?projeto=1 mostra o global e o do projeto, não o de outro', async () => {
+    mock(routes)
+    wrap(<Prompts />, '/prompts?projeto=1')
+    expect(await screen.findByRole('button', { name: /Global/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /DoApi/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /DoWeb/ })).toBeNull()
+  })
+  it('sem parâmetro mostra todos', async () => {
+    mock(routes)
+    wrap(<Prompts />, '/prompts')
+    expect(await screen.findByRole('button', { name: /DoWeb/ })).toBeInTheDocument()
+  })
+})
+
 describe('Analytics', () => {
+  it('com ?projeto=1 pede os totais com project=1 e lista só sessões do projeto', async () => {
+    const now = new Date().toISOString()
+    const ses = (id: string, project_id: number | null, model: string) => ({
+      id, agent: 'claude', card_id: null, project_id, model, started_at: now, last_event_at: now, ended_at: now, pid_dead_at: null,
+      usage: tot({}), unpriced: false,
+    })
+    const fn = vi.fn(async (url: string) => {
+      const ok = (b: unknown) => new Response(JSON.stringify(b), { status: 200 })
+      if (url.startsWith('/api/usage/totals')) return ok([])
+      if (url.startsWith('/api/sessions')) return ok([ses('a', 1, 'modelo-do-api'), ses('b', 2, 'modelo-do-web'), ses('c', null, 'modelo-solto')])
+      if (url === '/api/settings') return ok(settings)
+      if (url === '/api/cards') return ok([])
+      if (url === '/api/projects') return ok([{ id: 1, name: 'api', path: '/w/api', capture: true }, { id: 2, name: 'web', path: '/w/web', capture: true }])
+      return new Response('{}', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fn)
+    wrap(<Analytics />, '/analytics?projeto=1')
+    expect(await screen.findByText('modelo-do-api')).toBeInTheDocument()
+    expect(screen.queryByText('modelo-do-web')).toBeNull()
+    expect(screen.queryByText('modelo-solto')).toBeNull()
+    const totals = () => fn.mock.calls.map(([u]) => String(u)).filter((u) => u.startsWith('/api/usage/totals'))
+    // A 1ª leva sai antes de /api/projects responder (id ainda não validado); depois todas levam project=1.
+    await waitFor(() => expect(['day_agent', 'agent', 'card'].every((g) => totals().some((u) => u.includes(`group=${g}&`) && u.includes('project=1')))).toBe(true))
+  })
+
+
   it('mostra "sem preço" e "sem card", nunca zero, e alterna para a tabela', async () => {
     const today = new Date()
     const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`

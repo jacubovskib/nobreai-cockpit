@@ -7,6 +7,7 @@ import type { Prompt } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { ErrorLine, btn, btnPrimary, h2, input, muted, panel } from './card/shared'
+import { useProjectFilter } from '../app/project'
 import { KNOWN_VARS, splitVars, varName } from './prompts/highlight'
 
 const ALL = 'Todos'
@@ -108,6 +109,7 @@ function Editor({ initial, isNew, onSaved, onDeleted, onDuplicate }: {
   const [confirmDel, setConfirmDel] = useState(false)
   const cards = useCards().data ?? []
   const projects = useProjects().data ?? []
+  const { project: chosenProject } = useProjectFilter()
   const [cardKey, setCardKey] = useState('')
   const previewCard = cardKey || cards[0]?.key || ''
   const set = (p: Partial<Draft>) => setD((x) => ({ ...x, ...p }))
@@ -212,7 +214,7 @@ function Editor({ initial, isNew, onSaved, onDeleted, onDuplicate }: {
             type="checkbox"
             checked={d.project_id !== null}
             disabled={projects.length === 0}
-            onChange={(e) => set({ project_id: e.target.checked ? (projects[0]?.id ?? null) : null })}
+            onChange={(e) => set({ project_id: e.target.checked ? (chosenProject?.id ?? projects[0]?.id ?? null) : null })}
           />
           Só neste projeto{project ? `: ${project.name}` : ''}
           {d.project_id !== null && projects.length > 1 && (
@@ -251,12 +253,15 @@ function Editor({ initial, isNew, onSaved, onDeleted, onDuplicate }: {
 
 export function Prompts() {
   const prompts = usePrompts()
+  const { projectId } = useProjectFilter()
   const events = usePromptEvents(50)
   const [q, setQ] = useState('')
   const [tag, setTag] = useState(ALL)
   const [sel, setSel] = useState<string | null>(null) // slug salvo, ou null
   const [draft, setDraft] = useState<{ n: number; d: Draft } | null>(null) // rascunho novo (n muda a key do editor)
-  const list = prompts.data ?? []
+  // Com projeto escolhido: prompts globais (project_id null) e os do projeto.
+  const all = prompts.data ?? []
+  const list = useMemo(() => all.filter((p) => projectId === null || p.project_id === null || p.project_id === projectId), [all, projectId])
   const tags = useMemo(() => [ALL, ...Array.from(new Set(list.map((p) => p.tag).filter(Boolean)))], [list])
   const term = q.trim().toLowerCase()
   const shown = list.filter(

@@ -40,9 +40,9 @@ function mock(routes: Record<string, Reply>) {
 }
 const calls = (fn: ReturnType<typeof mock>, method: string, url: string) =>
   fn.mock.calls.filter(([u, i]) => u === url && (i?.method ?? 'GET') === method).map(([, i]) => JSON.parse(i?.body ?? '{}'))
-function wrap(ui: React.ReactNode) {
+function wrap(ui: React.ReactNode, at = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={qc}><MemoryRouter>{ui}</MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={qc}><MemoryRouter initialEntries={[at]}>{ui}</MemoryRouter></QueryClientProvider>)
 }
 afterEach(() => vi.unstubAllGlobals())
 
@@ -73,7 +73,7 @@ describe('ControlRoom', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Criar card desta sessão' }))
     fireEvent.change(screen.getByLabelText('Título do card'), { target: { value: 'Meu card' } })
     fireEvent.click(screen.getByRole('button', { name: 'Criar e vincular' }))
-    const alert = await screen.findByRole('alert')
+    const alert = (await screen.findByText(/já tem uma sessão viva/)).closest('[role="alert"]')!
     expect(alert).toHaveTextContent('NAC-9')
     expect(alert).toHaveTextContent('já tem uma sessão viva')
     expect(calls(fn, 'POST', '/api/cards')).toEqual([{ title: 'Meu card', project_id: 7 }])
@@ -253,5 +253,30 @@ describe('ControlRoom · worktrees', () => {
     const tag = await screen.findByRole('link', { name: 'Worktree api-oauth, branch feat/oauth' })
     expect(tag).toHaveAttribute('href', '/worktrees')
     expect(tag).toHaveAttribute('title', '/w/api-oauth')
+  })
+})
+
+describe('ControlRoom · projeto', () => {
+  const base = { agent: 'claude', model: 'm', started_at: new Date().toISOString(), pid_dead_at: null, worktree: '', worktree_linked: false, branch: '', card: null, last_activity: '', session_usage: total, card_totals: total, readiness: null }
+  const routes = {
+    '/api/overview': { ...overview, alerts: [], active: [{ ...base, id: 'a', project_id: 2 }, { ...base, id: 'b', project_id: null }] },
+    '/api/settings': {}, '/api/projects': [{ id: 1, name: 'api', path: '/w/api', capture: true }, { id: 2, name: 'site', path: '/w/site', capture: true }],
+  }
+  for (const at of ['/', '/?projeto=1']) {
+    it(`ignora o seletor (${at}) e mostra as etiquetas`, async () => {
+      mock(routes)
+      wrap(<ControlRoom />, at)
+      expect(await screen.findByText('site')).toBeInTheDocument()
+      expect(screen.getByText('Sem projeto')).toBeInTheDocument()
+      expect(screen.getAllByText(/^Ao vivo · /)).toHaveLength(2)
+    })
+  }
+  it('sessão sem card mostra a etiqueta do projeto', async () => {
+    mock({
+      '/api/overview': { ...overview, alerts: [], no_card: [{ id: 's9', agent: 'claude', project_id: 1, cwd: '/w/api', started_at: new Date().toISOString(), usage: total, unpriced: false }] },
+      '/api/settings': {}, '/api/projects': [{ id: 1, name: 'api', path: '/w/api', capture: true }],
+    })
+    wrap(<ControlRoom />, '/')
+    expect(await screen.findByText('api')).toBeInTheDocument()
   })
 })

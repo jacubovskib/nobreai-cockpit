@@ -1,4 +1,4 @@
-import { groupByColumn, COLUMNS } from './board'
+import { groupByColumn, COLUMNS, signalText } from './board'
 import type { CardSummary } from '../api/types'
 
 describe('groupByColumn', () => {
@@ -16,5 +16,19 @@ describe('groupByColumn', () => {
     ])
     expect(g.pausado.map((c) => c.key)).toEqual(['NAC-1', 'NAC-3'])
     expect(g.backlog).toHaveLength(1)
+  })
+})
+
+describe('signalText', () => {
+  const now = new Date('2026-05-10T12:00:00Z')
+  const ago = (h: number) => new Date(now.getTime() - h * 3600000).toISOString()
+  it('mostra horas abaixo de 48 h e dias a partir daí', () => {
+    expect(signalText('parado', ago(30), now)).toBe('parado há 30 h')
+    expect(signalText('parado', ago(50), now)).toBe('parado há 2 dias')
+    expect(signalText('aguardando_revisao', ago(73), now)).toBe('aguardando revisão há 3 dias')
+  })
+  it('sem sinal devolve vazio', () => {
+    expect(signalText('', ago(100), now)).toBe('')
+    expect(signalText('parado', null, now)).toBe('')
   })
 })

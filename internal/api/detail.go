@@ -37,6 +37,10 @@ type CardSummary struct {
 	LastActivityAt *time.Time             `json:"last_activity_at"`
 	Totals         store.Total            `json:"totals"`
 	Readiness      domain.ReadinessResult `json:"readiness"`
+	// Signal: "parado" / "aguardando_revisao" quando a última atividade (sessões
+	// ou mudança do card) passou de domain.StaleAfter; SignalSince é essa atividade.
+	Signal      domain.Signal `json:"signal"`
+	SignalSince *time.Time    `json:"signal_since"`
 }
 
 // cardDetail carrega conteúdo, sessões (com uso), sessão viva e prontidão do card.
@@ -130,5 +134,15 @@ func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, er
 		return sum, err
 	}
 	sum.Readiness, err = s.readiness(c, ct, sum.Live)
+	last := c.UpdatedAt
+	if sum.LastActivityAt != nil && sum.LastActivityAt.After(last) {
+		last = *sum.LastActivityAt
+	}
+	// Sessão viva = o agente está ali; ociosa não vira "parado".
+	if !sum.Live {
+		if sum.Signal = domain.CardSignal(c.Column, last, s.now()); sum.Signal != domain.SignalNone {
+			sum.SignalSince = &last
+		}
+	}
 	return sum, err
 }

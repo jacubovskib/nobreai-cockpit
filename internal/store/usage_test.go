@@ -132,3 +132,73 @@ func TestPricesLimitsAndOffset(t *testing.T) {
 		t.Fatal(off)
 	}
 }
+
+// projectUsageFixture: projeto 1 (sessão com card + sessão sem card), projeto 2
+// (uma sessão) e uma sessão sem projeto; cada uso custa 1000 tokens de entrada.
+func projectUsageFixture(t *testing.T) (*Store, int64, int64) {
+	t.Helper()
+	s := newTestStore(t)
+	p1, err := s.CreateProject("a", "/w/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := s.CreateProject("b", "/w/b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := s.CreateCard(domain.Card{Title: "t", ProjectID: p1.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(id string, pid int, proj *int64, cardID *int64, agent string) {
+		x := newSession(id, pid)
+		x.Agent, x.ProjectID, x.CardID = agent, proj, cardID
+		if err := s.StartSession(x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("claude:1", 1, &p1.ID, &card.ID, "claude")
+	mk("codex:1", 2, &p1.ID, nil, "codex")
+	mk("claude:2", 3, &p2.ID, nil, "claude")
+	mk("claude:0", 4, nil, nil, "claude")
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	var rows []domain.UsageRow
+	for _, id := range []string{"claude:1", "codex:1", "claude:2", "claude:0"} {
+		rows = append(rows, domain.UsageRow{SessionID: id, MessageID: "m", Model: "p", Input: 1_000_000, At: at})
+	}
+	if err := s.UpsertUsage(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutPrice(domain.Price{Model: "p", InputPerM: 3}); err != nil {
+		t.Fatal(err)
+	}
+	return s, p1.ID, p2.ID
+}
+
+func TestTotalsByProject(t *testing.T) {
+	s, _, _ := projectUsageFixture(t)
+	got, err := s.Totals(TotalsFilter{GroupBy: "project"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]float64{"": 3, "1": 6, "2": 3}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v", got)
+	}
+	for _, g := range got {
+		if w, ok := want[g.Key]; !ok || g.CostUSD != w {
+			t.Fatalf("key %q cost %v; all %+v", g.Key, g.CostUSD, got)
+		}
+	}
+}
+
+func TestTotalsProjectFilter(t *testing.T) {
+	s, one, _ := projectUsageFixture(t)
+	got, err := s.Totals(TotalsFilter{GroupBy: "agent", ProjectID: &one})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Key != "claude" || got[0].CostUSD != 3 || got[1].Key != "codex" || got[1].CostUSD != 3 {
+		t.Fatalf("got %+v", got)
+	}
+}

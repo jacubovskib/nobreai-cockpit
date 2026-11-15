@@ -66,11 +66,13 @@ type StartSpec struct {
 
 // Info é a visão pública de um terminal.
 type Info struct {
-	ID        string     `json:"id"`
-	CardKey   string     `json:"card_key"`
-	Agent     string     `json:"agent"`
-	Origin    string     `json:"origin"`
-	Title     string     `json:"title"`
+	ID      string `json:"id"`
+	CardKey string `json:"card_key"`
+	Agent   string `json:"agent"`
+	Origin  string `json:"origin"`
+	Title   string `json:"title"`
+	// Dir: diretório de trabalho do processo (a UI deduz o projeto por ele).
+	Dir       string     `json:"dir"`
 	PID       int        `json:"pid"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at"`
@@ -173,7 +175,7 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 		subLimit: m.opts.SubLimit, writeTimeout: m.opts.WriteTimeout,
 		subs: map[*sub]struct{}{}, done: make(chan struct{}),
 		info: Info{
-			ID: newID(), CardKey: spec.CardKey, Agent: spec.Agent, Origin: spec.Origin,
+			ID: newID(), CardKey: spec.CardKey, Agent: spec.Agent, Origin: spec.Origin, Dir: spec.Dir,
 			Title: title, PID: cmd.Process.Pid, StartedAt: m.opts.Now(),
 			Cols: spec.Cols, Rows: spec.Rows,
 		},

@@ -24,8 +24,10 @@ import { Sessions } from './card/Sessions'
 import { Todos } from './card/Todos'
 import { WhereStopped } from './card/WhereStopped'
 import { ErrorLine, btnPrimary, muted } from './card/shared'
+import { useWithProject } from '../app/project'
 
 export function CardPage() {
+  const withP = useWithProject()
   const { key = '' } = useParams()
   const qc = useQueryClient()
   const card = useCard(key)
@@ -44,7 +46,7 @@ export function CardPage() {
     return (
       <section>
         <h1 style={{ fontSize: 24 }}>Card não encontrado</h1>
-        <p style={muted}>Nenhum card com a chave {key}. <Link to="/board">Voltar ao board</Link></p>
+        <p style={muted}>Nenhum card com a chave {key}. <Link to={withP('/board')}>Voltar ao board</Link></p>
       </section>
     )
   }
@@ -65,7 +67,7 @@ export function CardPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <nav aria-label="Trilha" style={muted}>
-        <Link to="/board">Board</Link> <span aria-hidden="true">/</span> <span>{c.key}</span>
+        <Link to={withP('/board')}>Board</Link> <span aria-hidden="true">/</span> <span>{c.key}</span>
       </nav>
       <header style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>

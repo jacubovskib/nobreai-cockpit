@@ -11,6 +11,8 @@ import { Prompts } from '../pages/Prompts'
 import { Worktrees } from '../pages/Worktrees'
 import { WorktreeDetailPage } from '../pages/WorktreeDetail'
 import { Terminals } from '../pages/Terminals'
+import { Projects } from '../pages/Projects'
+import { ProjectPage } from '../pages/ProjectPage'
 
 export function AppRoutes() {
   return (
@@ -20,6 +22,8 @@ export function AppRoutes() {
         <Route path="board" element={<Board />} />
         <Route path="cards" element={<CardsList />} />
         <Route path="cards/:key" element={<CardPage />} />
+        <Route path="projetos" element={<Projects />} />
+        <Route path="projetos/:id" element={<ProjectPage />} />
         <Route path="worktrees" element={<Worktrees />} />
         <Route path="worktrees/detalhe" element={<WorktreeDetailPage />} />
         <Route path="terminals" element={<Terminals />} />

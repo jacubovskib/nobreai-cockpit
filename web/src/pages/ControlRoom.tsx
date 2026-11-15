@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useOverview, useSettings } from '../api/queries'
+import { useOverview, useProjects, useSettings } from '../api/queries'
 import { forCard, isLive, useTerminals, type TerminalInfo } from '../api/terminals'
 import { patch, post } from '../api/client'
 import type { ActiveSession, AgentSpend, Alert, Card, DomainEvent, SessionWithUsage, Total } from '../api/types'
+import { useWithProject } from '../app/project'
+import { ProjectTag } from '../ui/ProjectTag'
+import type { Project } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
@@ -33,6 +36,7 @@ function Metric({ label, value, sub, subColor }: { label: string; value: React.R
 }
 
 function AlertRow({ alert, onPause, pausing }: { alert: Alert; onPause: (key: string) => void; pausing: boolean }) {
+  const withP = useWithProject()
   const red = alert.kind === 'incomplete'
   return (
     <div
@@ -48,14 +52,15 @@ function AlertRow({ alert, onPause, pausing }: { alert: Alert; onPause: (key: st
           <button type="button" style={btn} disabled={pausing} onClick={() => onPause(alert.card_key)}>Mover para Pausado</button>
         )}
         {alert.kind === 'plan_limit' && <a href="#plano-limites" style={btn}>Ver limites do plano</a>}
-        {(alert.kind === 'limit_warn' || alert.kind === 'unpriced') && <Link to="/config" style={btn}>Ajustar limite</Link>}
-        {alert.card_key && <Link to={`/cards/${alert.card_key}`} style={btnPrimary}>Abrir card</Link>}
+        {(alert.kind === 'limit_warn' || alert.kind === 'unpriced') && <Link to={withP('/config')} style={btn}>Ajustar limite</Link>}
+        {alert.card_key && <Link to={withP(`/cards/${alert.card_key}`)} style={btnPrimary}>Abrir card</Link>}
       </div>
     </div>
   )
 }
 
-function ActiveCard({ s, terminalId }: { s: ActiveSession; terminalId?: string }) {
+function ActiveCard({ s, terminalId, projects }: { s: ActiveSession; terminalId?: string; projects: Project[] }) {
+  const withP = useWithProject()
   const mins = minutesSince(s.started_at)
   return (
     <article style={{ ...panel, gap: 14 }}>
@@ -77,9 +82,10 @@ function ActiveCard({ s, terminalId }: { s: ActiveSession; terminalId?: string }
           </span>
         )}
       </div>
+      <ProjectTag project={projects.find((p) => p.id === s.project_id) ?? null} projects={projects} />
       <WorktreeTag path={s.worktree} linked={s.worktree_linked} branch={s.branch} />
       {s.card ? (
-        <Link to={`/cards/${s.card.key}`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
+        <Link to={withP(`/cards/${s.card.key}`)} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
           <span className="mono" style={{ fontSize: 13, color: 'var(--text-2)' }}>{s.card.key}</span>
           <span style={{ fontSize: 16, fontWeight: 500 }}>{s.card.title}</span>
         </Link>
@@ -87,7 +93,7 @@ function ActiveCard({ s, terminalId }: { s: ActiveSession; terminalId?: string }
         <span style={{ color: 'var(--text-2)' }}>sem card</span>
       )}
       {terminalId && (
-        <div><Link to={`/terminals?id=${encodeURIComponent(terminalId)}`} style={btn}>Ver terminal</Link></div>
+        <div><Link to={withP(`/terminals?id=${encodeURIComponent(terminalId)}`)} style={btn}>Ver terminal</Link></div>
       )}
       {s.last_activity && (
         <div className="mono" style={{ padding: '10px 12px', borderRadius: 8, background: '#0F1116', fontSize: 12.5, color: '#C3C8D2' }}>{s.last_activity}</div>
@@ -102,7 +108,8 @@ function ActiveCard({ s, terminalId }: { s: ActiveSession; terminalId?: string }
   )
 }
 
-function NoCardRow({ s }: { s: SessionWithUsage }) {
+function NoCardRow({ s, projects }: { s: SessionWithUsage; projects: Project[] }) {
+  const withP = useWithProject()
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
@@ -144,6 +151,7 @@ function NoCardRow({ s }: { s: SessionWithUsage }) {
         ·{' '}
         <Money usd={s.usage.cost_usd} unpriced={s.usage.unpriced} />
       </span>
+      <ProjectTag project={projects.find((p) => p.id === s.project_id) ?? null} projects={projects} />
       {open ? (
         <form
           onSubmit={(e) => { e.preventDefault(); if (createdKey || title.trim()) create.mutate() }}
@@ -166,7 +174,7 @@ function NoCardRow({ s }: { s: SessionWithUsage }) {
       )}
       {error && (
         <span role="alert" style={{ color: 'var(--err)', fontSize: 13 }}>
-          {createdKey && <>O card <Link to={`/cards/${createdKey}`}>{createdKey}</Link> foi criado, mas não foi vinculado à sessão. </>}
+          {createdKey && <>O card <Link to={withP(`/cards/${createdKey}`)}>{createdKey}</Link> foi criado, mas não foi vinculado à sessão. </>}
           {error}
           {createdKey && ' Clique em “Vincular ao card criado” para tentar de novo.'}
         </span>
@@ -232,6 +240,7 @@ const planAlertExpired = (a: Alert, now: number) =>
   a.kind === 'plan_limit' && !!a.resets_at && new Date(a.resets_at).getTime() <= now
 
 export function ControlRoom() {
+  const withP = useWithProject()
   const { data, isPending, isError } = useOverview()
   // Reavalia a validade dos alertas do plano a cada 30 s, sem novo pedido.
   const [now, setNow] = useState(() => Date.now())
@@ -241,6 +250,7 @@ export function ControlRoom() {
   }, [])
   const settings = useSettings().data
   const terminals = useTerminals().data
+  const projects = useProjects().data ?? []
   const qc = useQueryClient()
   const [error, setError] = useState('')
   const pause = useMutation({
@@ -311,7 +321,7 @@ export function ControlRoom() {
         <section aria-labelledby="ativos-t" style={{ flex: '3 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <h2 id="ativos-t" style={h2}>Agentes rodando agora</h2>
           {active.length === 0 && <p style={{ margin: 0, color: 'var(--text-2)' }}>Nenhum agente rodando agora.</p>}
-          {active.map((s) => <ActiveCard key={s.id} s={s} terminalId={s.pid_dead_at ? undefined : terminalFor(s, terminals, sessionPids)} />)}
+          {active.map((s) => <ActiveCard key={s.id} s={s} projects={projects} terminalId={s.pid_dead_at ? undefined : terminalFor(s, terminals, sessionPids)} />)}
         </section>
 
         <div style={{ flex: '2 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -321,13 +331,13 @@ export function ControlRoom() {
               <span style={{ fontSize: 12, color: 'var(--text-2)' }}>contam no custo do dia</span>
             </div>
             {no_card.length === 0 && <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Nenhuma sessão sem card.</span>}
-            {no_card.map((s) => <NoCardRow key={s.id} s={s} />)}
+            {no_card.map((s) => <NoCardRow key={s.id} s={s} projects={projects} />)}
           </section>
 
           <section aria-labelledby="limite-t" style={{ ...panel, gap: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
               <h2 id="limite-t" style={h2}>Custo hoje × limite diário</h2>
-              <Link to="/analytics" style={{ fontSize: 13 }}>Ver analytics</Link>
+              <Link to={withP('/analytics')} style={{ fontSize: 13 }}>Ver analytics</Link>
             </div>
             {today.per_agent.map((l) => <AgentLimit key={l.agent} l={l} cur={cur} />)}
             <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)' }}>

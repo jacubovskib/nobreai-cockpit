@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useWorktrees } from '../api/queries'
+import { useProjectFilter, useWithProject } from '../app/project'
 import type { ProjectWorktrees, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { StatusBadge } from '../ui/StatusBadge'
@@ -29,11 +30,12 @@ function agentsLine(w: Worktree) {
 
 // WorktreeCard é um link para o detalhe, só com o essencial (sem links dentro).
 function WorktreeCard({ projectID, w }: { projectID: number; w: Worktree }) {
+  const withP = useWithProject()
   const name = baseName(w.path)
   const live = w.sessions.some((s) => s.live)
   return (
     <Link
-      to={detailHref(projectID, w.path)}
+      to={withP(detailHref(projectID, w.path))}
       aria-label={`${name} ${w.branch || 'HEAD destacado'}`}
       className="worktree-card"
       style={{ ...panel, gap: 8, color: 'var(--text)', textDecoration: 'none', borderColor: live ? '#1F3A24' : 'var(--border)' }}
@@ -118,8 +120,10 @@ function ProjectSection({ p }: { p: ProjectWorktrees }) {
 
 export function Worktrees() {
   const { data, isPending, isError } = useWorktrees()
+  const { projectId } = useProjectFilter()
   if (isError) return <p role="alert" style={{ color: 'var(--err)' }}>Não foi possível carregar os worktrees.</p>
   if (isPending || !data) return <p className="placeholder">Carregando…</p>
+  const shown = data.filter((p) => projectId === null || p.project.id === projectId)
   return (
     <div style={{ maxWidth: 1180, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 28 }}>
       <header style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -133,7 +137,8 @@ export function Worktrees() {
           Nenhum projeto cadastrado. Cadastre com <span style={mono}>nobre project add</span> ou em <Link to="/config">Configuração</Link>.
         </p>
       )}
-      {data.map((p) => <ProjectSection key={p.project.id} p={p} />)}
+      {data.length > 0 && shown.length === 0 && <p style={{ margin: 0, color: 'var(--text-2)' }}>Nenhum worktree neste projeto.</p>}
+      {shown.map((p) => <ProjectSection key={p.project.id} p={p} />)}
     </div>
   )
 }

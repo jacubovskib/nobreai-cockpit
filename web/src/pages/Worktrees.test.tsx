@@ -12,9 +12,9 @@ function mockApi(routes: Record<string, unknown>) {
     return new Response(JSON.stringify(r), { status: 200 })
   }))
 }
-function wrap() {
+function wrap(at = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={qc}><MemoryRouter><Worktrees /></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={qc}><MemoryRouter initialEntries={[at]}><Worktrees /></MemoryRouter></QueryClientProvider>)
 }
 afterEach(() => vi.unstubAllGlobals())
 
@@ -37,6 +37,20 @@ const data: ProjectWorktrees[] = [
   },
   { project: { id: 2, name: 'solto', path: '/w/solto', capture: true }, error: 'não consegui listar os worktrees de /w/solto: não é um repositório git?', worktrees: [], orphans: [] },
 ]
+
+describe('Worktrees · projeto', () => {
+  it('com ?projeto=2 mostra só a seção do projeto 2', async () => {
+    mockApi({ '/api/worktrees': data, '/api/projects': data.map((d) => d.project) })
+    wrap('/worktrees?projeto=2')
+    expect(await screen.findByRole('heading', { name: 'solto' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'api' })).toBeNull()
+  })
+  it('com filtro e nenhuma seção mostra a mensagem', async () => {
+    mockApi({ '/api/worktrees': [data[0]], '/api/projects': data.map((d) => d.project) })
+    wrap('/worktrees?projeto=2')
+    expect(await screen.findByText('Nenhum worktree neste projeto.')).toBeInTheDocument()
+  })
+})
 
 describe('Worktrees', () => {
   it('cada cartão é um link enxuto para o detalhe', async () => {

@@ -8,6 +8,8 @@ export interface TerminalInfo {
   agent: string
   origin: string
   title: string
+  // dir: diretório do processo; o projeto sai dele (projectForPath).
+  dir?: string
   pid: number
   started_at: string
   ended_at: string | null

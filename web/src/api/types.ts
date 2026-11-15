@@ -148,6 +148,9 @@ export interface CardSummary extends Card {
   last_activity_at: string | null
   totals: Total
   readiness: ReadinessResult
+  // signal: parado (em andamento/pausado) ou aguardando_revisao, após 24 h sem atividade.
+  signal: '' | 'parado' | 'aguardando_revisao'
+  signal_since: string | null
 }
 
 // GET /api/cards/{key}

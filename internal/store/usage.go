@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -125,8 +126,10 @@ func (s *Store) PutLimit(l domain.Limit) error {
 // limite. CardID (opcional) restringe ao uso gasto naquele card.
 type TotalsFilter struct {
 	From, To time.Time
-	GroupBy  string // agent | card | session | day_agent | model
+	GroupBy  string // agent | card | session | day_agent | model | project
 	CardID   *int64
+	// ProjectID restringe ao uso do projeto: o do card do uso, senão o da sessão.
+	ProjectID *int64
 }
 
 type Total struct {
@@ -147,7 +150,7 @@ type Total struct {
 // de cada linha é o gravado no uso (usage.card_id), não o card atual da sessão.
 func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 	switch f.GroupBy {
-	case "agent", "card", "session", "day_agent", "model":
+	case "agent", "card", "session", "day_agent", "model", "project":
 	default:
 		return nil, fmt.Errorf("agrupamento inválido: %q", f.GroupBy)
 	}
@@ -160,12 +163,16 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 		pm[prices[i].Model] = &prices[i]
 	}
 
-	q := `SELECT u.session_id, u.model, u.input, u.output, u.cache_write, u.cache_read, u.at, s.agent, COALESCE(c.key, '')
+	q := `SELECT u.session_id, u.model, u.input, u.output, u.cache_write, u.cache_read, u.at, s.agent, COALESCE(c.key, ''), COALESCE(c.project_id, s.project_id)
 		FROM usage u JOIN sessions s ON s.id = u.session_id LEFT JOIN cards c ON c.id = u.card_id WHERE 1=1`
 	var args []any
 	if f.CardID != nil {
 		q += ` AND u.card_id = ?`
 		args = append(args, *f.CardID)
+	}
+	if f.ProjectID != nil {
+		q += ` AND COALESCE(c.project_id, s.project_id) = ?`
+		args = append(args, *f.ProjectID)
 	}
 	if !f.From.IsZero() {
 		q += ` AND julianday(u.at) >= julianday(?)`
@@ -186,7 +193,8 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 	for rows.Next() {
 		var r domain.UsageRow
 		var at, agent, cardKey string
-		if err := rows.Scan(&r.SessionID, &r.Model, &r.Input, &r.Output, &r.CacheWrite, &r.CacheRead, &at, &agent, &cardKey); err != nil {
+		var projectID sql.NullInt64
+		if err := rows.Scan(&r.SessionID, &r.Model, &r.Input, &r.Output, &r.CacheWrite, &r.CacheRead, &at, &agent, &cardKey, &projectID); err != nil {
 			return nil, err
 		}
 		if r.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
@@ -202,6 +210,10 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 			g.Key = r.SessionID
 		case "model":
 			g.Key = r.Model
+		case "project":
+			if projectID.Valid {
+				g.Key = strconv.FormatInt(projectID.Int64, 10)
+			}
 		case "day_agent":
 			g.Day, g.Agent = r.At.Local().Format("2006-01-02"), agent
 			g.Key = g.Day + "|" + agent

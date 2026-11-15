@@ -1,6 +1,7 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useCards, useSessions, useSettings, useTotals } from '../api/queries'
+import { useProjectFilter } from '../app/project'
 import type { Total } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
@@ -9,6 +10,7 @@ import { formatAmount, formatMoney, moneySymbol, useCurrency } from '../ui/money
 import { DailyChart } from './analytics/DailyChart'
 import { buildDays, range, tokens, ymd } from './analytics/data'
 import { btn, h2, muted, panel } from './card/shared'
+import { useWithProject } from '../app/project'
 
 const PERIODS = [
   { id: 1, label: 'Hoje', long: 'hoje' },
@@ -32,6 +34,7 @@ function duration(startIso: string, endIso: string | null, lastIso: string) {
 const startFmt = new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 
 export function Analytics() {
+  const withP = useWithProject()
   const [period, setPeriod] = useState(7)
   const [asTable, setAsTable] = useState(false)
   const { from, to } = useMemo(() => range(period), [period])
@@ -42,9 +45,10 @@ export function Analytics() {
   const money = (usd: number) => formatMoney(usd, cur)
   const amount = (usd: number) => formatAmount(usd, cur)
   const symbol = moneySymbol(cur)
-  const dayAgent = useTotals('day_agent', from, to)
-  const byAgent = useTotals('agent', from, to)
-  const byCard = useTotals('card', from, to)
+  const { projectId } = useProjectFilter()
+  const dayAgent = useTotals('day_agent', from, to, projectId)
+  const byAgent = useTotals('agent', from, to, projectId)
+  const byCard = useTotals('card', from, to, projectId)
   const sessions = useSessions(200)
   const cards = useCards().data
 
@@ -68,6 +72,7 @@ export function Analytics() {
   const titleOf = (key: string) => cards?.find((c) => c.key === key)?.title ?? ''
   const cardKeyOf = (id: number | null) => cards?.find((c) => c.id === id)?.key ?? ''
   const periodSessions = (sessions.data ?? [])
+    .filter((s) => projectId === null || s.project_id === projectId)
     .filter((s) => ymd(new Date(s.started_at)) >= from && ymd(new Date(s.started_at)) < to)
     .slice(0, 20)
   const long = PERIODS.find((p) => p.id === period)!.long
@@ -221,7 +226,7 @@ export function Analytics() {
               </>
             )
             const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, color: 'inherit', textDecoration: 'none', minHeight: 40 }
-            return t.key === '' ? <div key="" style={row}>{inner}</div> : <Link key={t.key} to={`/cards/${t.key}`} style={row}>{inner}</Link>
+            return t.key === '' ? <div key="" style={row}>{inner}</div> : <Link key={t.key} to={withP(`/cards/${t.key}`)} style={row}>{inner}</Link>
           })}
         </section>
       </div>
@@ -254,7 +259,7 @@ export function Analytics() {
                 return (
                   <tr key={s.id} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={td}>{startFmt.format(new Date(s.started_at))}</td>
-                    <td style={td}>{key ? <Link to={`/cards/${key}`}>{key}</Link> : '—'}</td>
+                    <td style={td}>{key ? <Link to={withP(`/cards/${key}`)}>{key}</Link> : '—'}</td>
                     <td style={td}><AgentSwatch agent={s.agent} /></td>
                     <td style={td}>{s.model || '—'}</td>
                     <td style={td}>{duration(s.started_at, s.ended_at, s.last_event_at)}{live ? ' · ao vivo' : ''}</td>
