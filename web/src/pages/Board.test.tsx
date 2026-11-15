@@ -65,4 +65,17 @@ describe('Board por projeto', () => {
     const link = await screen.findByRole('link', { name: 'Card do web' })
     expect(link).toHaveAttribute('href', '/cards/NAC-3?projeto=2')
   })
+  it('mostra "branch integrada" em card não concluído', async () => {
+    mock({
+      ...routes,
+      '/api/cards': [
+        card({ id: 1, key: 'NAC-1', title: 'Card ativo', column: 'em_andamento', branch_merged_at: ago(1) }),
+        card({ id: 2, key: 'NAC-2', title: 'Card pronto', column: 'concluido', branch_merged_at: ago(1) }),
+      ],
+    })
+    wrap(<Board />, '/board')
+    await screen.findByText('Card ativo')
+    expect(screen.getByRole('article', { name: /NAC-1/ })).toHaveTextContent('branch integrada')
+    expect(screen.getByRole('article', { name: /NAC-2/ })).not.toHaveTextContent('branch integrada')
+  })
 })

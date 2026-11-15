@@ -179,6 +179,25 @@ func (s *Store) ListCards(f CardFilter) ([]domain.Card, error) {
 	return out, rows.Err()
 }
 
+// ListIntegrationCandidates lista os cards com branch ainda não integrado que
+// estão em em_andamento, pausado ou revisao.
+func (s *Store) ListIntegrationCandidates() ([]domain.Card, error) {
+	rows, err := s.DB.Query(`SELECT ` + cardCols + ` FROM cards WHERE col IN ('em_andamento','pausado','revisao') AND branch<>'' AND branch_merged_at IS NULL ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Card
+	for rows.Next() {
+		c, err := scanCard(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // UpdateCard grava os campos editáveis do card (identificado por ID).
 func (s *Store) UpdateCard(c domain.Card) error {
 	res, err := s.DB.Exec(`UPDATE cards SET title=?, goal=?, done_when=?, where_stopped=?, where_stopped_at=?, how_to_test=?, branch=?, project_id=?, col=?, updated_at=? WHERE id=?`,

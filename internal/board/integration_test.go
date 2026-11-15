@@ -1,0 +1,184 @@
+package board
+
+import (
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
+)
+
+func gitI(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// integFixture cria repo com main e feat/x (com commit próprio) e um card na coluna col.
+func integFixture(t *testing.T, col domain.Column, branch string) (*store.Store, string, domain.Card) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não instalado")
+	}
+	d := t.TempDir()
+	gitI(t, d, "init", "-q", "-b", "main")
+	gitI(t, d, "commit", "-q", "--allow-empty", "-m", "init")
+	gitI(t, d, "checkout", "-q", "-b", "feat/x")
+	gitI(t, d, "commit", "-q", "--allow-empty", "-m", "feat")
+	gitI(t, d, "checkout", "-q", "main")
+	st, err := store.Open(filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	p, err := st.CreateProject("api", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.CreateCard(domain.Card{Title: "x", ProjectID: p.ID, Branch: branch, Column: col})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st, d, c
+}
+
+var integNow = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+func runCheck(t *testing.T, st *store.Store) bool {
+	t.Helper()
+	ch, err := CheckIntegrations(st, gitinfo.Exec{}, integNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ch
+}
+
+func decisionsOf(t *testing.T, st *store.Store, c domain.Card) []string {
+	t.Helper()
+	rows, err := st.DB.Query(`SELECT what FROM decisions WHERE card_id=?`, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var w string
+		rows.Scan(&w)
+		out = append(out, w)
+	}
+	return out
+}
+
+func mergeFeat(t *testing.T, d string) {
+	gitI(t, d, "merge", "-q", "--no-ff", "-m", "merge", "feat/x")
+}
+
+func TestIntegrationConcludesReviewCard(t *testing.T) {
+	st, d, c := integFixture(t, domain.Revisao, "feat/x")
+	tip := gitI(t, d, "rev-parse", "feat/x")
+	if !runCheck(t, st) {
+		t.Fatal("1ª passada deveria mudar")
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if !got.BranchDiverged || got.BranchHead != tip || got.BranchMergedAt != nil || got.Column != domain.Revisao {
+		t.Fatalf("após 1ª: %+v", got)
+	}
+	mergeFeat(t, d)
+	if !runCheck(t, st) {
+		t.Fatal("2ª passada deveria mudar")
+	}
+	got, _ = st.GetCardByID(c.ID)
+	if got.Column != domain.Concluido || got.BranchMergedAt == nil {
+		t.Fatalf("após 2ª: %+v", got)
+	}
+	ds := decisionsOf(t, st, c)
+	want := "Branch feat/x integrada em main (" + tip[:7] + ")"
+	if len(ds) != 1 || ds[0] != want {
+		t.Fatalf("decisões = %v, want %q", ds, want)
+	}
+}
+
+func TestIntegrationKeepsInProgressCard(t *testing.T) {
+	st, d, c := integFixture(t, domain.EmAndamento, "feat/x")
+	runCheck(t, st)
+	mergeFeat(t, d)
+	runCheck(t, st)
+	got, _ := st.GetCardByID(c.ID)
+	if got.Column != domain.EmAndamento || got.BranchMergedAt == nil {
+		t.Fatalf("card = %+v", got)
+	}
+	if len(decisionsOf(t, st, c)) != 1 {
+		t.Fatal("deveria gravar a decisão")
+	}
+}
+
+func TestIntegrationDeletedBranchAfterSeen(t *testing.T) {
+	st, d, c := integFixture(t, domain.Revisao, "feat/x")
+	runCheck(t, st)
+	mergeFeat(t, d)
+	gitI(t, d, "branch", "-D", "feat/x")
+	if !runCheck(t, st) {
+		t.Fatal("deveria integrar pelo branch_head")
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if got.Column != domain.Concluido || got.BranchMergedAt == nil {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+func TestIntegrationDeletedBranchNeverSeen(t *testing.T) {
+	st, _, c := integFixture(t, domain.Revisao, "feat/nunca")
+	if runCheck(t, st) {
+		t.Fatal("nada deveria mudar")
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if got.Column != domain.Revisao || got.BranchMergedAt != nil || len(decisionsOf(t, st, c)) != 0 {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+func TestIntegrationIgnoresBaseBranchCard(t *testing.T) {
+	st, _, c := integFixture(t, domain.Revisao, "main")
+	if runCheck(t, st) {
+		t.Fatal("nada deveria mudar")
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if got.Column != domain.Revisao || got.BranchMergedAt != nil {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+func TestIntegrationRemoteOnlyMerge(t *testing.T) {
+	st, d, c := integFixture(t, domain.Revisao, "feat/x")
+	runCheck(t, st)
+	tip := gitI(t, d, "rev-parse", "feat/x")
+	gitI(t, d, "update-ref", "refs/remotes/origin/main", tip)
+	if !runCheck(t, st) {
+		t.Fatal("deveria integrar via origin/main")
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if got.Column != domain.Concluido || got.BranchMergedAt == nil {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+func TestIntegrationRunsOnce(t *testing.T) {
+	st, d, c := integFixture(t, domain.Revisao, "feat/x")
+	runCheck(t, st)
+	mergeFeat(t, d)
+	runCheck(t, st)
+	if runCheck(t, st) {
+		t.Fatal("3ª passada não deveria mudar")
+	}
+	if n := len(decisionsOf(t, st, c)); n != 1 {
+		t.Fatalf("decisões = %d", n)
+	}
+}
