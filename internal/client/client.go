@@ -194,8 +194,9 @@ func (c *Client) SetProjectBase(ctx context.Context, id int64, base string) erro
 }
 
 // AddProject cadastra um projeto.
-func (c *Client) AddProject(ctx context.Context, name, path string) (domain.Project, error) {
-	var p domain.Project
+// Reassigned é quantas sessões abertas foram religadas ao projeto.
+func (c *Client) AddProject(ctx context.Context, name, path string) (AddedProject, error) {
+	var p AddedProject
 	err := c.Do(ctx, "POST", "/api/projects", map[string]string{"name": name, "path": path}, &p)
 	return p, err
 }
@@ -226,4 +227,10 @@ func (c *Client) SavePrompt(ctx context.Context, p domain.Prompt) (domain.Prompt
 	var out domain.Prompt
 	err := c.Do(ctx, "POST", "/api/prompts", p, &out)
 	return out, err
+}
+
+// AddedProject é a resposta de AddProject: o projeto e as sessões religadas.
+type AddedProject struct {
+	domain.Project
+	Reassigned int `json:"reassigned"`
 }

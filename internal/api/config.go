@@ -172,8 +172,9 @@ func (s *server) listProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name string `json:"name"`
-		Path string `json:"path"`
+		Name       string `json:"name"`
+		Path       string `json:"path"`
+		BaseBranch string `json:"base_branch"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -195,8 +196,30 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "")
 		return
 	}
-	s.publish("config")
-	writeJSON(w, http.StatusCreated, p)
+	base := strings.TrimSpace(in.BaseBranch)
+	if base == "" {
+		if br := s.branchReader(); br != nil {
+			base = br.DetectBase(p.Path)
+		}
+	}
+	if base != "" {
+		if err := s.st.SetProjectBase(p.ID, base); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		p.BaseBranch = base
+	}
+	// A sessão aberta antes do cadastro passa a pertencer ao projeto.
+	n, err := s.st.ReassignSessions(p.ID, p.Path)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	s.publish("config", "sessions", "cards")
+	writeJSON(w, http.StatusCreated, struct {
+		domain.Project
+		Reassigned int `json:"reassigned"`
+	}{p, n})
 }
 
 func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {

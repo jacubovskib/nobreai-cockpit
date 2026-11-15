@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
@@ -84,4 +85,20 @@ func (s *Store) ProjectForPath(cwd string) (*domain.Project, error) {
 		}
 	}
 	return best, nil
+}
+
+// ReassignSessions liga ao projeto as sessões sem projeto cujo cwd é root ou
+// fica abaixo dele (mesmo limite de diretório de ProjectForPath) e liga a
+// captura completa. Devolve quantas mudaram.
+func (s *Store) ReassignSessions(projectID int64, root string) (int, error) {
+	root = strings.TrimRight(root, "/")
+	prefix := root + "/"
+	res, err := s.DB.Exec(`UPDATE sessions SET project_id=?, full_capture=1
+		WHERE project_id IS NULL AND (cwd=? OR substr(cwd, 1, ?)=?)`,
+		projectID, root, utf8.RuneCountInString(prefix), prefix)
+	if err != nil {
+		return 0, fmt.Errorf("religar sessões: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }

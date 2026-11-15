@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/client"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
 const defaultAddr = "127.0.0.1:7420"
@@ -68,10 +69,12 @@ type cli struct {
 	// spawn entrega o payload dos limites a um processo destacado; nil = envia
 	// na hora, com 300 ms (testes).
 	spawn func(payload []byte)
+	// git acha o repositório principal de um diretório; nil = não resolve.
+	git gitinfo.WorktreeReader
 }
 
 func newCLI() *cli {
-	c := &cli{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, cwd: os.Getwd,
+	c := &cli{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, cwd: os.Getwd, git: gitinfo.Exec{},
 		opener: func(url string) error { return exec.Command("xdg-open", url).Start() }}
 	c.spawn = func(p []byte) { spawnStatuslineSender(c.addr())(p) }
 	return c

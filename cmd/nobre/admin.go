@@ -38,11 +38,18 @@ func (c *cli) project(args []string) error {
 			}
 			path = filepath.Join(wd, path)
 		}
-		p, err := c.client().AddProject(ctx(), *name, filepath.Clean(path))
+		path = filepath.Clean(path)
+		// De dentro de um worktree ligado, cadastra o checkout principal.
+		if c.git != nil {
+			if main := c.git.Locate(path).Main; main != "" {
+				path = main
+			}
+		}
+		p, err := c.client().AddProject(ctx(), *name, path)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(c.out, "Projeto %s cadastrado: %s\n", p.Name, p.Path)
+		fmt.Fprintf(c.out, "Projeto %s cadastrado: %s (base %s, %d sessões religadas)\n", p.Name, p.Path, p.BaseBranch, p.Reassigned)
 	case "base":
 		pos, err := c.parse(flag.NewFlagSet("project base", flag.ContinueOnError), args[1:])
 		if err != nil {

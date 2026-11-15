@@ -23,7 +23,7 @@ const (
 	agentPIDHeader = "X-Nobre-Agent-PID"
 	msgNoSession   = "nenhuma sessão de agente encontrada para este processo"
 	msgNoCard      = `Esta sessão ainda não tem card. Use nobre start "<título>" ou nobre resume <KEY>.`
-	msgNoProject   = "Este repositório não está cadastrado no NobreAI Cockpit. Peça ao usuário para cadastrar (nobre project add); não cadastre por conta própria."
+	msgNoProject   = "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan (veja a skill nobre-cockpit)."
 )
 
 func (s *server) meRoutes(mux *http.ServeMux) {

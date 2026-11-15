@@ -3,11 +3,14 @@ package claude
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -15,6 +18,10 @@ import (
 // registeredPhrase abre o contexto do SessionStart quando a sessão é
 // registrada no board; a skill global só usa o nobre quando a vê.
 const registeredPhrase = "NobreAI Cockpit: esta sessão é registrada no board"
+
+// unregisteredPhrase abre o aviso do SessionStart num repositório git que
+// ainda não está no board.
+const unregisteredPhrase = "NobreAI Cockpit: este repositório não está cadastrado no board"
 
 // instructions é o começo do contexto injetado no SessionStart: quando criar
 // card (spec 6.0) e os comandos nobre.
@@ -65,7 +72,18 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	// contexto junto com o resto e é reinjetado.
 	compacted := p.Source == "compact" && resumed == nil && sess.CardID != nil
 	if !sess.FullCapture && resumed == nil && notFound == "" && !compacted {
-		return adapter.HookReply{}, nil
+		if sess.ProjectID != nil {
+			return adapter.HookReply{}, nil
+		}
+		root := a.unregisteredRoot(sess.Cwd)
+		if root == "" {
+			return adapter.HookReply{}, nil
+		}
+		return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
+			"hookEventName": "SessionStart",
+			"additionalContext": unregisteredPhrase + " (" + root + ").\nAntes de seguir com o pedido do usuário, cadastre com nobre project add " + root +
+				" e faça o levantamento com nobre project scan; crie os cards importantes com nobre card add (veja a skill nobre-cockpit). O cadastro liga esta sessão ao board.\n\n" + instructions,
+		}})
 	}
 
 	var b strings.Builder
@@ -110,6 +128,28 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		"hookEventName":     "SessionStart",
 		"additionalContext": b.String(),
 	}})
+}
+
+// unregisteredRoot devolve a raiz do repositório git de cwd quando vale
+// avisar que ele não está cadastrado; "" quando não há repositório, a raiz é o
+// HOME ou já existe projeto para ela (mesmo com captura desligada, que funciona
+// como "ignorar").
+func (a *Adapter) unregisteredRoot(cwd string) string {
+	wr, ok := a.deps.Git.(gitinfo.WorktreeReader)
+	if !ok || cwd == "" {
+		return ""
+	}
+	root := wr.Locate(cwd).Main
+	if root == "" {
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == filepath.Clean(root) {
+		return ""
+	}
+	if p, err := a.st.ProjectForPath(root); err != nil || p != nil {
+		return ""
+	}
+	return root
 }
 
 // pausedCards lista os cards pausados do projeto e do branch da sessão

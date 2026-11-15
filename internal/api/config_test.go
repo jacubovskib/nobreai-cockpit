@@ -3,8 +3,11 @@ package api
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
 func TestSettingsPutMergesOverCurrent(t *testing.T) {
@@ -112,5 +115,34 @@ func TestPutPriceCacheNull(t *testing.T) {
 	}
 	if rec := a.do(t, "PUT", "/api/prices", map[string]any{"model": "m", "input_per_m": 3, "output_per_m": 15, "cache_read_per_m": -1}, 0); rec.Code != http.StatusBadRequest {
 		t.Fatalf("negativo = %d", rec.Code)
+	}
+}
+
+func TestCreateProjectReassignsAndSetsBase(t *testing.T) {
+	main, _ := gitRepoWithWorktree(t)
+	gitRun(t, main, "branch", "develop")
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Git: gitinfo.Exec{}})}
+	now := testNow
+	if err := st.StartSession(domain.Session{ID: "claude:1", Agent: "claude", ProviderSessionID: "1", PID: 5, Cwd: main, StartedAt: now, LastEventAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/projects", map[string]any{"path": main}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("projeto = %d %s", rec.Code, rec.Body)
+	}
+	out := decode[map[string]any](t, rec)
+	if out["reassigned"] != float64(1) || out["base_branch"] != "develop" {
+		t.Fatalf("resposta = %v", out)
+	}
+	x, err := st.GetSession("claude:1")
+	if err != nil || x.ProjectID == nil || !x.FullCapture {
+		t.Fatalf("sessão = %+v, %v", x, err)
 	}
 }
