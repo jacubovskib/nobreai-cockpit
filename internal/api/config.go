@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -10,7 +11,24 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
-const msgPriceRequired = "Informe os preços de entrada e saída (maiores que zero)"
+const (
+	msgPriceRequired = "Informe os preços de entrada e saída (maiores que zero)"
+	msgHomeProject   = "a pasta pessoal, a raiz e as pastas acima da pessoal não podem ser cadastradas como projeto"
+)
+
+// homeOrAncestor diz se path (limpo) é a raiz, a pasta pessoal ou uma pasta
+// que a contém: cadastrá-la engoliria todas as sessões do usuário.
+func homeOrAncestor(path string) bool {
+	if path == string(filepath.Separator) {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	home = filepath.Clean(home)
+	return home == path || strings.HasPrefix(home, path+string(filepath.Separator))
+}
 
 func (s *server) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings", s.getSettings)
@@ -186,6 +204,10 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Path = filepath.Clean(in.Path)
+	if homeOrAncestor(in.Path) {
+		writeError(w, http.StatusBadRequest, msgHomeProject)
+		return
+	}
 	if strings.TrimSpace(in.Name) == "" {
 		in.Name = filepath.Base(in.Path)
 	}
@@ -270,6 +292,10 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.Path = filepath.Clean(p.Path)
+	if homeOrAncestor(p.Path) {
+		writeError(w, http.StatusBadRequest, msgHomeProject)
+		return
+	}
 	err = s.st.UpdateProject(*p)
 	if isConstraint(err, "UNIQUE") {
 		writeError(w, http.StatusConflict, "já existe um projeto com esse caminho")

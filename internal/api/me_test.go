@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
 // liveSession cria uma sessão viva com o PID e, se key != "", liga ao card.
@@ -532,5 +533,22 @@ func TestMeBranchRefreshesSessionBranch(t *testing.T) {
 	}
 	if s, _ := a.st.GetSession("claude:s"); s.Branch != "feat/live" {
 		t.Fatalf("branch da sessão = %q", s.Branch)
+	}
+}
+
+// Fora de um repositório git, o agente não é mandado cadastrar: a sessão segue sem card.
+func TestMeStartNonGitCwdDoesNotSuggestRegister(t *testing.T) {
+	a := newTestAPI(t)
+	a.h = New(a.st, Deps{Now: func() time.Time { return testNow }, Hub: a.hub, Git: gitinfo.Exec{}})
+	dir := t.TempDir()
+	if err := a.st.StartSession(domain.Session{ID: "claude:s", Agent: "claude", PID: 4242, Cwd: dir, StartedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/me/start", "/api/me/cards"} {
+		rec := a.do(t, "POST", path, map[string]string{"title": "T"}, 4242)
+		msg := decode[map[string]string](t, rec)["error"]
+		if rec.Code != http.StatusConflict || msg != msgNotGit || strings.Contains(msg, "nobre project add") {
+			t.Fatalf("%s = %d %q", path, rec.Code, msg)
+		}
 	}
 }

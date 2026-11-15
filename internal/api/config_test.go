@@ -246,3 +246,28 @@ func TestScanEndpointMissingBase409(t *testing.T) {
 		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// A pasta pessoal, a raiz e qualquer pasta acima da pessoal nunca viram projeto
+// (cadastro irreversível que engoliria todas as sessões).
+func TestCreateProjectRefusesHomeAndAncestors(t *testing.T) {
+	a := newTestAPI(t)
+	home := filepath.Join(t.TempDir(), "casa", "nobre")
+	t.Setenv("HOME", home)
+	for _, path := range []string{home, filepath.Dir(home), "/", home + "/"} {
+		rec := a.do(t, "POST", "/api/projects", map[string]any{"path": path}, 0)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(decode[map[string]string](t, rec)["error"], "pasta pessoal") {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	if ps, _ := a.st.ListProjects(); len(ps) != 0 {
+		t.Fatalf("projetos = %+v", ps)
+	}
+	if rec := a.do(t, "POST", "/api/projects", map[string]any{"path": filepath.Join(home, "proj")}, 0); rec.Code != http.StatusCreated {
+		t.Fatalf("subpasta do HOME = %d %s", rec.Code, rec.Body)
+	}
+	p, _ := a.st.ListProjects()
+	rec := a.do(t, "PATCH", "/api/projects/"+strconv.FormatInt(p[0].ID, 10), map[string]any{"path": home}, 0)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH para o HOME = %d %s", rec.Code, rec.Body)
+	}
+}

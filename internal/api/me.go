@@ -24,6 +24,7 @@ const (
 	msgNoSession   = "nenhuma sessão de agente encontrada para este processo"
 	msgNoCard      = `Esta sessão ainda não tem card. Use nobre start "<título>" ou nobre resume <KEY>.`
 	msgNoProject   = "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan (veja a skill nobre-cockpit)."
+	msgNotGit      = "Esta pasta não é um repositório git e não pode ser cadastrada no NobreAI Cockpit; a sessão segue sem card."
 )
 
 func (s *server) meRoutes(mux *http.ServeMux) {
@@ -123,6 +124,28 @@ func (s *server) recordEvent(sessionID, kind string, data map[string]any) {
 	s.publish("sessions")
 }
 
+// sessionProject devolve o projeto da sessão (o ligado ou o do cwd) ou
+// responde 409: fora de um repositório git não sugere cadastrar.
+func (s *server) sessionProject(w http.ResponseWriter, sess domain.Session) (int64, bool) {
+	if sess.ProjectID != nil {
+		return *sess.ProjectID, true
+	}
+	p, err := s.st.ProjectForPath(sess.Cwd)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return 0, false
+	}
+	if p != nil {
+		return p.ID, true
+	}
+	msg := msgNoProject
+	if wr, ok := s.deps.Git.(gitinfo.WorktreeReader); ok && wr.Locate(sess.Cwd).Root == "" {
+		msg = msgNotGit
+	}
+	writeError(w, http.StatusConflict, msg)
+	return 0, false
+}
+
 func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Session) {
 	var in struct {
 		Title    string `json:"title"`
@@ -136,20 +159,9 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeError(w, http.StatusBadRequest, "título obrigatório")
 		return
 	}
-	var projectID int64
-	if sess.ProjectID != nil {
-		projectID = *sess.ProjectID
-	} else {
-		p, err := s.st.ProjectForPath(sess.Cwd)
-		if err != nil {
-			writeStoreError(w, err, "")
-			return
-		}
-		if p == nil {
-			writeError(w, http.StatusConflict, msgNoProject)
-			return
-		}
-		projectID = p.ID
+	projectID, ok := s.sessionProject(w, sess)
+	if !ok {
+		return
 	}
 	c, err := s.st.CreateCardAndAttach(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
 		ProjectID: projectID}, sess.ID) // o branch vem do syncBranch: a base nunca vira branch do card
@@ -189,20 +201,9 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeError(w, http.StatusBadRequest, "coluna inválida (use backlog ou pausado)")
 		return
 	}
-	var projectID int64
-	if sess.ProjectID != nil {
-		projectID = *sess.ProjectID
-	} else {
-		p, err := s.st.ProjectForPath(sess.Cwd)
-		if err != nil {
-			writeStoreError(w, err, "")
-			return
-		}
-		if p == nil {
-			writeError(w, http.StatusConflict, msgNoProject)
-			return
-		}
-		projectID = p.ID
+	projectID, ok := s.sessionProject(w, sess)
+	if !ok {
+		return
 	}
 	card := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, Branch: strings.TrimSpace(in.Branch),
 		ProjectID: projectID, Column: col}
