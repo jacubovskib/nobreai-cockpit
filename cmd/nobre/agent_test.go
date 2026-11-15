@@ -252,3 +252,27 @@ func TestCLIBranchAndProjectBase(t *testing.T) {
 		t.Fatalf("uso: %+v", r)
 	}
 }
+
+func TestCLICardAdd(t *testing.T) {
+	var body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/me/cards" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.WriteHeader(201)
+		w.Write([]byte(`{"key":"NAC-2","column":"pausado"}`))
+	})
+	r := runCLI(t, addr, "", nil, "card", "add", "B", "--column", "pausado", "--where", "x")
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	want := `{"branch":"","column":"pausado","done_when":"","goal":"","title":"B","where_stopped":"x"}`
+	if body != want {
+		t.Fatalf("body = %s", body)
+	}
+	if r.stdout != "Card NAC-2 criado no pausado (sessão não ligada).\n" {
+		t.Fatalf("out = %q", r.stdout)
+	}
+}

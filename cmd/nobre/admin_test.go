@@ -101,3 +101,30 @@ func TestUIUsesInjectedOpener(t *testing.T) {
 		t.Fatalf("code=%d opened=%q", code, opened)
 	}
 }
+
+func TestCLIProjectScanPrintsSections(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/projects":
+			w.Write([]byte(`[{"id":3,"name":"api","path":"/w/api"}]`))
+		case "/api/projects/3/scan":
+			w.Write([]byte(`{"repo":"/w/api","base":"main",
+			 "branches":[{"name":"feat/a","subject":"faz a","worktree":"/w/api-a","last_commit":"2026-11-01T00:00:00Z","ahead":3,"recent":true}],
+			 "plans":[{"path":"docs/plan-x.md","open":2,"done":1,"modified":"2026-11-01T00:00:00Z"}],
+			 "sessions":[{"id":"claude:1","started_at":"2026-11-01T00:00:00Z","ended_at":null,"branch":"feat/a","cwd":"/w/api","cost_usd":1.5}],
+			 "cards":[{"key":"NAC-1","title":"Existente","column":"backlog","branch":""}]}`))
+		default:
+			t.Errorf("path = %s", r.URL.Path)
+		}
+	})
+	r := runCLI(t, addr, "", nil, "project", "scan", "/w/api")
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	for _, want := range []string{"Base: main", "Branches com trabalho fora da base", "feat/a", "3 à frente", "faz a", "/w/api-a",
+		"Planos com tarefas abertas", "docs/plan-x.md", "Sessões recentes com custo", "Cards que já existem", "NAC-1"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("faltou %q em:\n%s", want, r.stdout)
+		}
+	}
+}

@@ -24,6 +24,7 @@ func (s *server) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects", s.createProject)
 	mux.HandleFunc("PATCH /api/projects/{id}", s.patchProject)
 	mux.HandleFunc("DELETE /api/projects/{id}", s.deleteProject)
+	mux.HandleFunc("GET /api/projects/{id}/scan", s.scanProject)
 }
 
 func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {

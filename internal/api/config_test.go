@@ -2,6 +2,9 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -175,5 +178,50 @@ func TestCreateProjectReassignsLinkedWorktreeSession(t *testing.T) {
 	}
 	if rec := a.do(t, "POST", "/api/me/start", map[string]any{"title": "Novo"}, 5); rec.Code != http.StatusCreated {
 		t.Fatalf("start = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestScanEndpoint(t *testing.T) {
+	main, _ := gitRepoWithWorktree(t)
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Git: gitinfo.Exec{}})}
+	p, err := st.CreateProject("api", main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, main, "checkout", "-q", "-b", "feat/z")
+	if err := os.WriteFile(filepath.Join(main, "z.txt"), []byte("z"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, main, "add", ".")
+	gitRun(t, main, "commit", "-q", "-m", "z")
+	gitRun(t, main, "checkout", "-q", "main")
+	if _, err := st.CreateCard(domain.Card{Title: "Existente", ProjectID: p.ID, Branch: "feat/z"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "GET", "/api/projects/"+strconv.FormatInt(p.ID, 10)+"/scan", nil, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
+	}
+	out := decode[struct {
+		Base     string
+		Branches []struct{ Name string }
+		Sessions []map[string]any
+		Cards    []struct{ Key, Title, Column, Branch string }
+	}](t, rec)
+	if out.Base != "main" || len(out.Branches) < 1 || out.Branches[0].Name != "feat/z" && out.Branches[0].Name != "feat/wt" {
+		t.Fatalf("scan = %s", rec.Body)
+	}
+	if len(out.Cards) != 1 || out.Cards[0].Key != "NAC-1" || out.Cards[0].Column != "backlog" || out.Cards[0].Branch != "feat/z" {
+		t.Fatalf("cards = %+v", out.Cards)
+	}
+	if rec := a.do(t, "GET", "/api/projects/999/scan", nil, 0); rec.Code != http.StatusNotFound {
+		t.Fatalf("inexistente = %d", rec.Code)
 	}
 }

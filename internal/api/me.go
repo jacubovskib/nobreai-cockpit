@@ -28,6 +28,7 @@ const (
 
 func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/start", s.withSession(s.meStart))
+	mux.HandleFunc("POST /api/me/cards", s.withSession(s.meCards))
 	mux.HandleFunc("POST /api/me/resume", s.withSession(s.meResume))
 	mux.HandleFunc("GET /api/me/status", s.withSession(s.meStatus))
 	mux.HandleFunc("POST /api/me/note", s.withSessionCard(s.meNote))
@@ -158,6 +159,63 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 	}
 	s.syncBranch(c.ID, sess.Branch)
 	s.publish("cards", "sessions")
+	s.writeCard(w, http.StatusCreated, c.Key)
+}
+
+// meCards cria um card no projeto da sessão sem ligar a sessão a ele (o
+// agente cadastra o histórico do repositório sem sair do card atual).
+func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Session) {
+	var in struct {
+		Title        string `json:"title"`
+		Goal         string `json:"goal"`
+		DoneWhen     string `json:"done_when"`
+		Branch       string `json:"branch"`
+		WhereStopped string `json:"where_stopped"`
+		Column       string `json:"column"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		writeError(w, http.StatusBadRequest, "título obrigatório")
+		return
+	}
+	col := domain.Column(in.Column)
+	switch col {
+	case "":
+		col = domain.Backlog
+	case domain.Backlog, domain.Pausado:
+	default:
+		writeError(w, http.StatusBadRequest, "coluna inválida (use backlog ou pausado)")
+		return
+	}
+	var projectID int64
+	if sess.ProjectID != nil {
+		projectID = *sess.ProjectID
+	} else {
+		p, err := s.st.ProjectForPath(sess.Cwd)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if p == nil {
+			writeError(w, http.StatusConflict, msgNoProject)
+			return
+		}
+		projectID = p.ID
+	}
+	card := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, Branch: strings.TrimSpace(in.Branch),
+		ProjectID: projectID, Column: col}
+	if w := strings.TrimSpace(in.WhereStopped); w != "" {
+		now := s.now()
+		card.WhereStopped, card.WhereStoppedAt = w, &now
+	}
+	c, err := s.st.CreateCard(card)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	s.publish("cards")
 	s.writeCard(w, http.StatusCreated, c.Key)
 }
 

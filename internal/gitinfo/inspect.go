@@ -143,3 +143,7 @@ func parseStatus(out string, in *Inspection) {
 		}
 	}
 }
+
+// ReadOnly expõe gitRO a outros pacotes (o levantamento do projeto): só
+// leitura, sem locks opcionais, nunca busca na rede.
+func ReadOnly(dir string, args ...string) (string, error) { return gitRO(dir, args...) }

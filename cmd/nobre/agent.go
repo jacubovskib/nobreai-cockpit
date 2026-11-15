@@ -27,6 +27,34 @@ func (c *cli) start(args []string) error {
 	return nil
 }
 
+func (c *cli) card(args []string) error {
+	const u = `uso: nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado]`
+	if len(args) == 0 || args[0] != "add" {
+		return usagef(u)
+	}
+	fs := flag.NewFlagSet("card add", flag.ContinueOnError)
+	goal := fs.String("goal", "", "objetivo do card")
+	done := fs.String("done-when", "", "critério de pronto")
+	branch := fs.String("branch", "", "branch do card")
+	where := fs.String("where", "", `"Onde parei" do card`)
+	column := fs.String("column", "", "backlog (padrão) ou pausado")
+	pos, err := c.parse(fs, args[1:])
+	if err != nil {
+		return err
+	}
+	title := joinText(pos)
+	if title == "" {
+		return usagef(u)
+	}
+	card, err := c.client().AddCard(ctx(), map[string]string{"title": title, "goal": *goal, "done_when": *done,
+		"branch": *branch, "where_stopped": *where, "column": *column})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Card %s criado no %s (sessão não ligada).\n", card.Key, card.Column)
+	return nil
+}
+
 func (c *cli) resume(args []string) error {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	force := fs.Bool("force", false, "assume o card mesmo com outra sessão viva")

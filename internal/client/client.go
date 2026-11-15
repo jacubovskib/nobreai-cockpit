@@ -207,6 +207,61 @@ func (c *Client) Projects(ctx context.Context) ([]domain.Project, error) {
 	return ps, c.Do(ctx, "GET", "/api/projects", nil, &ps)
 }
 
+// ScanBranch, ScanPlan, ScanSession e ScanCard espelham GET /api/projects/{id}/scan.
+type ScanBranch struct {
+	Name       string    `json:"name"`
+	Subject    string    `json:"subject"`
+	Worktree   string    `json:"worktree"`
+	LastCommit time.Time `json:"last_commit"`
+	Ahead      int       `json:"ahead"`
+	Recent     bool      `json:"recent"`
+}
+
+type ScanPlan struct {
+	Path     string    `json:"path"`
+	Open     int       `json:"open"`
+	Done     int       `json:"done"`
+	Modified time.Time `json:"modified"`
+}
+
+type ScanSession struct {
+	ID        string     `json:"id"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at"`
+	Branch    string     `json:"branch"`
+	Cwd       string     `json:"cwd"`
+	CostUSD   float64    `json:"cost_usd"`
+}
+
+type ScanCard struct {
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Column string `json:"column"`
+	Branch string `json:"branch"`
+}
+
+// Scan é o levantamento do histórico de um projeto.
+type Scan struct {
+	Repo     string        `json:"repo"`
+	Base     string        `json:"base"`
+	Branches []ScanBranch  `json:"branches"`
+	Plans    []ScanPlan    `json:"plans"`
+	Sessions []ScanSession `json:"sessions"`
+	Cards    []ScanCard    `json:"cards"`
+}
+
+// ScanProject pede o levantamento só de leitura do projeto.
+func (c *Client) ScanProject(ctx context.Context, id int64) (Scan, error) {
+	var s Scan
+	return s, c.Do(ctx, "GET", "/api/projects/"+strconv.FormatInt(id, 10)+"/scan", nil, &s)
+}
+
+// AddCard cria um card no projeto da sessão sem ligar a sessão a ele.
+func (c *Client) AddCard(ctx context.Context, in map[string]string) (domain.Card, error) {
+	var card domain.Card
+	return card, c.Do(ctx, "POST", "/api/me/cards", in, &card)
+}
+
 // Prompts lista os prompts.
 func (c *Client) Prompts(ctx context.Context) ([]domain.Prompt, error) {
 	var ps []domain.Prompt

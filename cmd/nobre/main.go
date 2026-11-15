@@ -22,6 +22,8 @@ const usage = `nobre: CLI do NobreAI Cockpit
 
 Agente (use dentro de uma sessão de agente):
   nobre start "<título>" [--goal ...] [--done-when ...]   cria um card e liga esta sessão
+  nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado]
+                                                          cria um card sem ligar esta sessão
   nobre resume <KEY> [--force]                            liga esta sessão ao card e imprime o pacote
   nobre note "<onde parei>"                               atualiza "Onde parei"
   nobre decide "<decisão>" --why "<porquê>"               registra uma decisão
@@ -37,6 +39,7 @@ Agente (use dentro de uma sessão de agente):
 
 Administração:
   nobre project add [path] [--name <nome>]                cadastra um projeto (padrão: diretório atual)
+  nobre project scan [path]                               levanta branches, planos, sessões e cards do projeto (só leitura)
   nobre project base <branch> [path]                      define o branch base do projeto
   nobre project list                                      lista os projetos
   nobre prompt list                                       lista os prompts
@@ -114,6 +117,8 @@ func (c *cli) run(args []string) int {
 		err = c.start(rest)
 	case "resume":
 		err = c.resume(rest)
+	case "card":
+		err = c.card(rest)
 	case "note":
 		err = c.simple("note", "texto", rest, "text")
 	case "ask":

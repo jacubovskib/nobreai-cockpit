@@ -406,3 +406,54 @@ func TestMeStartBranchFollowsWorkingBranchNotBase(t *testing.T) {
 		}
 	}
 }
+
+func TestMeCardsCreatesWithoutAttach(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	c, _ = a.st.GetCard(c.Key) // em_andamento depois de ligar a sessão
+	rec := a.do(t, "POST", "/api/me/cards", map[string]string{"title": "B", "column": "pausado", "where_stopped": "x", "branch": "feat/b"}, 4242)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	b, err := a.st.GetCard(decode[domain.Card](t, rec).Key)
+	if err != nil || b.Column != domain.Pausado || b.WhereStopped != "x" || b.WhereStoppedAt == nil || b.Branch != "feat/b" || b.ProjectID != c.ProjectID {
+		t.Fatalf("card = %+v, %v", b, err)
+	}
+	sess, _ := a.st.GetSession("claude:s")
+	if sess.CardID == nil || *sess.CardID != c.ID {
+		t.Fatalf("sessão saiu do card A: %+v", sess.CardID)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Column != c.Column {
+		t.Fatalf("card A mudou de coluna: %s", got.Column)
+	}
+}
+
+func TestMeCardsDefaultsToBacklog(t *testing.T) {
+	a := newTestAPI(t)
+	a.project(t)
+	a.liveSession(t, "claude:s", 4242, "")
+	rec := a.do(t, "POST", "/api/me/cards", map[string]string{"title": "B"}, 4242)
+	if rec.Code != http.StatusCreated || decode[domain.Card](t, rec).Column != domain.Backlog {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMeCardsBadColumn400(t *testing.T) {
+	a := newTestAPI(t)
+	a.project(t)
+	a.liveSession(t, "claude:s", 4242, "")
+	rec := a.do(t, "POST", "/api/me/cards", map[string]string{"title": "B", "column": "revisao"}, 4242)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMeCardsNoProject409(t *testing.T) {
+	a := newTestAPI(t)
+	a.liveSession(t, "claude:s", 4242, "")
+	rec := a.do(t, "POST", "/api/me/cards", map[string]string{"title": "B"}, 4242)
+	if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != msgNoProject {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}

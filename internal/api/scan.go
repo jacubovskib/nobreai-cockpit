@@ -1,0 +1,92 @@
+package api
+
+import (
+	"net/http"
+	"sort"
+	"strconv"
+	"time"
+
+	"github.com/nobretech/nobreai-cockpit/internal/board"
+	"github.com/nobretech/nobreai-cockpit/internal/scan"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
+)
+
+const (
+	scanSessionDays = 30
+	scanMaxSessions = 10
+)
+
+type scanSession struct {
+	ID        string     `json:"id"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at"`
+	Branch    string     `json:"branch"`
+	Cwd       string     `json:"cwd"`
+	CostUSD   float64    `json:"cost_usd"`
+}
+
+type scanCard struct {
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Column string `json:"column"`
+	Branch string `json:"branch"`
+}
+
+// scanProject: GET /api/projects/{id}/scan, o levantamento só de leitura do
+// histórico do projeto (branches, planos, sessões com custo e cards atuais).
+func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "projeto inválido")
+		return
+	}
+	p, err := s.projectByID(id)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	if p == nil {
+		writeError(w, http.StatusNotFound, "projeto não encontrado")
+		return
+	}
+	now := s.now()
+	res, err := scan.Run(p.Path, board.ProjectBase(s.branchReader(), *p), now)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "levantamento falhou: "+err.Error())
+		return
+	}
+	since := now.AddDate(0, 0, -scanSessionDays)
+	sessions := []scanSession{}
+	ss, err := s.st.ProjectSessionsSince(p.ID, since)
+	if err == nil {
+		var costs map[string]store.Total
+		costs, err = s.totalsWhere(store.TotalsFilter{GroupBy: "session", From: since, ProjectID: &p.ID})
+		for _, x := range ss {
+			if c := costs[x.ID].CostUSD; c > 0 {
+				sessions = append(sessions, scanSession{x.ID, x.StartedAt, x.EndedAt, x.Branch, x.Cwd, c})
+			}
+		}
+	}
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].CostUSD > sessions[j].CostUSD })
+	if len(sessions) > scanMaxSessions {
+		sessions = sessions[:scanMaxSessions]
+	}
+	cs, err := s.st.ListCards(store.CardFilter{ProjectID: p.ID})
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	cards := make([]scanCard, 0, len(cs))
+	for _, c := range cs {
+		cards = append(cards, scanCard{c.Key, c.Title, string(c.Column), c.Branch})
+	}
+	writeJSON(w, http.StatusOK, struct {
+		scan.Result
+		Sessions []scanSession `json:"sessions"`
+		Cards    []scanCard    `json:"cards"`
+	}{res, sessions, cards})
+}

@@ -7,12 +7,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
 
 func (c *cli) project(args []string) error {
-	const u = "uso: nobre project add [path] [--name <nome>] | nobre project base <branch> [path] | nobre project list"
+	const u = "uso: nobre project add [path] [--name <nome>] | nobre project base <branch> [path] | nobre project scan [path] | nobre project list"
 	if len(args) == 0 {
 		return usagef(u)
 	}
@@ -87,6 +88,8 @@ func (c *cli) project(args []string) error {
 			return err
 		}
 		fmt.Fprintf(c.out, "Base do projeto %s: %s\n", found.Name, pos[0])
+	case "scan":
+		return c.projectScan(u, args[1:])
 	case "list":
 		ps, err := c.client().Projects(ctx())
 		if err != nil {
@@ -182,5 +185,82 @@ func (c *cli) ui() error {
 		return fmt.Errorf("não consegui abrir o navegador (%v). Abra %s manualmente.", err, url)
 	}
 	fmt.Fprintf(c.out, "Abrindo %s\n", url)
+	return nil
+}
+
+// projectScan imprime o levantamento do projeto que contém path (padrão: cwd).
+func (c *cli) projectScan(u string, args []string) error {
+	pos, err := c.parse(flag.NewFlagSet("project scan", flag.ContinueOnError), args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 1 {
+		return usagef("%s", u)
+	}
+	path := "."
+	if len(pos) == 1 {
+		path = pos[0]
+	}
+	if !filepath.IsAbs(path) {
+		wd, err := c.cwd()
+		if err != nil {
+			return err
+		}
+		path = filepath.Join(wd, path)
+	}
+	path = filepath.Clean(path)
+	if c.git != nil { // de dentro de um worktree ligado, vale o checkout principal
+		if main := c.git.Locate(path).Main; main != "" {
+			path = main
+		}
+	}
+	ps, err := c.client().Projects(ctx())
+	if err != nil {
+		return err
+	}
+	var found *domain.Project
+	for i := range ps {
+		pp := filepath.Clean(ps[i].Path)
+		if (path == pp || strings.HasPrefix(path, pp+string(filepath.Separator))) &&
+			(found == nil || len(pp) > len(filepath.Clean(found.Path))) {
+			found = &ps[i]
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("projeto não cadastrado: %s (use nobre project add)", path)
+	}
+	s, err := c.client().ScanProject(ctx(), found.ID)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	age := func(t time.Time) string {
+		d := int(now.Sub(t).Hours() / 24)
+		if d <= 0 {
+			return "hoje"
+		}
+		return fmt.Sprintf("há %dd", d)
+	}
+	fmt.Fprintf(c.out, "Projeto: %s (%s)\nBase: %s\n", found.Name, s.Repo, s.Base)
+	fmt.Fprintf(c.out, "\nBranches com trabalho fora da base (%d):\n", len(s.Branches))
+	for _, b := range s.Branches {
+		wt := ""
+		if b.Worktree != "" {
+			wt = "  [worktree " + b.Worktree + "]"
+		}
+		fmt.Fprintf(c.out, "  %s  %s, %d à frente  \"%s\"%s\n", b.Name, age(b.LastCommit), b.Ahead, b.Subject, wt)
+	}
+	fmt.Fprintf(c.out, "\nPlanos com tarefas abertas (%d):\n", len(s.Plans))
+	for _, p := range s.Plans {
+		fmt.Fprintf(c.out, "  %s  %d abertas, %d feitas (%s)\n", p.Path, p.Open, p.Done, age(p.Modified))
+	}
+	fmt.Fprintf(c.out, "\nSessões recentes com custo (%d):\n", len(s.Sessions))
+	for _, x := range s.Sessions {
+		fmt.Fprintf(c.out, "  %s  %s  US$ %.2f  branch %s  %s\n", x.ID, age(x.StartedAt), x.CostUSD, x.Branch, x.Cwd)
+	}
+	fmt.Fprintf(c.out, "\nCards que já existem (%d):\n", len(s.Cards))
+	for _, k := range s.Cards {
+		fmt.Fprintf(c.out, "  %s  [%s]  %s  %s\n", k.Key, k.Column, k.Title, k.Branch)
+	}
 	return nil
 }
