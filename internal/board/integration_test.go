@@ -182,3 +182,18 @@ func TestIntegrationRunsOnce(t *testing.T) {
 		t.Fatalf("decisões = %d", n)
 	}
 }
+
+func TestIntegrationIgnoresBranchResetOntoBase(t *testing.T) {
+	st, d, c := integFixture(t, domain.Revisao, "feat/x")
+	runCheck(t, st) // diverge: head gravado
+	gitI(t, d, "checkout", "-q", "feat/x")
+	gitI(t, d, "reset", "-q", "--hard", "main")
+	gitI(t, d, "checkout", "-q", "main")
+	if runCheck(t, st) {
+		t.Fatal("reset sem merge não deveria mudar nada")
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if got.Column != domain.Revisao || got.BranchMergedAt != nil || len(decisionsOf(t, st, c)) != 0 {
+		t.Fatalf("card = %+v", got)
+	}
+}

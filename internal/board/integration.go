@@ -64,7 +64,9 @@ func checkCardIntegration(st *store.Store, git gitinfo.BranchReader, now time.Ti
 			return false, nil
 		}
 		return true, st.SetBranchHead(c.ID, tip, true)
-	case ok && c.BranchDiverged:
+	case ok && c.BranchDiverged && c.BranchHead != "" && in(c.BranchHead):
+		// Exige o último tip divergente visto também na base: tip na base com head
+		// fora dela é reset/recriação do branch, não merge.
 		merged = tip
 	case !ok && c.BranchDiverged && c.BranchHead != "" && in(c.BranchHead):
 		merged = c.BranchHead
