@@ -307,9 +307,9 @@ func (s *Store) PauseForLimit(cardID int64, at time.Time) (bool, error) {
 }
 
 // ResumeFromLimit devolve para em andamento o card pausado por limite de
-// custo e limpa o motivo. Devolve se mudou.
+// custo e limpa o motivo, a marca de handoff incompleto e o bloqueio. Devolve se mudou.
 func (s *Store) ResumeFromLimit(cardID int64, at time.Time) (bool, error) {
-	res, err := s.DB.Exec(`UPDATE cards SET col=?, pause_reason='', updated_at=? WHERE id=? AND col=? AND pause_reason=?`,
+	res, err := s.DB.Exec(`UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, blocked_by='', updated_at=? WHERE id=? AND col=? AND pause_reason=?`,
 		string(domain.EmAndamento), fmtTime(at), cardID, string(domain.Pausado), domain.PauseReasonLimit)
 	if err != nil {
 		return false, err
@@ -319,8 +319,8 @@ func (s *Store) ResumeFromLimit(cardID int64, at time.Time) (bool, error) {
 }
 
 // SetHandoffIncomplete grava a marca de handoff incompleto do card.
-func (s *Store) SetHandoffIncomplete(cardID int64, v bool) error {
-	res, err := s.DB.Exec(`UPDATE cards SET handoff_incomplete=? WHERE id=?`, v, cardID)
+func (s *Store) SetHandoffIncomplete(cardID int64, v bool, at time.Time) error {
+	res, err := s.DB.Exec(`UPDATE cards SET handoff_incomplete=?, updated_at=? WHERE id=?`, v, fmtTime(at), cardID)
 	if err != nil {
 		return err
 	}

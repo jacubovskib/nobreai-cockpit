@@ -238,7 +238,7 @@ func TestAttachClearsCardFlags(t *testing.T) {
 	if _, err := s.PauseForLimit(c.ID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetHandoffIncomplete(c.ID, true); err != nil {
+	if err := s.SetHandoffIncomplete(c.ID, true, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AttachSession("claude:b", c.Key, true); err != nil {
@@ -259,6 +259,39 @@ func TestUpdateCardPersistsFlags(t *testing.T) {
 	}
 	got, _ := s.GetCard(c.Key)
 	if got.BlockedBy != "NAC-9" || !got.HandoffIncomplete {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+func TestResumeFromLimitClearsAllMarks(t *testing.T) {
+	s := newTestStore(t)
+	c := seedCard(t, s, domain.EmAndamento)
+	if _, err := s.PauseForLimit(c.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetCard(c.Key)
+	got.HandoffIncomplete, got.BlockedBy = true, "NAC-9"
+	if err := s.UpdateCard(got); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ResumeFromLimit(c.ID, time.Now()); err != nil || !ok {
+		t.Fatalf("ok = %v, err = %v", ok, err)
+	}
+	got, _ = s.GetCard(c.Key)
+	if got.PauseReason != "" || got.HandoffIncomplete || got.BlockedBy != "" {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+func TestSetHandoffIncompleteBumpsUpdatedAt(t *testing.T) {
+	s := newTestStore(t)
+	c := seedCard(t, s, domain.Pausado)
+	at := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := s.SetHandoffIncomplete(c.ID, true, at); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetCard(c.Key)
+	if !got.HandoffIncomplete || !got.UpdatedAt.Equal(at) {
 		t.Fatalf("card = %+v", got)
 	}
 }

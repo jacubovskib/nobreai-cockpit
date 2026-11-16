@@ -550,7 +550,7 @@ func (a *Adapter) sessionEnd(sess domain.Session, p payload, now time.Time) (ada
 	if reason == "" {
 		reason = "encerrada pelo agente"
 	}
-	if err := a.st.EndSession(sess.ID, reason, now); err != nil {
+	if err := board.FinishSession(a.st, sess.ID, reason, now); err != nil {
 		return adapter.HookReply{}, err
 	}
 	a.publish("sessions", "cards")

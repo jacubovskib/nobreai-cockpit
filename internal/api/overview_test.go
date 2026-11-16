@@ -79,8 +79,12 @@ func TestOverviewAlerts(t *testing.T) {
 	if err := a.st.MarkPIDDead("claude:1", testNow.Add(-7*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	// incomplete: pausado e sem handoff.
+	// incomplete: pausado, sem handoff e marcado (IncompleteAction = mark).
 	paused := mk("b", domain.Pausado)
+	setIncompleteAction(t, a, "mark")
+	if err := a.st.SetHandoffIncomplete(paused.ID, true, testNow); err != nil {
+		t.Fatal(err)
+	}
 	// limit_warn + unpriced: codex gastou 8,20 de 10,00 hoje; modelo "x" sem preço.
 	if err := a.st.PutLimit(domain.Limit{Agent: "codex", DailyUSD: 10, WarnPct: 80, Action: "warn"}); err != nil {
 		t.Fatal(err)
@@ -269,5 +273,57 @@ func TestOverviewPlanLimitAlerts(t *testing.T) {
 	}
 	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"plan_warn_pct": 0}, 0); rec.Code != 400 {
 		t.Fatalf("plan_warn_pct 0 = %d", rec.Code)
+	}
+}
+
+func setIncompleteAction(t *testing.T, a *testAPI, action string) {
+	t.Helper()
+	set, err := a.st.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	set.IncompleteAction = action
+	if err := a.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOverviewIncompleteAlertDependsOnSetting(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.MoveCard(c.Key, domain.Pausado); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		rec := a.do(t, "GET", "/api/overview", nil, 0)
+		n := 0
+		for _, al := range decode[overviewResp](t, rec).Alerts {
+			if al.Kind == "incomplete" {
+				n++
+			}
+		}
+		return n
+	}
+	setIncompleteAction(t, a, "mark")
+	if n := count(); n != 0 {
+		t.Fatalf("pausado incompleto sem marca: %d alertas", n)
+	}
+	if err := a.st.SetHandoffIncomplete(c.ID, true, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("marcado + mark: %d alertas", n)
+	}
+	setIncompleteAction(t, a, "ask_agent")
+	if n := count(); n != 0 {
+		t.Fatalf("marcado + ask_agent: %d alertas", n)
+	}
+	got, _ := a.st.GetCard(c.Key)
+	if !got.HandoffIncomplete {
+		t.Fatal("a marca deveria continuar no banco")
 	}
 }

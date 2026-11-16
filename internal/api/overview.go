@@ -287,6 +287,10 @@ func (s *server) buildOverview() (Overview, error) {
 	}
 	sort.Slice(t.PerAgent, func(i, j int) bool { return t.PerAgent[i].Agent < t.PerAgent[j].Agent })
 
+	set, err := s.st.GetSettings()
+	if err != nil {
+		return o, err
+	}
 	for _, c := range cards {
 		switch c.Column {
 		case domain.EmAndamento:
@@ -303,7 +307,7 @@ func (s *server) buildOverview() (Overview, error) {
 			if err != nil {
 				return o, err
 			}
-			if !rd.Ready {
+			if set.IncompleteAction == "mark" && c.HandoffIncomplete && !rd.Ready {
 				o.Alerts = append(o.Alerts, Alert{Kind: "incomplete", CardKey: c.Key,
 					Text: fmt.Sprintf("%s foi pausado com handoff incompleto.", c.Key)})
 			}
