@@ -95,6 +95,12 @@ menos de N minutos, objetivo preenchido, ≥1 arquivo essencial, "Falta" não va
 card está pronto e o que falta. Quando uma sessão termina sem cumprir a regra, o hook de fim de
 sessão pede ao agente que complete (onde o provider permitir) e, senão, marca o card como "handoff incompleto".
 
+A ação é escolhida em Configuração: `ask_agent` bloqueia o fim do turno uma vez para o agente completar o
+"Onde parei"; `mark` grava a marca de handoff incompleto no card quando a sessão termina com o card em
+Pausado, sem outra sessão viva e fora da regra (hook de fim de sessão e reconciliador seguem o mesmo
+caminho). A Sala de controle só alerta enquanto a opção for `mark`; trocar para `ask_agent` esconde o
+alerta, mas a marca continua guardada. A marca some quando o card volta para Em andamento.
+
 ### 6.3.1 Onde o agente abre no handoff pela UI (decidido pelo usuário)
 
 Configurável **globalmente** (Configuração › Pronto para handoff) e **sobrescrevível a cada clique** em
@@ -126,6 +132,9 @@ Colunas (escolha do Claude): **Backlog → Em andamento → Pausado/Handoff → 
 - Tabela de preços por modelo, editável (preços mudam).
 - Limites por agente (diário/mensal) e por card. Escolha do Claude: aviso em 80%, pausa em 100%, configurável.
 - Moeda de exibição configurável (BRL/USD) — escolha do Claude.
+- **Pausa por limite**: com a ação "pausar", o hook bloqueia as ferramentas (exceto `nobre`), e o card vai
+  para Pausado com o motivo "limite de custo". Quando o limite é elevado, o card volta para Em andamento na
+  próxima ferramenta permitida. Continuar com outro agente automaticamente e limites mensais ficam para depois.
 
 ## 9. Setup automático
 
