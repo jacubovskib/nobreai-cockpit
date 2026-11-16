@@ -340,4 +340,5 @@ export interface RemoveNeedsConfirm {
   total_files: number
   processes: { pid: number; name: string }[]
   processes_unknown?: boolean
+  git_unknown?: boolean
 }
