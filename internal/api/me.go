@@ -524,13 +524,35 @@ func (s *server) doneProblems(c domain.Card) ([]string, error) {
 	return problems, nil
 }
 
+// columnLabels são os nomes das colunas como aparecem no board.
+var columnLabels = map[domain.Column]string{
+	domain.Backlog:     "Backlog",
+	domain.EmAndamento: "Em andamento",
+	domain.Pausado:     "Pausado",
+	domain.Revisao:     "Revisão",
+	domain.Concluido:   "Concluído",
+}
+
 // meDone aplica a transição AgentDone (em_andamento → revisao) e registra o
-// evento done (mesmo se o card já não estava em andamento).
+// evento done. O card pausado por limite de custo cuja sessão viva é a que
+// chama conta como em andamento (o limite pausou o card com o agente ainda
+// trabalhando) e vai para revisão sem o motivo da pausa. Em qualquer outra
+// coluna o done é recusado com 409, sem registrar o evento.
 func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
 	var in struct {
 		Force bool `json:"force"`
 	}
 	if !readJSON(w, r, &in) { // corpo vazio é aceito (force=false)
+		return
+	}
+	limitPaused := c.Column == domain.Pausado && c.PauseReason == domain.PauseReasonLimit &&
+		sess.EndedAt == nil && sess.PIDDeadAt == nil && sess.CardID != nil && *sess.CardID == c.ID
+	next := domain.NextColumn(c.Column, domain.AgentDone)
+	if limitPaused {
+		next = domain.Revisao
+	}
+	if next == c.Column {
+		writeError(w, http.StatusConflict, "o card está em "+columnLabels[c.Column]+"; nobre done só move cards em andamento")
 		return
 	}
 	if !in.Force {
@@ -544,13 +566,16 @@ func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Sess
 			return
 		}
 	}
-	if next := domain.NextColumn(c.Column, domain.AgentDone); next != c.Column {
-		if err := s.st.MoveCard(c.Key, next); err != nil {
+	if limitPaused {
+		if _, err := s.st.DoneFromLimit(c.ID, s.now()); err != nil {
 			writeStoreError(w, err, msgCardNotFound)
 			return
 		}
-		s.publish("cards")
+	} else if err := s.st.MoveCard(c.Key, next); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
 	}
+	s.publish("cards")
 	s.recordEvent(sess.ID, domain.EvDone, map[string]any{})
 	s.writeCard(w, http.StatusOK, c.Key)
 }

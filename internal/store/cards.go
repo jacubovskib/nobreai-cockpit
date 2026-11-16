@@ -318,6 +318,19 @@ func (s *Store) ResumeFromLimit(cardID int64, at time.Time) (bool, error) {
 	return n > 0, err
 }
 
+// DoneFromLimit leva para revisão o card pausado por limite de custo (o
+// nobre done da sessão que ainda é dona dele) e limpa o motivo da pausa e a
+// marca de handoff incompleto. Devolve se mudou.
+func (s *Store) DoneFromLimit(cardID int64, at time.Time) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, updated_at=? WHERE id=? AND col=? AND pause_reason=?`,
+		string(domain.Revisao), fmtTime(at), cardID, string(domain.Pausado), domain.PauseReasonLimit)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // SetHandoffIncomplete grava a marca de handoff incompleto do card.
 func (s *Store) SetHandoffIncomplete(cardID int64, v bool, at time.Time) error {
 	res, err := s.DB.Exec(`UPDATE cards SET handoff_incomplete=?, updated_at=? WHERE id=?`, v, fmtTime(at), cardID)
