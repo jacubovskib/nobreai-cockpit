@@ -421,7 +421,8 @@ func usd(v float64) string {
 // stop decide se o turno é bloqueado. Com card e IncompleteAction
 // "ask_agent", bloqueia quando a sessão editou arquivos do card depois do
 // último "Onde parei" (o Stop dispara a cada resposta: os demais itens da regra
-// de handoff só aparecem na UI e no fim da sessão). Sem card, lembra uma única
+// de handoff só aparecem na UI e no fim da sessão); com a regra "where_stopped"
+// desligada, não bloqueia, pois esse é o único critério por turno. Sem card, lembra uma única
 // vez de criar card quando a sessão já editou ReminderEditThreshold arquivos.
 func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
 	if p.StopHookActive || !sess.FullCapture {
@@ -432,7 +433,7 @@ func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (adapter.H
 		return adapter.HookReply{}, err
 	}
 	if sess.CardID != nil {
-		if set.IncompleteAction != "ask_agent" {
+		if set.IncompleteAction != "ask_agent" || !set.Rules["where_stopped"] {
 			return adapter.HookReply{}, nil
 		}
 		c, err := a.st.GetCardByID(*sess.CardID)

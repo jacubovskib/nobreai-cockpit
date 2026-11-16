@@ -998,3 +998,50 @@ func TestSessionStartOnWorkBranchListsBranchAndUnbranchedPaused(t *testing.T) {
 		t.Fatalf("contexto:\n%s", ctx)
 	}
 }
+
+func TestSessionStartOmitsPausedCardsWhenDisabled(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	set := domain.DefaultSettings()
+	set.InjectPausedCards = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.CreateCard(domain.Card{Title: "Migrar OAuth2", ProjectID: p.ID, Branch: "main",
+		Column: domain.Pausado, WhereStopped: "falta o teste do refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if strings.Contains(ctx, "Cards pausados neste repositório") || strings.Contains(ctx, "NAC-1") {
+		t.Fatalf("contexto com cards pausados:\n%s", ctx)
+	}
+}
+
+func TestSessionStartWithoutAgentCreatesCards(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	set := domain.DefaultSettings()
+	set.AgentCreatesCards = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if !strings.HasPrefix(ctx, registeredPhrase) || !strings.Contains(ctx, `Só crie card quando o usuário pedir ("crie um card para isso"); se ele citar uma chave NAC-, use nobre resume <KEY>.`) ||
+		strings.Contains(ctx, "quando começar algo que precisa de histórico") || !strings.Contains(ctx, "nobre note") {
+		t.Fatalf("contexto:\n%s", ctx)
+	}
+}
+
+func TestStopIgnoresWhereStoppedWhenRuleDisabled(t *testing.T) {
+	e := newEnv(t)
+	set := domain.DefaultSettings()
+	set.Rules["where_stopped"] = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	e.call(t, "post_tool_use_edit")
+	if r := e.call(t, "stop"); r.Stdout != "" {
+		t.Fatalf("não deveria bloquear: %q", r.Stdout)
+	}
+}

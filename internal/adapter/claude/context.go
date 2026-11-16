@@ -24,14 +24,35 @@ const registeredPhrase = "NobreAI Cockpit: esta sessão é registrada no board"
 // ainda não está no board.
 const unregisteredPhrase = "NobreAI Cockpit: este repositório não está cadastrado no board"
 
-// instructions é o começo do contexto injetado no SessionStart: quando criar
-// card (spec 6.0) e os comandos nobre.
-const instructions = registeredPhrase + ".\n" + guidance
+// createGuidance é o critério de criação de card (spec 6.0) quando o agente
+// cria cards por conta própria.
+const createGuidance = `Crie um card com nobre start "<título>" quando começar algo que precisa de histórico: tarefa de várias etapas, mudanças em vários arquivos ou trabalho que outro agente pode continuar. Se o usuário pedir um card, crie; se citar uma chave NAC-, use nobre resume <KEY>. Perguntas rápidas não viram card.`
 
-// guidance são as instruções sem a frase de sessão registrada (o aviso de
-// repositório não cadastrado termina nelas).
-const guidance = `Crie um card com nobre start "<título>" quando começar algo que precisa de histórico: tarefa de várias etapas, mudanças em vários arquivos ou trabalho que outro agente pode continuar. Se o usuário pedir um card, crie; se citar uma chave NAC-, use nobre resume <KEY>. Perguntas rápidas não viram card.
-Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
+// askOnlyGuidance é o critério com AgentCreatesCards desligado.
+const askOnlyGuidance = `Só crie card quando o usuário pedir ("crie um card para isso"); se ele citar uma chave NAC-, use nobre resume <KEY>.`
+
+// commandsGuidance são os comandos nobre para uma sessão com card.
+const commandsGuidance = `Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
+
+// guidanceFor são as instruções sem a frase de sessão registrada (o aviso de
+// repositório não cadastrado termina nelas): o critério de criação conforme a
+// opção e os comandos.
+func guidanceFor(set domain.Settings) string {
+	create := createGuidance
+	if !set.AgentCreatesCards {
+		create = askOnlyGuidance
+	}
+	return create + "\n" + commandsGuidance
+}
+
+// guidance é o texto com os padrões.
+var guidance = guidanceFor(domain.DefaultSettings())
+
+// instructionsFor é o começo do contexto injetado no SessionStart.
+func instructionsFor(set domain.Settings) string { return registeredPhrase + ".\n" + guidanceFor(set) }
+
+// instructions é o contexto com os padrões.
+var instructions = instructionsFor(domain.DefaultSettings())
 
 // resumeEnv é a variável de ambiente com que a UI abre o agente para
 // continuar um card.
@@ -44,6 +65,10 @@ const resumeEnv = "NOBRE_RESUME"
 // explícito. Sem captura e sem retomada, não responde nada.
 func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]string, now time.Time) (adapter.HookReply, error) {
 	a.event(sess.ID, domain.EvSessionStart, map[string]any{"source": p.Source}, now)
+	set, err := a.st.GetSettings()
+	if err != nil {
+		return adapter.HookReply{}, err
+	}
 
 	var resumed *domain.Card
 	var pkg, notFound string
@@ -86,12 +111,12 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "SessionStart",
 			"additionalContext": unregisteredPhrase + " (" + root + ").\nAntes de seguir com o pedido do usuário, cadastre com nobre project add " + root +
-				" e faça o levantamento com nobre project scan; crie os cards importantes com nobre card add (veja a skill nobre-cockpit). O cadastro liga esta sessão ao board.\n\n" + guidance,
+				" e faça o levantamento com nobre project scan; crie os cards importantes com nobre card add (veja a skill nobre-cockpit). O cadastro liga esta sessão ao board.\n\n" + guidanceFor(set),
 		}})
 	}
 
 	var b strings.Builder
-	b.WriteString(instructions)
+	b.WriteString(instructionsFor(set))
 	if notFound != "" {
 		fmt.Fprintf(&b, "\n\nO card %s não foi encontrado; a sessão segue sem card.", notFound)
 	}
@@ -109,7 +134,7 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 			fmt.Fprintf(&b, " O contexto foi compactado; continue a partir do pacote de retomada do card.\n\n%s", pkg)
 		}
 	}
-	if sess.FullCapture {
+	if sess.FullCapture && set.InjectPausedCards {
 		paused, err := a.pausedCards(sess, resumed)
 		if err != nil {
 			return adapter.HookReply{}, err
