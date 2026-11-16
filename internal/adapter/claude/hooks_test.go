@@ -1156,3 +1156,30 @@ func TestStopReminderSkippedWithoutAgentCreatesCards(t *testing.T) {
 		t.Fatalf("lembrete com a opção desligada: %q", r.Stdout)
 	}
 }
+
+// Falha ao gravar a marca de handoff incompleto não impede o SessionEnd de
+// registrar o fim e ler o transcript (tokens e custo não se perdem).
+func TestSessionEndRecordsEndWhenMarkFails(t *testing.T) {
+	e := newEnv(t)
+	set := domain.DefaultSettings()
+	set.IncompleteAction = "mark"
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	if _, err := e.st.DB.Exec(`CREATE TRIGGER fail_mark BEFORE UPDATE OF handoff_incomplete ON cards
+		BEGIN SELECT RAISE(ABORT, 'falha simulada'); END`); err != nil {
+		t.Fatal(err)
+	}
+	e.call(t, "session_end")
+	e.a.Wait()
+	if len(e.events(t, domain.EvSessionEnd)) != 1 {
+		t.Fatal("session_end não registrado")
+	}
+	if ts, _ := e.st.Totals(store.TotalsFilter{GroupBy: "session"}); len(ts) != 1 || ts[0].Output == 0 {
+		t.Fatalf("uso = %+v", ts)
+	}
+	if got, _ := e.st.GetCard("NAC-1"); got.Column != domain.Pausado || got.HandoffIncomplete {
+		t.Fatalf("card = %+v", got)
+	}
+}

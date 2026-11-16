@@ -2,6 +2,7 @@ package board
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
@@ -82,5 +83,68 @@ func TestFinishSessionKeepsFlagOffWhenAnotherSessionLive(t *testing.T) {
 	got, _ := st.GetCard(c.Key)
 	if got.HandoffIncomplete {
 		t.Fatalf("card = %+v", got)
+	}
+}
+
+// failHandoffMark faz qualquer gravação de handoff_incomplete falhar.
+func failHandoffMark(t *testing.T, st *store.Store) {
+	t.Helper()
+	if _, err := st.DB.Exec(`CREATE TRIGGER fail_mark BEFORE UPDATE OF handoff_incomplete ON cards
+		BEGIN SELECT RAISE(ABORT, 'falha simulada'); END`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Sessão já encerrada antes desta chamada (SessionEnd repetido, ou hook e
+// reconciliador na mesma sessão): nada é avaliado de novo.
+func TestFinishSessionSkipsAlreadyEndedSession(t *testing.T) {
+	st := newStore(t)
+	putSettings(t, st, "mark", nil)
+	c, x := liveCard(t, st, 1)
+	if err := st.EndSession(x.ID, "antes", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishSession(st, x.ID, "fim", t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetCard(c.Key)
+	if got.Column != domain.Pausado || got.HandoffIncomplete {
+		t.Fatalf("card = %+v", got)
+	}
+	if s, _ := st.GetSession(x.ID); s.EndReason != "antes" {
+		t.Fatalf("sessão = %+v", s)
+	}
+}
+
+// A marca é melhor esforço: falhar nela não desfaz nem esconde o fim da sessão.
+func TestFinishSessionMarkFailureIsBestEffort(t *testing.T) {
+	st := newStore(t)
+	putSettings(t, st, "mark", nil)
+	c, x := liveCard(t, st, 1)
+	failHandoffMark(t, st)
+	if err := FinishSession(st, x.ID, "fim", t0); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if s, _ := st.GetSession(x.ID); s.EndedAt == nil {
+		t.Fatalf("sessão não encerrada: %+v", s)
+	}
+	if got, _ := st.GetCard(c.Key); got.Column != domain.Pausado {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+// O reconciliador conta a sessão encerrada mesmo quando a marca falha.
+func TestReconcileChangedWhenMarkFails(t *testing.T) {
+	st := newStore(t)
+	putSettings(t, st, "mark", nil)
+	_, x := liveCard(t, st, 0) // sem PID: encerra por inatividade
+	failHandoffMark(t, st)
+	set, _ := st.GetSettings()
+	changed, err := Reconcile(st, fakeProc(t), t0.Add(IdleNoPID+time.Minute), set)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if s, _ := st.GetSession(x.ID); s.EndedAt == nil {
+		t.Fatalf("sessão não encerrada: %+v", s)
 	}
 }
