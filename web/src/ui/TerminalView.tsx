@@ -17,6 +17,8 @@ export interface TermLike {
   resize(cols: number, rows: number): void
   reset(): void
   fit(): void
+  // fontSize muda o tamanho da fonte (o xterm recalcula a célula e redesenha).
+  fontSize: number
   focus(): void
   onData(cb: (d: string) => void): void
   onResize(cb: () => void): void
@@ -37,12 +39,16 @@ export interface WsLike {
 export type TermFactory = () => TermLike
 export type WsFactory = (url: string) => WsLike
 
+export const BASE_FONT = 13
+// MIN_FONT: abaixo disso o texto fica ilegível; um PTY ainda maior fica cortado.
+export const MIN_FONT = 7
+
 export const THEME = { background: '#0B0D11', foreground: '#E8EAEE', cursor: '#E8EAEE' }
 
 export const xtermFactory: TermFactory = () => {
   const t = new Terminal({
     fontFamily: "'Geist Mono', ui-monospace, monospace",
-    fontSize: 13,
+    fontSize: BASE_FONT,
     cursorBlink: true,
     theme: THEME,
     scrollback: 5000,
@@ -57,6 +63,8 @@ export const xtermFactory: TermFactory = () => {
     resize: (c, r) => t.resize(c, r),
     reset: () => t.reset(),
     fit: () => { try { fit.fit() } catch { /* contêiner sem tamanho ainda */ } },
+    get fontSize() { return t.options.fontSize ?? BASE_FONT },
+    set fontSize(n: number) { if (t.options.fontSize !== n) t.options.fontSize = n },
     focus: () => t.focus(),
     onData: (cb) => { t.onData(cb) },
     onResize: (cb) => { t.onResize(cb) },
@@ -66,13 +74,15 @@ export const xtermFactory: TermFactory = () => {
 
 const wsFactory: WsFactory = (url) => new WebSocket(url) as unknown as WsLike
 
-// fitScale é a escala que faz um terminal de naturalW×naturalH caber em
-// availW×availH sem ampliar: seguindo o PTY, o xterm tem as linhas e colunas
-// do terminal de origem e pode ser maior que o contêiner (que corta o
-// excesso, inclusive as linhas mais novas e o fim da barra de rolagem).
-export function fitScale(availW: number, availH: number, naturalW: number, naturalH: number): number {
-  if (availW <= 0 || availH <= 0 || naturalW <= 0 || naturalH <= 0) return 1
-  return Math.min(1, availW / naturalW, availH / naturalH)
+// fontToFit é o tamanho de fonte com que um terminal desenhado em
+// naturalW×naturalH com a fonte current cabe em availW×availH: seguindo o
+// PTY, o xterm tem as linhas e colunas do terminal de origem e pode ser maior
+// que o contêiner (que corta o excesso, inclusive as linhas mais novas e o fim
+// da barra de rolagem). Fica entre MIN_FONT e BASE_FONT; sem medidas, mantém.
+export function fontToFit(current: number, availW: number, availH: number, naturalW: number, naturalH: number): number {
+  if (availW <= 0 || availH <= 0 || naturalW <= 0 || naturalH <= 0) return current
+  const ratio = Math.min(availW / naturalW, availH / naturalH)
+  return Math.max(MIN_FONT, Math.min(BASE_FONT, Math.floor(current * ratio)))
 }
 
 const HOST_PADDING = 8
@@ -136,17 +146,23 @@ export function TerminalView({
     let gotSnapshot = false
 
     const followPty = () => ro || !engaged.current
-    // Seguindo o PTY o xterm não é ajustado ao contêiner: reduz a escala para
-    // ele caber inteiro (offset* ignoram transform, então medem o natural).
-    const applyScale = () => {
-      const s = followPty()
-        ? fitScale(el.clientWidth - 2 * HOST_PADDING, el.clientHeight - 2 * HOST_PADDING, scr.offsetWidth, scr.offsetHeight)
-        : 1
-      scr.style.transform = s < 1 ? `scale(${s.toFixed(4)})` : ''
+    // Seguindo o PTY o xterm não é ajustado ao contêiner: diminui a fonte para
+    // as linhas e colunas do PTY caberem inteiras (sem transform, o mouse e a
+    // seleção continuam alinhados). Fora disso a fonte volta à base.
+    const applyFont = () => {
+      if (!followPty()) { term.fontSize = BASE_FONT; return }
+      const natural = scr.querySelector<HTMLElement>('.xterm-screen') ?? scr
+      const next = fontToFit(term.fontSize, el.clientWidth - 2 * HOST_PADDING, el.clientHeight - 2 * HOST_PADDING, natural.offsetWidth, natural.offsetHeight)
+      if (next !== term.fontSize) term.fontSize = next
     }
-    const rescale = () => {
-      applyScale()
-      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { if (!disposed) applyScale() })
+    let raf = 0
+    const refont = () => {
+      applyFont()
+      // a célula muda depois do redesenho: confere de novo no próximo quadro
+      if (typeof requestAnimationFrame === 'function') {
+        cancelAnimationFrame(raf)
+        raf = requestAnimationFrame(() => { if (!disposed) applyFont() })
+      }
     }
     const sendResize = () => {
       if (followPty() || !ws || ws.readyState !== OPEN) return
@@ -157,7 +173,7 @@ export function TerminalView({
     const engage = () => {
       if (ro || engaged.current) return
       engaged.current = true
-      applyScale()
+      applyFont()
       term.fit()
       sendResize()
     }
@@ -188,6 +204,7 @@ export function TerminalView({
         gotSnapshot = false
         setStatus('conectado')
         term.reset() // o servidor reenvia o snapshot a cada conexão
+        applyFont() // ao alternar o modo a fonte volta à base (ou encolhe)
         if (!followPty()) {
           term.fit()
           sendResize()
@@ -201,7 +218,7 @@ export function TerminalView({
             const m = JSON.parse(d) as { type?: string; code?: number; cols?: number; rows?: number }
             if (m.type === 'info' && followPty() && m.cols && m.rows) {
               term.resize(m.cols, m.rows)
-              rescale()
+              refont()
             }
             if (m.type === 'exit') {
               exited = true
@@ -226,10 +243,11 @@ export function TerminalView({
     setStatus('conectando')
     connect()
 
-    const onWinResize = () => { if (followPty()) applyScale(); else term.fit() }
+    const onWinResize = () => { if (followPty()) applyFont(); else term.fit() }
     window.addEventListener('resize', onWinResize)
     const RO = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onWinResize)
     RO?.observe(el)
+    RO?.observe(scr)
 
     return () => {
       disposed = true
@@ -239,6 +257,7 @@ export function TerminalView({
       el.removeEventListener('keydown', engage, true)
       el.removeEventListener('paste', engage, true)
       RO?.disconnect()
+      if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf)
       if (ws) { ws.onclose = null; ws.onmessage = null; ws.onopen = null; ws.close() }
       term.dispose()
     }
@@ -286,8 +305,8 @@ export function TerminalView({
         aria-label="Terminal do agente"
         style={{ flex: '1 1 auto', minHeight: 240, padding: HOST_PADDING, borderRadius: 8, background: THEME.background, border: '1px solid var(--border)', overflow: 'hidden' }}
       >
-        {/* inline-block: a largura é a do xterm (medida para a escala). */}
-        <div ref={screenRef} style={{ display: 'inline-block', transformOrigin: 'top left' }} />
+        {/* Ocupa o contêiner: o FitAddon mede o pai do xterm (este div). */}
+        <div ref={screenRef} data-testid="terminal-screen" style={{ width: '100%', height: '100%' }} />
       </div>
     </div>
   )
