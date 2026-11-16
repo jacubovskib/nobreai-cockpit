@@ -7,7 +7,7 @@
 **Architecture:**
 - **Backend:** rota `DELETE /api/worktrees` que reaproveita `projectWorktrees`/`worktreeDetail` para achar o worktree e o estado dele.
 - **Travas:** só worktree ligado; sem sessão viva; não travado; confirmação para alterações não commitadas ou processos rodando.
-- **Git:** duas operações de escrita novas, explícitas e só por pedido do usuário: `git worktree remove [--force]` e `git branch -d`.
+- **Git:** operações de escrita novas, explícitas e só por pedido do usuário: `git worktree remove [--force]` e, para o branch, `git update-ref -d` na ponta verificada (revisão final; antes era `git branch -d`).
 - **UI:** um botão "Excluir worktree" na página do worktree, com confirmação inline.
 
 **Tech Stack:** Go 1.26 (`net/http`, `os/exec` do git), React + TanStack Query + Vitest.
@@ -37,7 +37,7 @@
 1. **Worktree com sessão viva** (inclusive a desta própria tela): recusado com 409, mesmo com `force`.
 2. **Checkout principal ou caminho que o git não lista para o projeto:** recusado (400 ou 404). Nada é apagado fora da lista do `git worktree list`.
 3. **Branch não integrado com `delete_branch: true`:** a pasta é removida e o branch fica. A resposta diz que o branch foi mantido e por quê. Nada de `-D`.
-4. **Worktree prunable** (diretório já apagado à mão): limpa o registro com `git worktree prune`, sem erro.
+4. **Worktree prunable** (diretório já apagado à mão): limpa só aquele registro com `git worktree remove` (com `git worktree prune` de reserva), sem erro. Prunable com a pasta ainda lá não é tratado como pasta sumida.
 5. **Pedido repetido** (worktree já removido): 404 claro, sem quebrar a lista.
 
 ---
@@ -56,7 +56,7 @@
   type WorktreeRemover interface {
       RemoveWorktree(repo, path string, force bool) error // git worktree remove [--force] -- path
       PruneWorktrees(repo string) error                   // git worktree prune
-      DeleteBranch(repo, branch string) error             // git branch -d -- branch (valida o nome com validBranch)
+      DeleteBranchAt(repo, branch, tip string) error      // git update-ref -d -- refs/heads/<branch> <tip> (revisão final; substitui DeleteBranch/branch -d)
   }
   var _ WorktreeRemover = Exec{}
   ```
@@ -76,8 +76,8 @@
 
     (`writeError` não serve; use `writeJSON(w, 409, …)`).
   - **Prunable:** `PruneWorktrees(repo)`. **Nos outros casos:** `RemoveWorktree(repo, path, force)`. Falha do git: 500 com a mensagem do git em pt-BR, prefixada `não consegui excluir o worktree: `.
-  - **`delete_branch`,** com o worktree tendo branch (não destacado) e o branch integrado na base: `DeleteBranch`.
-    - Se não estiver integrado, ou se `git branch -d` falhar, a resposta diz `branch_kept_reason` com o motivo: `não está integrado em <base>` ou o erro do git.
+  - **`delete_branch`,** com o worktree tendo branch (não destacado) e o branch integrado na base: `DeleteBranchAt` com a ponta verificada.
+    - Se não estiver integrado, se outro worktree usar o branch, ou se a remoção falhar, a resposta diz `branch_kept_reason` com o motivo em pt-BR: `não está integrado em <base>`, `o branch está em uso em outro worktree (<path>)` ou `não consegui apagar o branch: <motivo curto>`.
     - Branch igual à base: também é mantido (`é a base do projeto`).
   - **Sucesso:** 200 `{"removed": true, "branch_deleted": bool, "branch_kept_reason": string}`; publica `"worktrees"` (se existir) e `"sessions"`.
   - O repositório usado nos comandos é o checkout principal do projeto (o worktree `Main` da lista).
