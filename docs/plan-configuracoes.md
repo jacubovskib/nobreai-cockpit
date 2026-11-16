@@ -176,7 +176,7 @@ func TestOverviewIncompleteAlertDependsOnSetting(t *testing.T)  // card pausado 
   ```
 
   Regras, nesta ordem:
-  1. Backlog e Concluído só podem ter `pronto_para_retomar`.
+  1. Concluído nunca tem sinal. Backlog só pode ter `bloqueado` ou `pronto_para_retomar`.
   2. Com `BlockedBy` e `BlockerExists`: `BlockerConcluded` dá `pronto_para_retomar`; senão, `bloqueado`. Vale em `pausado` e `backlog`.
   3. Card em `pausado` com `OpenQuestions > 0` dá `aguardando_voce`.
   4. Nos outros casos, a regra atual `CardSignal(col, last, now)` ("parado" e "aguardando revisão" depois de 24 h).
