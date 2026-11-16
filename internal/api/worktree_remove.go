@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -14,6 +13,7 @@ import (
 
 const (
 	msgRemoveUnavailable = "exclusão de worktrees indisponível neste daemon"
+	msgProcsUnknown      = "não consegui verificar os processos agora; confirme para excluir mesmo assim"
 	msgNeedsConfirm      = "o worktree tem alterações não commitadas ou processos rodando; confirme para excluir mesmo assim"
 )
 
@@ -44,6 +44,8 @@ type needsConfirm struct {
 	Files        []gitinfo.FileChange `json:"files"`
 	TotalFiles   int                  `json:"total_files"`
 	Processes    []removeProc         `json:"processes"`
+	// ProcessesUnknown: o medidor de recursos não tinha amostra pronta.
+	ProcessesUnknown bool `json:"processes_unknown"`
 }
 
 // removeWorktree: DELETE /api/worktrees. Só apaga um worktree ligado que o
@@ -108,8 +110,17 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sessão viva de qualquer época (a lista só traz as das últimas 24 h).
-	all, err := s.st.ProjectSessionsSince(p.ID, time.Time{})
+	// Apagar o pai apagaria o worktree aninhado (e o que ele tem não commitado).
+	for i, x := range pw.Worktrees {
+		if i != idx && strings.HasPrefix(x.Path, strings.TrimRight(v.Path, "/")+"/") {
+			writeError(w, http.StatusConflict, "há outro worktree dentro deste ("+x.Path+"); exclua-o antes")
+			return
+		}
+	}
+
+	// Sessão viva de qualquer época e de qualquer projeto: estar viva é uma
+	// propriedade do worktree.
+	all, err := s.st.LiveSessions()
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
@@ -127,7 +138,10 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 			nc.Files, nc.TotalFiles = nonNil(in.Files), in.TotalFiles
 		}
 		if s.deps.Resources != nil {
-			procs, _ := s.deps.Resources.Snapshot()
+			procs, ready := s.deps.Resources.Snapshot()
+			if !ready || procs == nil {
+				nc.ProcessesUnknown = true
+			}
 			paths := make([]string, len(pw.Worktrees))
 			for i, x := range pw.Worktrees {
 				paths[i] = x.Path
@@ -136,7 +150,10 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 				nc.Processes = append(nc.Processes, removeProc{PID: pr.PID, Name: pr.Comm})
 			}
 		}
-		if nc.TotalFiles > 0 || len(nc.Processes) > 0 {
+		if nc.TotalFiles > 0 || len(nc.Processes) > 0 || nc.ProcessesUnknown {
+			if nc.TotalFiles == 0 && len(nc.Processes) == 0 {
+				nc.Error = msgProcsUnknown
+			}
 			writeJSON(w, http.StatusConflict, nc)
 			return
 		}
@@ -153,7 +170,9 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res := RemoveResult{Removed: true}
-	if req.DeleteBranch && v.Branch != "" && !v.Detached {
+	if req.DeleteBranch && (v.Branch == "" || v.Detached) {
+		res.BranchKeptReason = "o worktree não tem branch (HEAD destacado)"
+	} else if req.DeleteBranch {
 		res.BranchDeleted, res.BranchKeptReason = deleteIntegratedBranch(remover, branches, *p, repo, v.Branch)
 	}
 	s.publish("sessions")
