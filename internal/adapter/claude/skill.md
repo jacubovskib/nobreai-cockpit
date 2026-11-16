@@ -32,6 +32,7 @@ Se o usuário não quiser o repositório no board, ele desliga a captura do proj
 - Se o usuário citar uma chave `NAC-`, não crie outro: retome com `nobre resume NAC-12`.
 - Perguntas rápidas e ajustes de uma linha não viram card.
 - Antes de criar, veja se o contexto da sessão lista cards pausados deste repositório e branch; retome em vez de duplicar.
+- Se o contexto da sessão disser "Só crie card quando o usuário pedir", só crie card quando o usuário pedir (vale também para os cards do levantamento: liste-os ao usuário).
 
 ## Comandos
 
@@ -43,6 +44,7 @@ Se o usuário não quiser o repositório no board, ele desliga a captura do proj
 - `nobre todo add "cobrir o erro de state inválido"`: adiciona uma pendência; `nobre todo done 3` conclui a pendência 3.
 - `nobre ask "Usar cookie ou localStorage para o token?"`: registra uma pergunta que precisa do usuário.
 - `nobre answer 4 "cookie httpOnly"`: responde a pergunta 4 do card (os ids aparecem em `nobre ask`, `nobre status` e no pacote de retomada como `- [4] <texto>`).
+- `nobre block NAC-4 --why "precisa do merge do NAC-4"`: marca que este card só continua depois do NAC-4 (o board mostra "bloqueado por NAC-4"); `nobre block --clear` remove.
 - `nobre branch feat/oauth`: informa o branch de trabalho do card; rode ao criar ou entrar no branch ou worktree do card. Recusa o branch base do projeto.
 - `nobre test "go test ./auth/..."`: registra como testar.
 - `nobre done`: marca o card como pronto para revisão. Recusa se "Como testar" estiver vazio ou mais antigo que a última edição de arquivo, ou se houver pergunta sem resposta. `nobre done --force` ignora essas recusas; use só depois de registrar o motivo com `nobre note`.
@@ -55,6 +57,7 @@ Se o usuário não quiser o repositório no board, ele desliga a captura do proj
 - Atualize "Onde parei" com `nobre note` a cada passo relevante e antes de parar. Escreva o essencial: o que está feito, o que vem agora e qualquer armadilha.
 - Marque com `nobre file` os arquivos essenciais, sempre com o motivo.
 - Registre decisões com o porquê, e perguntas em aberto com `nobre ask`; assim que uma pergunta for decidida, responda com `nobre answer <id> "<resposta>"`.
+- Se o card só puder continuar depois de outro, rode `nobre block <KEY> --why "<motivo>"` antes de parar; o board passa a mostrar "bloqueado por <KEY>" e, quando o outro concluir, "pronto para retomar".
 - Rode `nobre branch <nome>` ao criar ou entrar no branch ou worktree do card, para o card acompanhar o trabalho.
 - Atualize "Como testar" (`nobre test`) depois da última mudança de código e antes de `nobre done`; um "Como testar" mais antigo que a última edição bloqueia o `done`.
 - Antes de `nobre done`, confira `nobre status`: objetivo, como testar, arquivo essencial e pendências.

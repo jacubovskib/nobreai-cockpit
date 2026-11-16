@@ -95,10 +95,15 @@ func TestSkillGatesOnRegisteredPhrase(t *testing.T) {
 	if !strings.Contains(skillContent, registeredPhrase) {
 		t.Fatalf("skill.md não cita a frase %q", registeredPhrase)
 	}
-	for _, want := range []string{unregisteredPhrase, "nobre project scan", "nobre card add"} {
+	for _, want := range []string{unregisteredPhrase, "nobre project scan", "nobre card add", "nobre block"} {
 		if !strings.Contains(skillContent, want) {
 			t.Fatalf("skill.md não contém %q", want)
 		}
+	}
+	// Com agent_creates_cards desligado o SessionStart diz "Só crie card
+	// quando o usuário pedir"; a skill manda obedecer.
+	if !strings.Contains(skillContent, "Só crie card quando o usuário pedir") || !strings.Contains(askOnlyGuidance, "Só crie card quando o usuário pedir") {
+		t.Fatal("skill.md não trata o contexto \"Só crie card quando o usuário pedir\"")
 	}
 	if strings.Contains(skillContent, "não cadastre") {
 		t.Fatal("skill.md não deve mais proibir cadastrar o repositório")

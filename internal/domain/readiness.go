@@ -28,6 +28,10 @@ type Settings struct {
 	PlanWarnPct int `json:"plan_warn_pct"`
 	// Demo marca o banco de demonstração (nobred --seed-demo): a UI mostra a faixa "Dados de demonstração".
 	Demo bool `json:"demo"`
+	// AgentCreatesCards: o agente cria card por conta própria; desligado, só quando o usuário pede.
+	AgentCreatesCards bool `json:"agent_creates_cards"`
+	// InjectPausedCards: o SessionStart lista os cards pausados do repositório.
+	InjectPausedCards bool `json:"inject_paused_cards"`
 }
 
 // DefaultSettings devolve os padrões do piloto.
@@ -45,6 +49,8 @@ func DefaultSettings() Settings {
 		Currency:              "USD",
 		IncompleteAction:      "ask_agent",
 		PlanWarnPct:           80,
+		AgentCreatesCards:     true,
+		InjectPausedCards:     true,
 	}
 }
 

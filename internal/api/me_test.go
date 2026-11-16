@@ -569,3 +569,138 @@ func TestMeCardsDropsBaseBranch(t *testing.T) {
 		t.Fatalf("branch = %q", got.Branch)
 	}
 }
+
+func TestMeBlock(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	other, err := a.st.CreateCard(domain.Card{Title: "Outro", ProjectID: c.ProjectID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/block", map[string]string{"key": other.Key, "why": "precisa do merge"}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("block = %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[domain.Card](t, rec); got.BlockedBy != other.Key {
+		t.Fatalf("card = %+v", got)
+	}
+	ct, _ := a.st.CardContent(c.ID)
+	if len(ct.Decisions) != 1 || ct.Decisions[0].What != "Bloqueado por "+other.Key || ct.Decisions[0].Why != "precisa do merge" {
+		t.Fatalf("decisões = %+v", ct.Decisions)
+	}
+	rec = a.do(t, "POST", "/api/me/block", map[string]string{"key": c.Key}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "um card não pode bloquear a si mesmo" {
+		t.Fatalf("própria = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/me/block", map[string]string{"key": "NAC-999"}, 4242)
+	if rec.Code != http.StatusNotFound || decode[map[string]string](t, rec)["error"] != "card NAC-999 não encontrado" {
+		t.Fatalf("inexistente = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/me/block", map[string]string{"key": ""}, 4242)
+	if rec.Code != http.StatusOK || decode[domain.Card](t, rec).BlockedBy != "" {
+		t.Fatalf("limpar = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// I1: o limite de custo pausa o card com a sessão ainda viva; o nobre done
+// dessa sessão o leva para Revisão e limpa o motivo da pausa.
+func TestMeDoneFromLimitPauseMovesToRevisao(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.doingCard(t)
+	if ok, err := a.st.PauseForLimit(c.ID, testNow); err != nil || !ok {
+		t.Fatalf("PauseForLimit = %v %v", ok, err)
+	}
+	if err := a.st.SetHandoffIncomplete(c.ID, true, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/me/test", map[string]string{"text": "go test"}, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("test = %d %s", rec.Code, rec.Body)
+	}
+	if rec := a.do(t, "POST", "/api/me/done", nil, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	got, _ := a.st.GetCard(c.Key)
+	if got.Column != domain.Revisao || got.PauseReason != "" || got.HandoffIncomplete {
+		t.Fatalf("card = %+v", got)
+	}
+	evs, _ := a.st.RecentEvents(1)
+	if len(evs) != 1 || evs[0].Kind != domain.EvDone {
+		t.Fatalf("evs = %+v", evs)
+	}
+}
+
+// I1: pausado por limite ainda passa pelas checagens do done.
+func TestMeDoneFromLimitPauseKeepsChecks(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.doingCard(t)
+	if _, err := a.st.PauseForLimit(c.ID, testNow); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/me/done", nil, 4242)
+	if rec.Code != http.StatusConflict || !strings.Contains(decode[map[string]string](t, rec)["error"], "registre com nobre test") {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Column != domain.Pausado || got.PauseReason != domain.PauseReasonLimit {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+// I1: fora de Em andamento (e sem ser pausa por limite) o done não finge sucesso.
+func TestMeDoneRefusesWhenNotInProgress(t *testing.T) {
+	for _, tc := range []struct {
+		col  domain.Column
+		want string
+	}{
+		{domain.Revisao, "o card está em Revisão; nobre done só move cards em andamento"},
+		{domain.Pausado, "o card está em Pausado; nobre done só move cards em andamento"},
+		{domain.Concluido, "o card está em Concluído; nobre done só move cards em andamento"},
+	} {
+		t.Run(string(tc.col), func(t *testing.T) {
+			a := newTestAPI(t)
+			c := a.doingCard(t)
+			if err := a.st.MoveCard(c.Key, tc.col); err != nil {
+				t.Fatal(err)
+			}
+			rec := a.do(t, "POST", "/api/me/done", map[string]bool{"force": true}, 4242)
+			if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != tc.want {
+				t.Fatalf("code = %d %s", rec.Code, rec.Body)
+			}
+			if got, _ := a.st.GetCard(c.Key); got.Column != tc.col {
+				t.Fatalf("column = %s", got.Column)
+			}
+			if evs, _ := a.st.RecentEvents(5); len(evs) != 0 {
+				for _, e := range evs {
+					if e.Kind == domain.EvDone {
+						t.Fatalf("done registrado: %+v", evs)
+					}
+				}
+			}
+		})
+	}
+}
+
+// nobre block nac-2 grava a chave normalizada (NAC-2).
+func TestMeBlockNormalizesKey(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	if _, err := a.st.CreateCard(domain.Card{Title: "Outro", ProjectID: c.ProjectID}); err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/block", map[string]string{"key": " nac-2 "}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("block = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.BlockedBy != "NAC-2" {
+		t.Fatalf("blocked_by = %q", got.BlockedBy)
+	}
+	ct, _ := a.st.CardContent(c.ID)
+	if len(ct.Decisions) != 1 || ct.Decisions[0].What != "Bloqueado por NAC-2" {
+		t.Fatalf("decisões = %+v", ct.Decisions)
+	}
+	rec = a.do(t, "POST", "/api/me/block", map[string]string{"key": "nac-1"}, 4242)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("própria em minúsculas = %d %s", rec.Code, rec.Body)
+	}
+}

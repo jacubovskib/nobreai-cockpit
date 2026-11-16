@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
@@ -84,5 +85,29 @@ func TestSessionStartIgnoredProjectNoWarning(t *testing.T) {
 	}
 	if r := e.call(t, "session_start", with("cwd", repo)); r.Stdout != "" {
 		t.Fatalf("projeto ignorado não avisa: %q", r.Stdout)
+	}
+}
+
+// I2: com agent_creates_cards desligado, o aviso de não cadastrado mantém o
+// cadastro e o levantamento, mas só lista os cards sugeridos ao usuário.
+func TestSessionStartUnregisteredWithoutAgentCreatesCards(t *testing.T) {
+	e := newEnv(t)
+	e.realGit()
+	repo := gitRepo(t)
+	e.project(t)
+	set := domain.DefaultSettings()
+	set.AgentCreatesCards = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", repo)))
+	for _, want := range []string{unregisteredPhrase, "nobre project add " + repo, "nobre project scan",
+		"liste ao usuário os cards sugeridos (não crie sem ele pedir)", "Só crie card quando o usuário pedir"} {
+		if !strings.Contains(ctx, want) {
+			t.Fatalf("contexto sem %q: %q", want, ctx)
+		}
+	}
+	if strings.Contains(ctx, "crie os cards importantes") || strings.Contains(ctx, "quando começar algo que precisa de histórico") {
+		t.Fatalf("contexto manda criar cards: %q", ctx)
 	}
 }

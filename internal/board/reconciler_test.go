@@ -222,3 +222,21 @@ func TestReconcileEndsIdleSessionWithoutPID(t *testing.T) {
 		t.Fatalf("col = %s", column(t, st, c.Key))
 	}
 }
+
+func TestReconcilerMarksIncompleteOnDeadProcess(t *testing.T) {
+	st := newStore(t)
+	putSettings(t, st, "mark", nil)
+	c, _ := liveCard(t, st, 4242)
+	set, _ := st.GetSettings()
+	root := fakeProc(t)
+	if _, err := Reconcile(st, root, t0, set); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reconcile(st, root, t0.Add(16*time.Minute), set); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetCard(c.Key)
+	if got.Column != domain.Pausado || !got.HandoffIncomplete {
+		t.Fatalf("card = %+v", got)
+	}
+}

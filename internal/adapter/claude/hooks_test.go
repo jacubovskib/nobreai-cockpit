@@ -998,3 +998,215 @@ func TestSessionStartOnWorkBranchListsBranchAndUnbranchedPaused(t *testing.T) {
 		t.Fatalf("contexto:\n%s", ctx)
 	}
 }
+
+func TestSessionStartOmitsPausedCardsWhenDisabled(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	set := domain.DefaultSettings()
+	set.InjectPausedCards = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.CreateCard(domain.Card{Title: "Migrar OAuth2", ProjectID: p.ID, Branch: "main",
+		Column: domain.Pausado, WhereStopped: "falta o teste do refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if strings.Contains(ctx, "Cards pausados neste repositório") || strings.Contains(ctx, "NAC-1") {
+		t.Fatalf("contexto com cards pausados:\n%s", ctx)
+	}
+}
+
+func TestSessionStartWithoutAgentCreatesCards(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	set := domain.DefaultSettings()
+	set.AgentCreatesCards = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if !strings.HasPrefix(ctx, registeredPhrase) || !strings.Contains(ctx, `Só crie card quando o usuário pedir ("crie um card para isso"); se ele citar uma chave NAC-, use nobre resume <KEY>.`) ||
+		strings.Contains(ctx, "quando começar algo que precisa de histórico") || !strings.Contains(ctx, "nobre note") {
+		t.Fatalf("contexto:\n%s", ctx)
+	}
+}
+
+func TestStopIgnoresWhereStoppedWhenRuleDisabled(t *testing.T) {
+	e := newEnv(t)
+	set := domain.DefaultSettings()
+	set.Rules["where_stopped"] = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	e.call(t, "post_tool_use_edit")
+	if r := e.call(t, "stop"); r.Stdout != "" {
+		t.Fatalf("não deveria bloquear: %q", r.Stdout)
+	}
+}
+
+func TestPreToolUsePauseMovesCardToPaused(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	e.overLimit(t, "pause")
+	r := e.call(t, "pre_tool_use_bash")
+	if !strings.Contains(r.Stdout, `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout = %s", r.Stdout)
+	}
+	got, _ := e.st.GetCard(c.Key)
+	if got.Column != domain.Pausado || got.PauseReason != "limite de custo" {
+		t.Fatalf("card = %+v", got)
+	}
+	evs, err := e.st.EventsByKind(domain.EvLimitPause, 10)
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("eventos = %+v, err = %v", evs, err)
+	}
+	if !e.published("cards") {
+		t.Fatal("cards não publicado")
+	}
+	e.call(t, "pre_tool_use_bash")
+	if evs, _ := e.st.EventsByKind(domain.EvLimitPause, 10); len(evs) != 1 {
+		t.Fatalf("evento duplicado: %d", len(evs))
+	}
+}
+
+func TestPreToolUseWarnKeepsCardInProgress(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	e.overLimit(t, "warn")
+	e.call(t, "pre_tool_use_bash")
+	if got, _ := e.st.GetCard(c.Key); got.Column != domain.EmAndamento {
+		t.Fatalf("column = %s", got.Column)
+	}
+}
+
+func TestPreToolUseResumesCardWhenLimitRaised(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	e.overLimit(t, "pause")
+	e.call(t, "pre_tool_use_bash")
+	if got, _ := e.st.GetCard(c.Key); got.Column != domain.Pausado {
+		t.Fatalf("column = %s", got.Column)
+	}
+	if err := e.st.PutLimit(domain.Limit{Agent: "claude", DailyUSD: 100, WarnPct: 80, Action: "pause"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.call(t, "pre_tool_use_bash"); r.Stdout != "" {
+		t.Fatalf("não deveria negar: %s", r.Stdout)
+	}
+	got, _ := e.st.GetCard(c.Key)
+	if got.Column != domain.EmAndamento || got.PauseReason != "" {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+func TestSessionStartPausedListShowsReason(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	blocker, err := e.st.CreateCard(domain.Card{Title: "Bloqueador", ProjectID: p.ID, Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(title string, mod func(*domain.Card)) domain.Card {
+		c, err := e.st.CreateCard(domain.Card{Title: title, ProjectID: p.ID, Branch: "main", Column: domain.Pausado})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mod(&c)
+		if err := e.st.UpdateCard(c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	mk("Bloqueado", func(c *domain.Card) { c.BlockedBy = blocker.Key })
+	mk("Limite", func(c *domain.Card) { c.PauseReason = domain.PauseReasonLimit })
+	q := mk("Pergunta", func(*domain.Card) {})
+	if _, err := e.st.AddQuestion(domain.Question{CardID: q.ID, Text: "qual?"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	for _, want := range []string{" · bloqueado por " + blocker.Key, " · pausado por limite de custo", " · aguardando você (1 pergunta(s))", "nobre block <KEY>"} {
+		if !strings.Contains(ctx, want) {
+			t.Fatalf("contexto sem %q:\n%s", want, ctx)
+		}
+	}
+	if err := e.st.MoveCard(blocker.Key, domain.Concluido); err != nil {
+		t.Fatal(err)
+	}
+	ctx = additionalContext(t, e.call(t, "session_start"))
+	if !strings.Contains(ctx, " · pronto para retomar ("+blocker.Key+" concluído)") {
+		t.Fatalf("contexto sem pronto para retomar:\n%s", ctx)
+	}
+}
+
+// I2: com agent_creates_cards desligado, o Stop não lembra de criar card.
+func TestStopReminderSkippedWithoutAgentCreatesCards(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	set := domain.DefaultSettings()
+	set.AgentCreatesCards = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"post_tool_use_edit", "post_tool_use_write", "post_tool_use_multiedit"} {
+		e.call(t, f)
+	}
+	if r := e.call(t, "stop"); r.Stdout != "" {
+		t.Fatalf("lembrete com a opção desligada: %q", r.Stdout)
+	}
+}
+
+// Falha ao gravar a marca de handoff incompleto não impede o SessionEnd de
+// registrar o fim e ler o transcript (tokens e custo não se perdem).
+func TestSessionEndRecordsEndWhenMarkFails(t *testing.T) {
+	e := newEnv(t)
+	set := domain.DefaultSettings()
+	set.IncompleteAction = "mark"
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	if _, err := e.st.DB.Exec(`CREATE TRIGGER fail_mark BEFORE UPDATE OF handoff_incomplete ON cards
+		BEGIN SELECT RAISE(ABORT, 'falha simulada'); END`); err != nil {
+		t.Fatal(err)
+	}
+	e.call(t, "session_end")
+	e.a.Wait()
+	if len(e.events(t, domain.EvSessionEnd)) != 1 {
+		t.Fatal("session_end não registrado")
+	}
+	if ts, _ := e.st.Totals(store.TotalsFilter{GroupBy: "session"}); len(ts) != 1 || ts[0].Output == 0 {
+		t.Fatalf("uso = %+v", ts)
+	}
+	if got, _ := e.st.GetCard("NAC-1"); got.Column != domain.Pausado || got.HandoffIncomplete {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+// Card pausado por limite com a sessão dona ainda viva não é sugerido para
+// nobre resume (ela continua trabalhando nele).
+func TestSessionStartSkipsPausedCardWithLiveSession(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	c, err := e.st.CreateCard(domain.Card{Title: "Pausado pelo limite", ProjectID: p.ID, Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.StartSession(domain.Session{ID: "claude:dona", Agent: "claude", PID: 7777, Cwd: "/w/api", StartedAt: t0, LastEventAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.AttachSession("claude:dona", c.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.st.PauseForLimit(c.ID, t0); err != nil || !ok {
+		t.Fatalf("PauseForLimit = %v %v", ok, err)
+	}
+	if _, err := e.st.CreateCard(domain.Card{Title: "Pausado sem dona", ProjectID: p.ID, Branch: "main", Column: domain.Pausado}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if strings.Contains(ctx, "NAC-1 · ") || !strings.Contains(ctx, "NAC-2 · Pausado sem dona") {
+		t.Fatalf("contexto:\n%s", ctx)
+	}
+}

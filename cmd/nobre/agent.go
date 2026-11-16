@@ -134,6 +134,36 @@ func (c *cli) answer(args []string) error {
 	return nil
 }
 
+func (c *cli) block(args []string) error {
+	const u = `uso: nobre block <KEY> [--why "<motivo>"] | nobre block --clear`
+	fs := flag.NewFlagSet("block", flag.ContinueOnError)
+	why := fs.String("why", "", "motivo")
+	clear := fs.Bool("clear", false, "remove o bloqueio")
+	pos, err := c.parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if *clear {
+		if len(pos) != 0 {
+			return usagef(u)
+		}
+		if _, err := c.client().Block(ctx(), "", ""); err != nil {
+			return err
+		}
+		fmt.Fprintln(c.out, "Bloqueio removido.")
+		return nil
+	}
+	if len(pos) != 1 {
+		return usagef(u)
+	}
+	card, err := c.client().Block(ctx(), pos[0], *why)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Card %s bloqueado por %s.\n", card.Key, card.BlockedBy)
+	return nil
+}
+
 func (c *cli) branch(args []string) error {
 	const u = `uso: nobre branch <nome>`
 	pos, err := c.parse(flag.NewFlagSet("branch", flag.ContinueOnError), args)

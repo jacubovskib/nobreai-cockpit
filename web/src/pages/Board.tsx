@@ -10,7 +10,7 @@ import { ReadinessPips } from '../ui/ReadinessPips'
 import { ProjectTag } from '../ui/ProjectTag'
 import { useProjectFilter, useWithProject } from '../app/project'
 import { NewTask } from './NewTask'
-import { COLUMNS, groupByColumn, minutesSince, plural, signalText } from './board'
+import { COLUMNS, cardMarks, groupByColumn, minutesSince, plural, signalColor, signalText } from './board'
 
 const FILTERS = [
   { id: 'todos', label: 'Todos' },
@@ -27,7 +27,7 @@ const cardBox = (c: CardSummary, stale: boolean): React.CSSProperties => ({
 
 function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (key: string, col: Column) => void; busy: boolean; tag?: React.ReactNode }) {
   const withP = useWithProject()
-  const signal = signalText(card.signal, card.signal_since)
+  const signal = signalText(card)
   const stale = card.column === 'em_andamento' && !card.live && !signal
   const mins = minutesSince(card.last_activity_at)
   const staleText = card.pid_dead_at
@@ -49,13 +49,14 @@ function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (ke
           </span>
         )}
         {signal && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: card.signal === 'parado' ? 'var(--warn)' : 'var(--text-2)' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: signalColor(card.signal) }}>
             {card.signal === 'parado'
               ? <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M12 3 2 21h20z" /><path d="M12 10v5M12 18v.5" /></svg>
               : <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>}
             {signal}
           </span>
         )}
+        {cardMarks(card, card.readiness.ready).map((m) => <span key={m} className="badge">{m}</span>)}
         {card.branch_merged_at && card.column !== 'concluido' && <span className="badge">branch integrada</span>}
         {stale && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--warn)' }}>

@@ -1,6 +1,6 @@
 # Status do piloto — NobreAI Cockpit
 
-Atualizado em 2026-11-07. Branch: `feat/piloto-bases-frontend`. Plano: `docs/plan.md`. Spec: `docs/spec.md`.
+Atualizado em 2026-11-15 (a seção "Configurações em vigor" vem do branch `feat/configuracoes`). Plano: `docs/plan.md`. Spec: `docs/spec.md`.
 
 ## Etapa "bases + frontend": concluída
 
@@ -69,6 +69,49 @@ Branch `feat/terminais` (a partir de `feat/piloto-integracao`):
 - **Worktrees** (NAC-1 a NAC-3, feitos pelo próprio agente durante o teste real): visualização dos worktrees ligados a agentes, recursos do sistema por worktree e página de detalhe. O "Continuar" abre o agente no worktree do branch do card, quando ele existir.
 
 Revisão por task, revisão final, correções e re-revisão aprovadas. Pontos menores adiados ficam no ledger local `.superpowers/sdd/plan-terminais/progress.md`.
+
+## Configurações em vigor (NAC-4, 2026-11-15)
+
+Branch `feat/configuracoes` (plano `docs/plan-configuracoes.md`). Cada opção da tela Configuração agora tem efeito real, ou diz que é "em breve".
+
+### Criação de cards
+| Opção | Onde vale |
+|---|---|
+| Quando eu pedir | Sempre ativo. |
+| Quando o agente identificar que está começando algo que precisa de histórico (`agent_creates_cards`, padrão ligado) | `SessionStart`: o contexto injetado traz o critério de criação. Desligada, ele diz "Só crie card quando o usuário pedir" (a skill obedece), o aviso de repositório não cadastrado mantém o cadastro e o levantamento mas manda listar ao usuário os cards sugeridos em vez de criá-los, e o lembrete do hook `Stop` não dispara. |
+| Se ele esquecer, lembrar (`reminder_edit_threshold`, padrão 3 arquivos; desligado = 0) | Hook `Stop`: numa sessão sem card (e com `agent_creates_cards` ligado), lembra o agente uma vez por sessão (bloqueia o fim do turno) quando ela editou esse número de arquivos distintos ou mais. 0 desliga. |
+| Mostrar cards pausados no início da sessão (`inject_paused_cards`, padrão ligado) | `SessionStart`: lista os cards pausados do mesmo repositório e branch. Desligada, a seção "Cards pausados neste repositório" não aparece. |
+
+Um banco que não tem as duas chaves novas assume ligado (o comportamento de antes).
+
+### Pronto para handoff
+| Opção | Onde vale |
+|---|---|
+| Critérios (objetivo, onde parei, arquivo essencial, falta, como testar, sem perguntas abertas) | Barrinhas do card e do board, e a regra do fim de sessão. |
+| "Onde parei" vale por (minutos) | Prontidão do card. |
+| Se a sessão terminar sem cumprir a regra | `Pedir ao agente que complete` (`ask_agent`): o hook `Stop` bloqueia uma vez o fim do turno quando a sessão editou arquivos depois do último "Onde parei" (só se o critério "Onde parei" estiver ligado). `Marcar como handoff incompleto` (`mark`): ao encerrar a sessão, se o card ficou em Pausado, sem outra sessão viva e fora da regra, o card guarda a marca `handoff_incomplete` e a Sala de controle alerta "NAC-x foi pausado com handoff incompleto". Hook de fim de sessão e reconciliador usam o mesmo caminho (`board.FinishSession`). Trocar de `mark` para `ask_agent` esconde o alerta, mas a marca fica guardada. |
+| Continuar com… (terminal ou segundo plano) e comando do terminal | Botão "Continuar" do card. |
+| Carência (minutos) | Reconciliador: encerra a sessão cujo processo sumiu. |
+
+### Limites de custo
+Ação em 100% "Bloquear o agente e mover o card para Pausado": o hook `PreToolUse` nega a ferramenta (comandos `nobre` sempre passam, para o agente registrar o handoff), move o card para Pausado com o motivo "limite de custo" e registra o evento. Na primeira ferramenta permitida depois de o limite ser elevado, o card volta para Em andamento. Se a própria sessão, ainda viva, rodar `nobre done`, o card pausado por limite vai para Revisão e perde o motivo da pausa; fora disso, `nobre done` em card que não está em Em andamento é recusado ("o card está em <coluna>; nobre done só move cards em andamento"). A Sala de controle mostra o evento como "pausado por limite de custo", e o SessionStart não sugere retomar um card pausado que ainda tem sessão viva. "Só avisar" não bloqueia nada. O aviso do plano (`plan_warn_pct`) vale na Sala de controle.
+
+### Sinais do card
+Mostrados no board e na lista de cards da página do projeto (a lista de projetos conta os cards parados e aguardando revisão; a página do card não mostra sinal). Valem na hora (os três primeiros não esperam 24 h):
+- **bloqueado por NAC-x**: card em Pausado ou Backlog com `nobre block NAC-x [--why ...]` e o bloqueador existente e não concluído. `nobre block --clear` remove; chave inexistente é recusada.
+- **pronto para retomar (NAC-x concluído)**: o bloqueador foi concluído.
+- **aguardando você há …**: card em Pausado com pergunta aberta.
+- **parado**: Em andamento ou Pausado sem atividade há mais de 24 h (o agente possivelmente travou: mais de 24 h sem atividade).
+- **aguardando revisão**: card em Revisão sem atividade há mais de 24 h.
+
+`pause_reason`, `handoff_incomplete` e `blocked_by` são limpos quando o card volta para Em andamento (inclusive ao ser retomado por outra sessão). Mover o card à mão para outra coluna limpa `pause_reason`, e sair de Pausado limpa `handoff_incomplete` (a marca só aparece em cards pausados). A chave do `nobre block` é normalizada (`nac-2` vira `NAC-2`). Se o bloqueador for apagado, o card cai na regra normal.
+
+### Ainda "em breve"
+- Modo tmux do "Continuar" (aparece desabilitado).
+- Adaptadores Codex e Kiro.
+- Limites mensais.
+- Moeda nos textos gerados pelo daemon (SessionStart, avisos): saem sempre em US$; a moeda escolhida vale só na interface.
+- Continuar com outro agente automaticamente ao pausar por limite.
 
 ## Plano 2 (fora do piloto)
 Adaptadores Codex e Kiro, modos tmux e segundo plano, "bloquear novas sessões", limites mensais, linha do tempo das sessões e último prompt no pacote, indicador "Retomadas sem perguntas", MCP, times.

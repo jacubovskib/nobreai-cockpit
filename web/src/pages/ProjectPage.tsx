@@ -41,7 +41,7 @@ export function ProjectPage() {
                   <Link to={withP(`/cards/${card.key}`)} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'baseline', color: 'inherit', textDecoration: 'none' }}>
                     <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5, color: 'var(--text-2)' }}>{card.key}</span>
                     <span>{card.title}</span>
-                    {card.signal && <span style={muted}>{signalText(card.signal, card.signal_since)}</span>}
+                    {card.signal && <span style={muted}>{signalText(card)}</span>}
                   </Link>
                 </li>
               ))}

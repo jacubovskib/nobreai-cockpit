@@ -184,3 +184,26 @@ func TestTouchedFiles(t *testing.T) {
 		t.Fatalf("none = %+v, %v", none, err)
 	}
 }
+
+func TestSettingsDefaultsForNewKeys(t *testing.T) {
+	s := newTestStore(t)
+	st, err := s.GetSettings()
+	if err != nil || !st.AgentCreatesCards || !st.InjectPausedCards {
+		t.Fatalf("padrões = %+v, err = %v", st, err)
+	}
+	// Banco antigo: grava só chaves antigas, sem as novas.
+	if _, err := s.DB.Exec(`DELETE FROM settings WHERE key IN ('agent_creates_cards','inject_paused_cards')`); err != nil {
+		t.Fatal(err)
+	}
+	if st, err = s.GetSettings(); err != nil || !st.AgentCreatesCards || !st.InjectPausedCards {
+		t.Fatalf("sem as chaves = %+v, err = %v", st, err)
+	}
+	st.AgentCreatesCards, st.InjectPausedCards = false, false
+	if err := s.PutSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetSettings()
+	if got.AgentCreatesCards || got.InjectPausedCards {
+		t.Fatalf("PutSettings(false) = %+v", got)
+	}
+}

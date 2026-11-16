@@ -383,11 +383,26 @@ func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (ada
 		return adapter.HookReply{}, err
 	}
 	if !ls.Over || ls.Action != "pause" {
+		if sess.CardID != nil {
+			if ok, err := a.st.ResumeFromLimit(*sess.CardID, now); err != nil {
+				log.Printf("hook claude: retomar card após limite: %v", err)
+			} else if ok {
+				a.publish("cards")
+			}
+		}
 		return adapter.HookReply{}, nil
 	}
 	detail, err := a.limitDetail(ls, sess.CardID)
 	if err != nil {
 		return adapter.HookReply{}, err
+	}
+	if sess.CardID != nil {
+		if ok, err := a.st.PauseForLimit(*sess.CardID, now); err != nil {
+			log.Printf("hook claude: pausar card por limite: %v", err)
+		} else if ok {
+			a.event(sess.ID, domain.EvLimitPause, map[string]any{"detail": detail}, now)
+			a.publish("cards")
+		}
 	}
 	return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 		"hookEventName":            "PreToolUse",
@@ -421,8 +436,10 @@ func usd(v float64) string {
 // stop decide se o turno é bloqueado. Com card e IncompleteAction
 // "ask_agent", bloqueia quando a sessão editou arquivos do card depois do
 // último "Onde parei" (o Stop dispara a cada resposta: os demais itens da regra
-// de handoff só aparecem na UI e no fim da sessão). Sem card, lembra uma única
-// vez de criar card quando a sessão já editou ReminderEditThreshold arquivos.
+// de handoff só aparecem na UI e no fim da sessão); com a regra "where_stopped"
+// desligada, não bloqueia, pois esse é o único critério por turno. Sem card, lembra uma única
+// vez de criar card quando a sessão já editou ReminderEditThreshold arquivos (só se o agente
+// cria cards por conta própria: AgentCreatesCards).
 func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
 	if p.StopHookActive || !sess.FullCapture {
 		return adapter.HookReply{}, nil
@@ -432,7 +449,7 @@ func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (adapter.H
 		return adapter.HookReply{}, err
 	}
 	if sess.CardID != nil {
-		if set.IncompleteAction != "ask_agent" {
+		if set.IncompleteAction != "ask_agent" || !set.Rules["where_stopped"] {
 			return adapter.HookReply{}, nil
 		}
 		c, err := a.st.GetCardByID(*sess.CardID)
@@ -449,7 +466,7 @@ func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (adapter.H
 		}
 		return jsonReply(map[string]any{"decision": "block", "reason": reason})
 	}
-	if set.ReminderEditThreshold <= 0 {
+	if set.ReminderEditThreshold <= 0 || !set.AgentCreatesCards {
 		return adapter.HookReply{}, nil
 	}
 	if reminded, err := a.st.SessionReminded(sess.ID); err != nil || reminded {
@@ -534,7 +551,7 @@ func (a *Adapter) sessionEnd(sess domain.Session, p payload, now time.Time) (ada
 	if reason == "" {
 		reason = "encerrada pelo agente"
 	}
-	if err := a.st.EndSession(sess.ID, reason, now); err != nil {
+	if err := board.FinishSession(a.st, sess.ID, reason, now); err != nil {
 		return adapter.HookReply{}, err
 	}
 	a.publish("sessions", "cards")

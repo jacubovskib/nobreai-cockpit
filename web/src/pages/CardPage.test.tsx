@@ -113,6 +113,37 @@ describe('CardPage', () => {
     await waitFor(() => expect(bodies(fn, 'PATCH', '/api/cards/NAC-42')).toEqual([{ column: 'concluido' }]))
   })
 
+  it('mostra as marcas do card', async () => {
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, column: 'pausado', pause_reason: 'limite de custo', handoff_incomplete: true } })
+    wrap(<CardPage />)
+    expect(await screen.findByText('pausado por limite de custo')).toBeInTheDocument()
+    expect(screen.getByText('handoff incompleto')).toBeInTheDocument()
+  })
+
+  it('sem a marca de handoff incompleto quando o card já está pronto', async () => {
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, column: 'pausado', handoff_incomplete: true, readiness: { ...detail.readiness, ready: true } } })
+    wrap(<CardPage />)
+    await screen.findByRole('heading', { name: 'Onde parei' })
+    expect(screen.queryByText('handoff incompleto')).not.toBeInTheDocument()
+    expect(screen.queryByText('pausado por limite de custo')).not.toBeInTheDocument()
+  })
+
+  it('salva o bloqueio do card', async () => {
+    const fn = mock({ ...base, '/api/cards/NAC-42': { ...detail, blocked_by: '' }, 'PATCH /api/cards/NAC-42': {} })
+    wrap(<CardPage />)
+    fireEvent.change(await screen.findByLabelText('Bloqueado por'), { target: { value: 'NAC-4' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar bloqueio' }))
+    await waitFor(() => expect(bodies(fn, 'PATCH', '/api/cards/NAC-42')).toEqual([{ blocked_by: 'NAC-4' }]))
+  })
+
+  it('mostra o erro do daemon ao bloquear por chave inexistente', async () => {
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, blocked_by: '' }, 'PATCH /api/cards/NAC-42': { status: 404, body: { error: 'card NAC-99 não encontrado' } } })
+    wrap(<CardPage />)
+    fireEvent.change(await screen.findByLabelText('Bloqueado por'), { target: { value: 'NAC-99' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar bloqueio' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('card NAC-99 não encontrado')
+  })
+
   it('mostra o pacote de retomada sob demanda', async () => {
     mock({ ...base, '/api/cards/NAC-42': detail, '/api/cards/NAC-42/resume': { markdown: '# NAC-42 pacote' } })
     wrap(<CardPage />)

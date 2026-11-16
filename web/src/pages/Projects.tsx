@@ -24,7 +24,7 @@ function Count({ n, since, signal }: { n: number; since: string | null; signal: 
   return (
     <span>
       <strong>{n}</strong>
-      <span style={{ ...muted, display: 'block' }}>{signalText(signal, since)}</span>
+      <span style={{ ...muted, display: 'block' }}>{signalText({ signal, signal_since: since, blocked_by: '' })}</span>
     </span>
   )
 }

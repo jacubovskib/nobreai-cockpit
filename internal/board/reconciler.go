@@ -33,7 +33,7 @@ func Reconcile(st *store.Store, procRoot string, now time.Time, s domain.Setting
 	for _, x := range live {
 		if x.PID <= 0 {
 			if now.Sub(x.LastEventAt) > IdleNoPID {
-				if err := st.EndSession(x.ID, "sem atividade", now); err != nil {
+				if err := FinishSession(st, x.ID, "sem atividade", now); err != nil {
 					errs = append(errs, fmt.Errorf("sessão %s: %w", x.ID, err))
 					continue
 				}
@@ -61,7 +61,7 @@ func Reconcile(st *store.Store, procRoot string, now time.Time, s domain.Setting
 			dead, changed = &now, true
 		}
 		if now.Sub(*dead) > grace {
-			if err := st.EndSession(x.ID, "processo encerrado", now); err != nil {
+			if err := FinishSession(st, x.ID, "processo encerrado", now); err != nil {
 				errs = append(errs, fmt.Errorf("sessão %s: %w", x.ID, err))
 				continue
 			}

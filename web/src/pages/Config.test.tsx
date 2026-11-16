@@ -1,0 +1,99 @@
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { Config } from './Config'
+
+type Reply = unknown
+function mock(routes: Record<string, Reply>) {
+  const fn = vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
+    const m = init?.method ?? 'GET'
+    const r = routes[`${m} ${url}`] ?? (m === 'GET' ? routes[url] : undefined)
+    if (r === undefined) return new Response('{}', { status: 404 })
+    if (r && typeof r === 'object' && 'status' in r && 'body' in r) {
+      const o = r as { status: number; body: unknown }
+      return new Response(JSON.stringify(o.body), { status: o.status })
+    }
+    return new Response(JSON.stringify(r), { status: 200 })
+  })
+  vi.stubGlobal('fetch', fn)
+  return fn
+}
+const calls = (fn: ReturnType<typeof mock>, method: string, url: string) =>
+  fn.mock.calls.filter(([u, i]) => u === url && (i?.method ?? 'GET') === method).map(([, i]) => JSON.parse(i?.body ?? '{}'))
+function wrap(ui: React.ReactNode) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={qc}><MemoryRouter>{ui}</MemoryRouter></QueryClientProvider>)
+}
+afterEach(() => vi.unstubAllGlobals())
+
+const settings = {
+  rules: { goal: true, where_stopped: true, essential_file: true, todo_open: true, how_to_test: true, no_open_questions: false },
+  where_stopped_ttl_min: 15, grace_min: 15, reminder_edit_threshold: 3, launch_mode: 'terminal', terminal_cmd: ['x-terminal-emulator', '-e'],
+  currency: 'USD', brl_rate: 0, incomplete_action: 'ask_agent', demo: false,
+  agent_creates_cards: true, inject_paused_cards: true,
+}
+const routes = (s: object = settings) => ({
+  '/api/settings': s, '/api/limits': [], '/api/projects': [], '/api/cards': [], '/api/prices': [],
+  '/api/usage/totals?group=model': [], 'PUT /api/settings': s,
+})
+
+describe('Config opções reais', () => {
+  it('salva as opções de criação de card', async () => {
+    const fn = mock(routes())
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Criação de cards' })
+    expect(within(sec).queryByText('em breve')).not.toBeInTheDocument()
+    const agent = within(sec).getByLabelText(/Quando o agente identificar/)
+    expect(agent).toBeEnabled()
+    expect(agent).toBeChecked()
+    const paused = within(sec).getByLabelText(/Mostrar cards pausados/)
+    expect(paused).toBeEnabled()
+    fireEvent.click(paused)
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
+    expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ agent_creates_cards: true, inject_paused_cards: false, reminder_edit_threshold: 3 })
+  })
+
+  it('salva carência e comando do terminal', async () => {
+    const fn = mock(routes())
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: /pronto para handoff/ })
+    expect(within(sec).getByLabelText('Comando do terminal (separado por espaços)')).toHaveValue('x-terminal-emulator -e')
+    fireEvent.change(within(sec).getByLabelText('Carência antes de encerrar uma sessão cujo processo sumiu (minutos)'), { target: { value: '20' } })
+    fireEvent.change(within(sec).getByLabelText('Comando do terminal (separado por espaços)'), { target: { value: ' kitty   -e ' } })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
+    expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ grace_min: 20, terminal_cmd: ['kitty', '-e'] })
+  })
+
+  it('esconde o comando do terminal fora do modo terminal', async () => {
+    mock(routes({ ...settings, launch_mode: 'background' }))
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: /pronto para handoff/ })
+    expect(within(sec).queryByLabelText('Comando do terminal (separado por espaços)')).not.toBeInTheDocument()
+  })
+
+  it('carência inválida não salva', async () => {
+    const fn = mock(routes())
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: /pronto para handoff/ })
+    fireEvent.change(within(sec).getByLabelText('Carência antes de encerrar uma sessão cujo processo sumiu (minutos)'), { target: { value: '-1' } })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    expect(await within(sec).findByRole('alert')).toBeInTheDocument()
+    expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(0)
+  })
+
+  it('mostra o erro do daemon ao salvar o handoff', async () => {
+    mock({ ...routes(), 'PUT /api/settings': { status: 400, body: { error: 'comando do terminal inválido' } } })
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: /pronto para handoff/ })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    expect(await within(sec).findByRole('alert')).toHaveTextContent('comando do terminal inválido')
+  })
+
+  it('usa os textos novos das opções mark e pause', async () => {
+    mock(routes())
+    wrap(<Config />)
+    expect(await screen.findByRole('option', { name: 'Marcar o card como “handoff incompleto” e avisar na Sala de controle' })).toBeInTheDocument()
+  })
+})

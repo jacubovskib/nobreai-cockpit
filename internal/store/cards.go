@@ -19,7 +19,7 @@ type CardFilter struct {
 	Agent     string // cards com alguma sessão desse agente
 }
 
-const cardCols = `id, key, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, project_id, col, created_at, updated_at, branch_head, branch_diverged, branch_merged_at`
+const cardCols = `id, key, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, project_id, col, created_at, updated_at, branch_head, branch_diverged, branch_merged_at, pause_reason, handoff_incomplete, blocked_by`
 
 func requireAffected(res sql.Result) error {
 	n, err := res.RowsAffected()
@@ -40,7 +40,7 @@ func scanCard(sc interface{ Scan(...any) error }) (domain.Card, error) {
 	var created, updated string
 	var mergedAt sql.NullString
 	err := sc.Scan(&c.ID, &c.Key, &c.Title, &c.Goal, &c.DoneWhen, &c.WhereStopped, &stopAt,
-		&c.HowToTest, &c.Branch, &c.ProjectID, &c.Column, &created, &updated, &c.BranchHead, &c.BranchDiverged, &mergedAt)
+		&c.HowToTest, &c.Branch, &c.ProjectID, &c.Column, &created, &updated, &c.BranchHead, &c.BranchDiverged, &mergedAt, &c.PauseReason, &c.HandoffIncomplete, &c.BlockedBy)
 	if err != nil {
 		return c, err
 	}
@@ -201,9 +201,9 @@ func (s *Store) ListIntegrationCandidates() ([]domain.Card, error) {
 
 // UpdateCard grava os campos editáveis do card (identificado por ID).
 func (s *Store) UpdateCard(c domain.Card) error {
-	res, err := s.DB.Exec(`UPDATE cards SET title=?, goal=?, done_when=?, where_stopped=?, where_stopped_at=?, how_to_test=?, branch=?, project_id=?, col=?, updated_at=? WHERE id=?`,
+	res, err := s.DB.Exec(`UPDATE cards SET title=?, goal=?, done_when=?, where_stopped=?, where_stopped_at=?, how_to_test=?, branch=?, project_id=?, col=?, pause_reason=?, handoff_incomplete=?, blocked_by=?, updated_at=? WHERE id=?`,
 		c.Title, c.Goal, c.DoneWhen, c.WhereStopped, nullableTime(c.WhereStoppedAt), c.HowToTest, c.Branch,
-		c.ProjectID, string(c.Column), fmtTime(time.Now()), c.ID)
+		c.ProjectID, string(c.Column), c.PauseReason, c.HandoffIncomplete, c.BlockedBy, fmtTime(time.Now()), c.ID)
 	if err != nil {
 		return err
 	}
@@ -288,6 +288,52 @@ func (s *Store) RecordIntegration(cardID int64, branch string, at time.Time, d d
 // MoveCard move o card manualmente, sem aplicar regras.
 func (s *Store) MoveCard(key string, to domain.Column) error {
 	res, err := s.DB.Exec(`UPDATE cards SET col=?, updated_at=? WHERE key=?`, string(to), fmtTime(time.Now()), key)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
+}
+
+// PauseForLimit move para pausado o card em andamento e grava o motivo
+// "limite de custo". Devolve se mudou.
+func (s *Store) PauseForLimit(cardID int64, at time.Time) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE cards SET col=?, pause_reason=?, updated_at=? WHERE id=? AND col=?`,
+		string(domain.Pausado), domain.PauseReasonLimit, fmtTime(at), cardID, string(domain.EmAndamento))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// ResumeFromLimit devolve para em andamento o card pausado por limite de
+// custo e limpa o motivo, a marca de handoff incompleto e o bloqueio. Devolve se mudou.
+func (s *Store) ResumeFromLimit(cardID int64, at time.Time) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, blocked_by='', updated_at=? WHERE id=? AND col=? AND pause_reason=?`,
+		string(domain.EmAndamento), fmtTime(at), cardID, string(domain.Pausado), domain.PauseReasonLimit)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// DoneFromLimit leva para revisão o card pausado por limite de custo (o
+// nobre done da sessão que ainda é dona dele) e limpa o motivo da pausa e a
+// marca de handoff incompleto. Devolve se mudou.
+func (s *Store) DoneFromLimit(cardID int64, at time.Time) (bool, error) {
+	res, err := s.DB.Exec(`UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, updated_at=? WHERE id=? AND col=? AND pause_reason=?`,
+		string(domain.Revisao), fmtTime(at), cardID, string(domain.Pausado), domain.PauseReasonLimit)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetHandoffIncomplete grava a marca de handoff incompleto do card.
+func (s *Store) SetHandoffIncomplete(cardID int64, v bool, at time.Time) error {
+	res, err := s.DB.Exec(`UPDATE cards SET handoff_incomplete=?, updated_at=? WHERE id=?`, v, fmtTime(at), cardID)
 	if err != nil {
 		return err
 	}

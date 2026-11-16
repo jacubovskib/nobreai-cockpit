@@ -38,6 +38,7 @@ func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/todo", s.withSessionCard(s.meContent(s.addTodo)))
 	mux.HandleFunc("POST /api/me/ask", s.withSessionCard(s.meContent(s.addQuestion)))
 	mux.HandleFunc("POST /api/me/answer", s.withSessionCard(s.meAnswer))
+	mux.HandleFunc("POST /api/me/block", s.withSessionCard(s.meBlock))
 	mux.HandleFunc("POST /api/me/todo-done", s.withSessionCard(s.meTodoDone))
 	mux.HandleFunc("POST /api/me/test", s.withSessionCard(s.meTest))
 	mux.HandleFunc("POST /api/me/branch", s.withSessionCard(s.meBranch))
@@ -523,13 +524,35 @@ func (s *server) doneProblems(c domain.Card) ([]string, error) {
 	return problems, nil
 }
 
+// columnLabels são os nomes das colunas como aparecem no board.
+var columnLabels = map[domain.Column]string{
+	domain.Backlog:     "Backlog",
+	domain.EmAndamento: "Em andamento",
+	domain.Pausado:     "Pausado",
+	domain.Revisao:     "Revisão",
+	domain.Concluido:   "Concluído",
+}
+
 // meDone aplica a transição AgentDone (em_andamento → revisao) e registra o
-// evento done (mesmo se o card já não estava em andamento).
+// evento done. O card pausado por limite de custo cuja sessão viva é a que
+// chama conta como em andamento (o limite pausou o card com o agente ainda
+// trabalhando) e vai para revisão sem o motivo da pausa. Em qualquer outra
+// coluna o done é recusado com 409, sem registrar o evento.
 func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
 	var in struct {
 		Force bool `json:"force"`
 	}
 	if !readJSON(w, r, &in) { // corpo vazio é aceito (force=false)
+		return
+	}
+	limitPaused := c.Column == domain.Pausado && c.PauseReason == domain.PauseReasonLimit &&
+		sess.EndedAt == nil && sess.PIDDeadAt == nil && sess.CardID != nil && *sess.CardID == c.ID
+	next := domain.NextColumn(c.Column, domain.AgentDone)
+	if limitPaused {
+		next = domain.Revisao
+	}
+	if next == c.Column {
+		writeError(w, http.StatusConflict, "o card está em "+columnLabels[c.Column]+"; nobre done só move cards em andamento")
 		return
 	}
 	if !in.Force {
@@ -543,13 +566,63 @@ func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Sess
 			return
 		}
 	}
-	if next := domain.NextColumn(c.Column, domain.AgentDone); next != c.Column {
-		if err := s.st.MoveCard(c.Key, next); err != nil {
+	if limitPaused {
+		changed, err := s.st.DoneFromLimit(c.ID, s.now())
+		if err != nil {
 			writeStoreError(w, err, msgCardNotFound)
 			return
 		}
-		s.publish("cards")
+		if !changed { // o card mudou entre a leitura e a gravação
+			writeError(w, http.StatusConflict, "o card não está mais pausado por limite; nobre done só move cards em andamento")
+			return
+		}
+	} else if err := s.st.MoveCard(c.Key, next); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
 	}
+	s.publish("cards")
 	s.recordEvent(sess.ID, domain.EvDone, map[string]any{})
+	s.writeCard(w, http.StatusOK, c.Key)
+}
+
+// meBlock marca (ou, com key vazia, limpa) o card que bloqueia o card da sessão.
+func (s *server) meBlock(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		Key string `json:"key"`
+		Why string `json:"why"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	key := normKey(in.Key)
+	if key != "" {
+		if key == normKey(c.Key) {
+			writeError(w, http.StatusBadRequest, "um card não pode bloquear a si mesmo")
+			return
+		}
+		b, err := s.st.GetCard(key)
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "card "+key+" não encontrado")
+			return
+		}
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		key = b.Key
+	}
+	c.BlockedBy = key
+	if err := s.st.UpdateCard(c); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	if key != "" {
+		if _, err := s.st.AddDecision(domain.Decision{CardID: c.ID, What: "Bloqueado por " + key, Why: in.Why, SessionID: sess.ID, At: s.now()}); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		s.recordEvent(sess.ID, domain.EvDecision, map[string]any{"what": "Bloqueado por " + key, "why": in.Why})
+	}
+	s.publish("cards")
 	s.writeCard(w, http.StatusOK, c.Key)
 }
