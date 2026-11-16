@@ -308,6 +308,9 @@ func TestDeleteWorktreeLiveSessionVariants(t *testing.T) {
 		"cwd em subdiretório": func(a *testAPI, p *domain.Project, wt string) {
 			startLive(t, a, "claude:x", &p.ID, filepath.Join(wt, "pkg"), wt)
 		},
+		"worktree gravado é outra raiz, cwd dentro do alvo": func(a *testAPI, p *domain.Project, wt string) {
+			startLive(t, a, "claude:x", &p.ID, filepath.Join(wt, "clone"), t.TempDir())
+		},
 		"legado sem worktree": func(a *testAPI, p *domain.Project, wt string) {
 			startLive(t, a, "claude:x", &p.ID, filepath.Join(wt, "pkg"), "")
 		},

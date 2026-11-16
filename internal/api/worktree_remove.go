@@ -126,7 +126,9 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, x := range all {
-		if x.Live() && worktreeOf(pw.Worktrees, x) == idx {
+		// Também vale o cwd: um clone independente dentro do alvo grava outra raiz.
+		inside := x.Cwd == v.Path || strings.HasPrefix(x.Cwd, strings.TrimRight(v.Path, "/")+"/")
+		if x.Live() && (worktreeOf(pw.Worktrees, x) == idx || inside) {
 			writeError(w, http.StatusConflict, "há uma sessão viva neste worktree; encerre-a antes de excluir")
 			return
 		}

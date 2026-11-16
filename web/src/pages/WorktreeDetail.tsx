@@ -10,6 +10,7 @@ import { Tokens } from '../ui/Tokens'
 import { formatBytes, formatPct } from '../ui/bytes'
 import { plural } from './board'
 import { ErrorLine, h2, muted, panel } from './card/shared'
+import { RemoveWorktree } from './worktree/RemoveWorktree'
 import { BranchIcon, CardLink, SessionStatus, WorktreeTags, agoText, baseName, machinePct, mono, oneDec } from './worktreeUI'
 
 const cell: React.CSSProperties = { padding: '7px 10px', textAlign: 'left', whiteSpace: 'nowrap' }
@@ -206,6 +207,7 @@ function Body({ d }: { d: WorktreeDetail }) {
           {w.head && <span>HEAD <span style={mono}>{w.head}</span></span>}
         </div>
         <span style={{ ...mono, fontSize: 12.5, color: 'var(--text-2)', overflowWrap: 'anywhere' }}>{w.path}</span>
+        <RemoveWorktree d={d} />
       </header>
 
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>

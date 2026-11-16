@@ -330,3 +330,14 @@ export interface PlanLimits {
   history: { five_hour: PlanPoint[] | null; seven_day: PlanPoint[] | null }
   warn_pct: number
 }
+
+// DELETE /api/worktrees: 200 em sucesso; 409 com needs_confirm pede confirmação.
+export interface RemoveWorktreeResult { removed: boolean; branch_deleted: boolean; branch_kept_reason: string }
+export interface RemoveNeedsConfirm {
+  error: string
+  needs_confirm: true
+  files: { path: string; code: string }[]
+  total_files: number
+  processes: { pid: number; name: string }[]
+  processes_unknown?: boolean
+}
