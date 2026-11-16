@@ -227,23 +227,25 @@ describe('WorktreeDetailPage', () => {
       expect(screen.getByText('Branch feat/oauth mantido: não está integrado em main.')).toBeInTheDocument()
     })
 
-    it('desabilita apagar o branch quando ele tem commits fora da base', async () => {
+    it('com commits à frente da base, a caixa do branch continua liberada e só avisa', async () => {
       const calls = mockDelete({ ...free, git: { ...free.git!, ahead: 3 } }, [ok])
       wrap()
       fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
-      expect(screen.getByRole('checkbox', { name: 'Também apagar o branch feat/oauth' })).toBeDisabled()
-      expect(screen.getByText('(3 commits fora de main; o branch será mantido)')).toBeInTheDocument()
+      const box = screen.getByRole('checkbox', { name: 'Também apagar o branch feat/oauth' })
+      expect(box).toBeEnabled()
+      expect(screen.getByText('(3 commits à frente de main; só será apagado se já estiver integrado na base do projeto)')).toBeInTheDocument()
+      fireEvent.click(box)
       fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
       await waitFor(() => expect(calls).toHaveLength(1))
-      expect(calls[0].body).toEqual({ project: 1, path: '/w/api-oauth', force: false, delete_branch: false })
+      expect(calls[0].body).toEqual({ project: 1, path: '/w/api-oauth', force: false, delete_branch: true })
     })
 
-    it('libera apagar o branch sem commits fora da base', async () => {
+    it('sem commits à frente da base, não mostra o aviso do branch', async () => {
       mockDelete(free, [])
       wrap()
       fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
       expect(screen.getByRole('checkbox', { name: 'Também apagar o branch feat/oauth' })).toBeEnabled()
-      expect(screen.queryByText(/o branch será mantido/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/só será apagado se já estiver integrado/)).not.toBeInTheDocument()
     })
 
     it.each([

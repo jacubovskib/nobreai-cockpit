@@ -34,9 +34,9 @@ export function RemoveWorktree({ d }: { d: WorktreeDetail }) {
   const hasLive = d.sessions.some((s) => s.live)
   const reason = hasLive ? 'Há uma sessão viva neste worktree.' : w.locked ? 'Worktree travado.' : ''
   const hasBranch = !!w.branch && !w.detached
-  // Commits fora da base: o servidor manteria o branch; a caixa nem libera.
+  // Só informativo: o detalhe compara com o branch do checkout principal; quem
+  // decide se o branch está integrado (base do projeto ou origin) é o servidor.
   const ahead = d.git?.compared && d.git.ahead > 0 ? d.git.ahead : 0
-  const deleteBranch = hasBranch && alsoBranch && ahead === 0
 
   function close() {
     setOpen(false)
@@ -48,7 +48,7 @@ export function RemoveWorktree({ d }: { d: WorktreeDetail }) {
     setBusy(true)
     setError(null)
     try {
-      const r = await del<RemoveWorktreeResult>('/api/worktrees', { project: d.project.id, path: w.path, force, delete_branch: deleteBranch })
+      const r = await del<RemoveWorktreeResult>('/api/worktrees', { project: d.project.id, path: w.path, force, delete_branch: hasBranch && alsoBranch })
       // O detalhe apagado sai do cache antes de invalidar a lista: sem isso ele
       // seria buscado de novo e piscaria "Worktree não encontrado".
       qc.removeQueries({ queryKey: ['worktrees', 'detail'] })
@@ -81,11 +81,11 @@ export function RemoveWorktree({ d }: { d: WorktreeDetail }) {
           <span style={muted}>Arquivos ignorados pelo git (como .env e node_modules) também serão apagados.</span>
           {hasBranch && (
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, opacity: ahead ? 0.6 : 1 }}>
-                <input type="checkbox" checked={deleteBranch} disabled={busy || ahead > 0} onChange={(e) => setAlsoBranch(e.target.checked)} />
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <input type="checkbox" checked={alsoBranch} disabled={busy} onChange={(e) => setAlsoBranch(e.target.checked)} />
                 Também apagar o branch <span style={mono}>{w.branch}</span>
               </label>
-              {ahead > 0 && <span style={muted}>({plural(ahead, 'commit', 'commits')} fora de {d.git?.base}; o branch será mantido)</span>}
+              {ahead > 0 && <span style={muted}>({plural(ahead, 'commit', 'commits')} à frente de {d.git?.base}; só será apagado se já estiver integrado na base do projeto)</span>}
             </div>
           )}
           {confirm && (
