@@ -66,6 +66,17 @@ export const xtermFactory: TermFactory = () => {
 
 const wsFactory: WsFactory = (url) => new WebSocket(url) as unknown as WsLike
 
+// fitScale é a escala que faz um terminal de naturalW×naturalH caber em
+// availW×availH sem ampliar: seguindo o PTY, o xterm tem as linhas e colunas
+// do terminal de origem e pode ser maior que o contêiner (que corta o
+// excesso, inclusive as linhas mais novas e o fim da barra de rolagem).
+export function fitScale(availW: number, availH: number, naturalW: number, naturalH: number): number {
+  if (availW <= 0 || availH <= 0 || naturalW <= 0 || naturalH <= 0) return 1
+  return Math.min(1, availW / naturalW, availH / naturalH)
+}
+
+const HOST_PADDING = 8
+
 const OPEN = 1
 const MAX_RETRIES = 3
 const RESIZE_DEBOUNCE_MS = 100
@@ -94,6 +105,7 @@ export function TerminalView({
   onEnded?: () => void
 }) {
   const host = useRef<HTMLDivElement>(null)
+  const screenRef = useRef<HTMLDivElement>(null)
   const [ro, setRo] = useState(readonly)
   const [status, setStatus] = useState<Status>('conectando')
   const [exitCode, setExitCode] = useState<number | null>(null)
@@ -110,9 +122,10 @@ export function TerminalView({
 
   useEffect(() => {
     const el = host.current
-    if (!el) return
+    const scr = screenRef.current
+    if (!el || !scr) return
     const term = termFactory()
-    term.open(el)
+    term.open(scr)
     let ws: WsLike | null = null
     let disposed = false
     let exited = false
@@ -123,6 +136,18 @@ export function TerminalView({
     let gotSnapshot = false
 
     const followPty = () => ro || !engaged.current
+    // Seguindo o PTY o xterm não é ajustado ao contêiner: reduz a escala para
+    // ele caber inteiro (offset* ignoram transform, então medem o natural).
+    const applyScale = () => {
+      const s = followPty()
+        ? fitScale(el.clientWidth - 2 * HOST_PADDING, el.clientHeight - 2 * HOST_PADDING, scr.offsetWidth, scr.offsetHeight)
+        : 1
+      scr.style.transform = s < 1 ? `scale(${s.toFixed(4)})` : ''
+    }
+    const rescale = () => {
+      applyScale()
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { if (!disposed) applyScale() })
+    }
     const sendResize = () => {
       if (followPty() || !ws || ws.readyState !== OPEN) return
       ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
@@ -132,6 +157,7 @@ export function TerminalView({
     const engage = () => {
       if (ro || engaged.current) return
       engaged.current = true
+      applyScale()
       term.fit()
       sendResize()
     }
@@ -173,7 +199,10 @@ export function TerminalView({
         if (typeof d === 'string') {
           try {
             const m = JSON.parse(d) as { type?: string; code?: number; cols?: number; rows?: number }
-            if (m.type === 'info' && followPty() && m.cols && m.rows) term.resize(m.cols, m.rows)
+            if (m.type === 'info' && followPty() && m.cols && m.rows) {
+              term.resize(m.cols, m.rows)
+              rescale()
+            }
             if (m.type === 'exit') {
               exited = true
               setExitCode(typeof m.code === 'number' ? m.code : 0)
@@ -197,7 +226,7 @@ export function TerminalView({
     setStatus('conectando')
     connect()
 
-    const onWinResize = () => { if (!followPty()) term.fit() }
+    const onWinResize = () => { if (followPty()) applyScale(); else term.fit() }
     window.addEventListener('resize', onWinResize)
     const RO = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onWinResize)
     RO?.observe(el)
@@ -255,8 +284,11 @@ export function TerminalView({
         ref={host}
         role="group"
         aria-label="Terminal do agente"
-        style={{ flex: '1 1 auto', minHeight: 240, padding: 8, borderRadius: 8, background: THEME.background, border: '1px solid var(--border)', overflow: 'hidden' }}
-      />
+        style={{ flex: '1 1 auto', minHeight: 240, padding: HOST_PADDING, borderRadius: 8, background: THEME.background, border: '1px solid var(--border)', overflow: 'hidden' }}
+      >
+        {/* inline-block: a largura é a do xterm (medida para a escala). */}
+        <div ref={screenRef} style={{ display: 'inline-block', transformOrigin: 'top left' }} />
+      </div>
     </div>
   )
 }

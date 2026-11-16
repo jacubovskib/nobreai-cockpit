@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { TerminalView, type TermLike, type WsLike } from './TerminalView'
+import { TerminalView, fitScale, type TermLike, type WsLike } from './TerminalView'
 
 class FakeTerm implements TermLike {
   cols = 100
@@ -71,6 +71,42 @@ describe('TerminalView', () => {
     act(() => socks[0].msg(new TextEncoder().encode('olá').buffer))
     expect(text(term.written[0])).toBe('olá')
     expect(socks[0].sent).toHaveLength(0)
+  })
+
+  it('fitScale reduz só o que não cabe e nunca amplia', () => {
+    expect(fitScale(600, 500, 1200, 680)).toBeCloseTo(0.5)
+    expect(fitScale(1000, 340, 800, 680)).toBeCloseTo(0.5)
+    expect(fitScale(1000, 800, 800, 680)).toBe(1)
+    expect(fitScale(0, 0, 800, 680)).toBe(1) // contêiner ainda sem tamanho
+    expect(fitScale(800, 600, 0, 0)).toBe(1) // terminal ainda sem tamanho
+  })
+
+  it('seguindo o PTY, um terminal maior que o contêiner é reduzido para caber inteiro', () => {
+    const { socks } = setup()
+    const h = host()
+    const screenEl = h.firstElementChild as HTMLElement
+    // contêiner 555 px (padding 8 + 8) e terminal do PTY com 680 px de altura
+    Object.defineProperty(h, 'clientWidth', { configurable: true, value: 1016 })
+    Object.defineProperty(h, 'clientHeight', { configurable: true, value: 555 })
+    Object.defineProperty(screenEl, 'offsetWidth', { configurable: true, value: 1000 })
+    Object.defineProperty(screenEl, 'offsetHeight', { configurable: true, value: 680 })
+    act(() => socks[0].open())
+    act(() => socks[0].msg(JSON.stringify({ type: 'info', id: 't1', cols: 120, rows: 40 })))
+    expect(screenEl.style.transform).toBe(`scale(${(539 / 680).toFixed(4)})`)
+  })
+
+  it('depois de interagir o terminal volta à escala 1 (ajustado ao contêiner)', () => {
+    const { socks } = setup()
+    const h = host()
+    const screenEl = h.firstElementChild as HTMLElement
+    Object.defineProperty(h, 'clientWidth', { configurable: true, value: 1016 })
+    Object.defineProperty(h, 'clientHeight', { configurable: true, value: 555 })
+    Object.defineProperty(screenEl, 'offsetWidth', { configurable: true, value: 1000 })
+    Object.defineProperty(screenEl, 'offsetHeight', { configurable: true, value: 680 })
+    act(() => socks[0].open())
+    act(() => socks[0].msg(JSON.stringify({ type: 'info', id: 't1', cols: 120, rows: 40 })))
+    fireEvent.keyDown(h, { key: 'a' })
+    expect(screenEl.style.transform).toBe('')
   })
 
   it('usa o tamanho do PTY (mensagem info) até o usuário interagir, sem fit', () => {
