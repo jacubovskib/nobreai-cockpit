@@ -567,8 +567,13 @@ func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Sess
 		}
 	}
 	if limitPaused {
-		if _, err := s.st.DoneFromLimit(c.ID, s.now()); err != nil {
+		changed, err := s.st.DoneFromLimit(c.ID, s.now())
+		if err != nil {
 			writeStoreError(w, err, msgCardNotFound)
+			return
+		}
+		if !changed { // o card mudou entre a leitura e a gravação
+			writeError(w, http.StatusConflict, "o card não está mais pausado por limite; nobre done só move cards em andamento")
 			return
 		}
 	} else if err := s.st.MoveCard(c.Key, next); err != nil {
