@@ -367,3 +367,71 @@ func TestCardSummaryBlockedSignal(t *testing.T) {
 		t.Fatalf("pronto = %q", c.Signal)
 	}
 }
+
+func TestPatchBlockedBy(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	if _, err := a.st.CreateCard(domain.Card{Title: "Outro", ProjectID: c.ProjectID}); err != nil {
+		t.Fatal(err)
+	}
+	patch := func(v string) *httptest.ResponseRecorder {
+		return a.do(t, "PATCH", "/api/cards/"+c.Key, map[string]any{"blocked_by": v}, 0)
+	}
+	for _, self := range []string{"NAC-1", "nac-1"} {
+		if rec := patch(self); rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "um card não pode bloquear a si mesmo" {
+			t.Fatalf("própria %q = %d %s", self, rec.Code, rec.Body)
+		}
+	}
+	if rec := patch("NAC-999"); rec.Code != http.StatusNotFound || decode[map[string]string](t, rec)["error"] != "card NAC-999 não encontrado" {
+		t.Fatalf("inexistente = %d %s", rec.Code, rec.Body)
+	}
+	if rec := patch(" nac-2 "); rec.Code != http.StatusOK {
+		t.Fatalf("minúsculas = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.BlockedBy != "NAC-2" {
+		t.Fatalf("blocked_by = %q", got.BlockedBy)
+	}
+	if rec := patch(""); rec.Code != http.StatusOK {
+		t.Fatalf("limpar = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.BlockedBy != "" {
+		t.Fatalf("blocked_by = %q", got.BlockedBy)
+	}
+}
+
+// I3: sair de Pausado limpa o motivo da pausa e a marca de handoff
+// incompleto; mudar outro campo sem mudar a coluna não limpa.
+func TestPatchColumnChangeClearsPauseMarks(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	pause := func() {
+		t.Helper()
+		got, _ := a.st.GetCard(c.Key)
+		got.Column, got.PauseReason, got.HandoffIncomplete = domain.Pausado, domain.PauseReasonLimit, true
+		if err := a.st.UpdateCard(got); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pause()
+	if rec := a.do(t, "PATCH", "/api/cards/"+c.Key, map[string]any{"title": "Novo"}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.PauseReason != domain.PauseReasonLimit || !got.HandoffIncomplete {
+		t.Fatalf("sem mudar a coluna limpou: %+v", got)
+	}
+	if rec := a.do(t, "PATCH", "/api/cards/"+c.Key, map[string]any{"column": "pausado"}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.PauseReason != domain.PauseReasonLimit || !got.HandoffIncomplete {
+		t.Fatalf("mesma coluna limpou: %+v", got)
+	}
+	for _, col := range []domain.Column{domain.Revisao, domain.Backlog, domain.Concluido} {
+		pause()
+		if rec := a.do(t, "PATCH", "/api/cards/"+c.Key, map[string]any{"column": col}, 0); rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %s = %d %s", col, rec.Code, rec.Body)
+		}
+		if got, _ := a.st.GetCard(c.Key); got.Column != col || got.PauseReason != "" || got.HandoffIncomplete {
+			t.Fatalf("%s: card = %+v", col, got)
+		}
+	}
+}

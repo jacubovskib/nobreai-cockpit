@@ -114,14 +114,14 @@ describe('CardPage', () => {
   })
 
   it('mostra as marcas do card', async () => {
-    mock({ ...base, '/api/cards/NAC-42': { ...detail, pause_reason: 'limite de custo', handoff_incomplete: true } })
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, column: 'pausado', pause_reason: 'limite de custo', handoff_incomplete: true } })
     wrap(<CardPage />)
     expect(await screen.findByText('pausado por limite de custo')).toBeInTheDocument()
     expect(screen.getByText('handoff incompleto')).toBeInTheDocument()
   })
 
   it('sem a marca de handoff incompleto quando o card já está pronto', async () => {
-    mock({ ...base, '/api/cards/NAC-42': { ...detail, handoff_incomplete: true, readiness: { ...detail.readiness, ready: true } } })
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, column: 'pausado', handoff_incomplete: true, readiness: { ...detail.readiness, ready: true } } })
     wrap(<CardPage />)
     await screen.findByRole('heading', { name: 'Onde parei' })
     expect(screen.queryByText('handoff incompleto')).not.toBeInTheDocument()

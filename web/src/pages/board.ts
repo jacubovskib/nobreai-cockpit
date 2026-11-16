@@ -46,10 +46,11 @@ export function signalColor(signal: CardSummary['signal']): string {
   return signal === 'parado' ? 'var(--warn)' : signal === 'pronto_para_retomar' ? 'var(--ok)' : 'var(--text-2)'
 }
 
-// cardMarks: marcas do card (limite de custo e handoff incompleto, este só até ficar pronto).
-export function cardMarks(card: Pick<Card, 'pause_reason' | 'handoff_incomplete'>, ready: boolean): string[] {
+// cardMarks: marcas do card (limite de custo e handoff incompleto, este só em
+// Pausado e até ficar pronto).
+export function cardMarks(card: Pick<Card, 'column' | 'pause_reason' | 'handoff_incomplete'>, ready: boolean): string[] {
   const out: string[] = []
   if (card.pause_reason === 'limite de custo') out.push('pausado por limite de custo')
-  if (card.handoff_incomplete && !ready) out.push('handoff incompleto')
+  if (card.handoff_incomplete && !ready && card.column === 'pausado') out.push('handoff incompleto')
   return out
 }

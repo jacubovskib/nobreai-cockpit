@@ -679,3 +679,28 @@ func TestMeDoneRefusesWhenNotInProgress(t *testing.T) {
 		})
 	}
 }
+
+// nobre block nac-2 grava a chave normalizada (NAC-2).
+func TestMeBlockNormalizesKey(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	if _, err := a.st.CreateCard(domain.Card{Title: "Outro", ProjectID: c.ProjectID}); err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/block", map[string]string{"key": " nac-2 "}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("block = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.BlockedBy != "NAC-2" {
+		t.Fatalf("blocked_by = %q", got.BlockedBy)
+	}
+	ct, _ := a.st.CardContent(c.ID)
+	if len(ct.Decisions) != 1 || ct.Decisions[0].What != "Bloqueado por NAC-2" {
+		t.Fatalf("decisões = %+v", ct.Decisions)
+	}
+	rec = a.do(t, "POST", "/api/me/block", map[string]string{"key": "nac-1"}, 4242)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("própria em minúsculas = %d %s", rec.Code, rec.Body)
+	}
+}

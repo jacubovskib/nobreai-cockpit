@@ -1,4 +1,4 @@
-import { groupByColumn, COLUMNS, signalText } from './board'
+import { groupByColumn, COLUMNS, cardMarks, signalText } from './board'
 import type { CardSummary } from '../api/types'
 
 describe('groupByColumn', () => {
@@ -36,5 +36,19 @@ describe('signalText', () => {
   it('sem sinal devolve vazio', () => {
     expect(signalText({ signal: '', signal_since: ago(100), blocked_by: '' }, now)).toBe('')
     expect(signalText({ signal: 'parado', signal_since: null, blocked_by: '' }, now)).toBe('')
+  })
+})
+
+describe('cardMarks', () => {
+  it('handoff incompleto só enquanto o card está em Pausado e não pronto', () => {
+    const c = { column: 'pausado' as const, pause_reason: '', handoff_incomplete: true }
+    expect(cardMarks(c, false)).toEqual(['handoff incompleto'])
+    expect(cardMarks(c, true)).toEqual([])
+    for (const column of ['backlog', 'em_andamento', 'revisao', 'concluido'] as const) {
+      expect(cardMarks({ ...c, column }, false)).toEqual([])
+    }
+  })
+  it('limite de custo', () => {
+    expect(cardMarks({ column: 'pausado', pause_reason: 'limite de custo', handoff_incomplete: false }, false)).toEqual(['pausado por limite de custo'])
   })
 })

@@ -589,9 +589,9 @@ func (s *server) meBlock(w http.ResponseWriter, r *http.Request, sess domain.Ses
 	if !readJSON(w, r, &in) {
 		return
 	}
-	key := strings.TrimSpace(in.Key)
+	key := normKey(in.Key)
 	if key != "" {
-		if strings.EqualFold(key, c.Key) {
+		if key == normKey(c.Key) {
 			writeError(w, http.StatusBadRequest, "um card não pode bloquear a si mesmo")
 			return
 		}

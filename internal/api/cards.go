@@ -178,10 +178,12 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// Mudar de coluna derruba o motivo da pausa e, saindo de Pausado, a
+		// marca de handoff incompleto (ela só vale enquanto o card está pausado).
 		if *in.Column != c.Column {
-			c.PauseReason = ""
+			c.PauseReason, c.HandoffIncomplete = "", false
 			if *in.Column == domain.EmAndamento {
-				c.HandoffIncomplete, c.BlockedBy = false, ""
+				c.BlockedBy = ""
 			}
 		}
 		c.Column = *in.Column
@@ -199,9 +201,9 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if in.BlockedBy != nil {
-		key := strings.TrimSpace(*in.BlockedBy)
+		key := normKey(*in.BlockedBy)
 		if key != "" {
-			if strings.EqualFold(key, c.Key) {
+			if key == normKey(c.Key) {
 				writeError(w, http.StatusBadRequest, "um card não pode bloquear a si mesmo")
 				return
 			}
@@ -228,6 +230,9 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 	s.publish("cards")
 	s.writeCard(w, http.StatusOK, c.Key)
 }
+
+// normKey normaliza a chave de card digitada (" nac-2 " → "NAC-2").
+func normKey(k string) string { return strings.ToUpper(strings.TrimSpace(k)) }
 
 // writeCard responde com o card atual.
 func (s *server) writeCard(w http.ResponseWriter, code int, key string) {
