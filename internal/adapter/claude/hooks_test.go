@@ -1183,3 +1183,30 @@ func TestSessionEndRecordsEndWhenMarkFails(t *testing.T) {
 		t.Fatalf("card = %+v", got)
 	}
 }
+
+// Card pausado por limite com a sessão dona ainda viva não é sugerido para
+// nobre resume (ela continua trabalhando nele).
+func TestSessionStartSkipsPausedCardWithLiveSession(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	c, err := e.st.CreateCard(domain.Card{Title: "Pausado pelo limite", ProjectID: p.ID, Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.StartSession(domain.Session{ID: "claude:dona", Agent: "claude", PID: 7777, Cwd: "/w/api", StartedAt: t0, LastEventAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.AttachSession("claude:dona", c.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.st.PauseForLimit(c.ID, t0); err != nil || !ok {
+		t.Fatalf("PauseForLimit = %v %v", ok, err)
+	}
+	if _, err := e.st.CreateCard(domain.Card{Title: "Pausado sem dona", ProjectID: p.ID, Branch: "main", Column: domain.Pausado}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if strings.Contains(ctx, "NAC-1 · ") || !strings.Contains(ctx, "NAC-2 · Pausado sem dona") {
+		t.Fatalf("contexto:\n%s", ctx)
+	}
+}

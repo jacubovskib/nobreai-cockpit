@@ -147,6 +147,8 @@ func lastActivityText(e domain.Event) string {
 		t = "marcado como pronto para revisão"
 	case domain.EvHowToTest:
 		t = "“como testar” registrado"
+	case domain.EvLimitPause:
+		t = "pausado por limite de custo"
 	default:
 		t = e.Kind
 	}

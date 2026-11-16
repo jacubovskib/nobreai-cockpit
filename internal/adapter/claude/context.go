@@ -191,7 +191,7 @@ func (a *Adapter) unregisteredRoot(cwd string) string {
 }
 
 // pausedCards lista os cards pausados do projeto da sessão (exceto o que
-// acabou de ser retomado). Num branch de trabalho, só os desse branch e os sem
+// acabou de ser retomado e os que ainda têm sessão viva dona). Num branch de trabalho, só os desse branch e os sem
 // branch; na base (ou sem branch), todos: o card nunca guarda a base.
 func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domain.Card, error) {
 	if sess.ProjectID == nil {
@@ -217,7 +217,15 @@ func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domai
 		if c.Column != domain.Pausado || (except != nil && c.ID == except.ID) {
 			continue
 		}
-		if onBase || c.Branch == sess.Branch || c.Branch == "" {
+		if !onBase && c.Branch != sess.Branch && c.Branch != "" {
+			continue
+		}
+		// Pausado por limite com a sessão dona ainda viva: não é para retomar.
+		live, err := a.st.HasLiveSession(c.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !live {
 			out = append(out, c)
 		}
 	}

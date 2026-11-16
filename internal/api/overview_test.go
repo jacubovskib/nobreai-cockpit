@@ -201,6 +201,7 @@ func TestLastActivityText(t *testing.T) {
 		{domain.EvTodo, `{}`, "tarefa atualizada"},
 		{domain.EvDone, `{}`, "marcado como pronto para revisão"},
 		{domain.EvHowToTest, `{"text":"go test"}`, "“como testar” registrado"},
+		{domain.EvLimitPause, `{}`, "pausado por limite de custo"},
 	}
 	for _, c := range cases {
 		got := lastActivityText(domain.Event{Kind: c.kind, Data: []byte(c.data)})
