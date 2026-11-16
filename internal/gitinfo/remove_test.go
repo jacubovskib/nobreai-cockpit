@@ -1,8 +1,10 @@
 package gitinfo
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -68,27 +70,122 @@ func TestRemoveWorktreeAndPrune(t *testing.T) {
 	}
 }
 
-func TestDeleteBranchSafe(t *testing.T) {
+func TestDeleteBranchAtComparesTip(t *testing.T) {
 	d := newRepoOn(t, "main", true)
 	g := Exec{}
 	gitT(t, d, "branch", "merged")
-	if err := g.DeleteBranch(d, "merged"); err != nil {
+	tip, _ := g.BranchTip(d, "merged")
+
+	// Ponta diferente da verificada: o git não apaga.
+	gitT(t, d, "commit", "-q", "--allow-empty", "-m", "depois")
+	other, _ := g.BranchTip(d, "main")
+	if err := g.DeleteBranchAt(d, "merged", other); err == nil {
+		t.Fatal("ponta diferente não pode apagar")
+	} else if strings.Contains(err.Error(), "\n") || strings.Contains(err.Error(), "cannot lock") {
+		t.Fatalf("erro deve ser uma linha em pt-BR: %q", err)
+	}
+	if _, ok := g.BranchTip(d, "merged"); !ok {
+		t.Fatal("branch deveria continuar")
+	}
+
+	for _, bad := range []struct{ branch, tip string }{
+		{"-x", tip}, {"merged", "HEAD"}, {"merged", tip[:7]}, {"merged", "-" + tip[1:]}, {"merged", strings.ToUpper(tip)},
+	} {
+		if err := g.DeleteBranchAt(d, bad.branch, bad.tip); err == nil {
+			t.Fatalf("%q %q deveria ser recusado", bad.branch, bad.tip)
+		}
+	}
+	if _, ok := g.BranchTip(d, "merged"); !ok {
+		t.Fatal("branch deveria continuar")
+	}
+
+	if err := g.DeleteBranchAt(d, "merged", tip); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := g.BranchTip(d, "merged"); ok {
-		t.Fatal("branch integrado deveria ter sido apagado")
+		t.Fatal("branch deveria ter sido apagado")
+	}
+}
+
+// Com status.showUntrackedFiles=no o git status esconde arquivos novos; nem a
+// leitura nem o worktree remove podem deixar de vê-los.
+func TestUntrackedSeenWithShowUntrackedNo(t *testing.T) {
+	d := newRepoOn(t, "main", true)
+	d, _ = filepath.EvalSymlinks(d)
+	base, _ := filepath.EvalSymlinks(t.TempDir())
+	g := Exec{}
+	gitT(t, d, "config", "status.showUntrackedFiles", "no")
+	wt := filepath.Join(base, "wt")
+	gitT(t, d, "worktree", "add", "-q", "-b", "wt", wt)
+	novo := filepath.Join(wt, "novo.txt")
+	if err := os.WriteFile(novo, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	gitT(t, d, "checkout", "-q", "-b", "wip")
-	gitT(t, d, "commit", "-q", "--allow-empty", "-m", "wip")
-	gitT(t, d, "checkout", "-q", "main")
-	if err := g.DeleteBranch(d, "wip"); err == nil {
-		t.Fatal("branch não integrado não pode ser apagado (nunca -D)")
+	t.Run("FullStatus", func(t *testing.T) {
+		in, err := g.FullStatus(wt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if in.TotalFiles != 1 || in.Files[0].Path != "novo.txt" || in.Files[0].Code != "??" {
+			t.Fatalf("status = %+v", in)
+		}
+	})
+
+	if err := g.RemoveWorktree(d, wt, false); err == nil {
+		t.Fatal("sem force deveria recusar worktree com arquivo novo")
 	}
-	if _, ok := g.BranchTip(d, "wip"); !ok {
-		t.Fatal("branch não integrado deveria continuar existindo")
+	if _, err := os.Stat(novo); err != nil {
+		t.Fatal("o arquivo novo precisa sobreviver")
 	}
-	if err := g.DeleteBranch(d, "-x"); err == nil {
-		t.Fatal("nome com hífen deveria ser recusado")
+}
+
+func TestRemoveWorktreeSubmodulesNeedForce(t *testing.T) {
+	d := newRepoOn(t, "main", true)
+	d, _ = filepath.EvalSymlinks(d)
+	base, _ := filepath.EvalSymlinks(t.TempDir())
+	sub := newRepoOn(t, "main", true)
+	g := Exec{}
+	wt := filepath.Join(base, "wt")
+	gitT(t, d, "worktree", "add", "-q", "-b", "wt", wt)
+	gitT(t, wt, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub")
+	gitT(t, wt, "commit", "-q", "-m", "sub")
+
+	if err := g.RemoveWorktree(d, wt, false); !errors.Is(err, ErrSubmodules) {
+		t.Fatalf("erro = %v", err)
+	}
+	if !worktreePaths(t, d)[wt] {
+		t.Fatal("sem force não pode remover")
+	}
+	if err := g.RemoveWorktree(d, wt, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// O worktree remove de um worktree sem diretório limpa só aquele registro.
+func TestRemoveMissingWorktreeOnlyThatRecord(t *testing.T) {
+	d := newRepoOn(t, "main", true)
+	d, _ = filepath.EvalSymlinks(d)
+	base, _ := filepath.EvalSymlinks(t.TempDir())
+	g := Exec{}
+	g1, g2 := filepath.Join(base, "g1"), filepath.Join(base, "g2")
+	gitT(t, d, "worktree", "add", "-q", "-b", "g1", g1)
+	gitT(t, d, "worktree", "add", "-q", "-b", "g2", g2)
+	os.RemoveAll(g1)
+	os.RemoveAll(g2)
+	if err := g.RemoveWorktree(d, g1, false); err != nil {
+		t.Fatal(err)
+	}
+	l := worktreePaths(t, d)
+	if l[g1] || !l[g2] {
+		t.Fatalf("lista = %v", l)
+	}
+}
+
+func TestGitWriteErrorIsOneLine(t *testing.T) {
+	d := newRepoOn(t, "main", true)
+	err := (Exec{}).RemoveWorktree(d, filepath.Join(t.TempDir(), "nada"), false)
+	if err == nil || strings.Contains(err.Error(), "\n") || strings.HasPrefix(err.Error(), "fatal:") {
+		t.Fatalf("erro = %q", err)
 	}
 }

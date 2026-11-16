@@ -51,6 +51,26 @@ type WorktreeInspector interface {
 
 var _ WorktreeInspector = Exec{}
 
+// StatusReader lê as alterações de um worktree vendo sempre os arquivos
+// novos, qualquer que seja o status.showUntrackedFiles do usuário (é o que
+// decide se excluir o worktree perde algo).
+type StatusReader interface {
+	FullStatus(dir string) (Inspection, error)
+}
+
+var _ StatusReader = Exec{}
+
+// FullStatus roda git status --porcelain=v1 -z -unormal em dir.
+func (Exec) FullStatus(dir string) (Inspection, error) {
+	in := Inspection{Files: []FileChange{}, Commits: []Commit{}}
+	out, err := gitRO(dir, "status", "--porcelain=v1", "-z", "-unormal")
+	if err != nil {
+		return in, err
+	}
+	parseStatus(out, &in)
+	return in, nil
+}
+
 // gitRO roda um comando git só de leitura sem pegar locks opcionais: o
 // git status não atualiza o índice (nem disputa index.lock com quem está
 // trabalhando no worktree).

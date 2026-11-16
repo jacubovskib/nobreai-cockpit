@@ -1,7 +1,9 @@
 package api
 
 import (
+	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,6 +16,9 @@ import (
 const (
 	msgRemoveUnavailable = "exclusão de worktrees indisponível neste daemon"
 	msgProcsUnknown      = "não consegui verificar os processos agora; confirme para excluir mesmo assim"
+	msgGitUnknown        = "não consegui ler o estado do git agora; confirme para excluir mesmo assim"
+	msgSubmodules        = "o worktree tem submódulos; confirme para excluir mesmo assim"
+	msgNotAWorktree      = "o git não reconhece mais esta pasta como worktree; confira e apague à mão se for o caso"
 	msgNeedsConfirm      = "o worktree tem alterações não commitadas ou processos rodando; confirme para excluir mesmo assim"
 )
 
@@ -46,6 +51,18 @@ type needsConfirm struct {
 	Processes    []removeProc         `json:"processes"`
 	// ProcessesUnknown: o medidor de recursos não tinha amostra pronta.
 	ProcessesUnknown bool `json:"processes_unknown"`
+	// GitUnknown: o status do git não pôde ser lido (ou não é confiável).
+	GitUnknown bool `json:"git_unknown"`
+}
+
+func newNeedsConfirm(msg string) needsConfirm {
+	return needsConfirm{Error: msg, NeedsConfirm: true, Files: []gitinfo.FileChange{}, Processes: []removeProc{}}
+}
+
+// under diz se path é dir ou está dentro dele.
+func under(path, dir string) bool {
+	dir = strings.TrimRight(dir, "/")
+	return path == dir || strings.HasPrefix(path, dir+"/")
 }
 
 // removeWorktree: DELETE /api/worktrees. Só apaga um worktree ligado que o
@@ -71,15 +88,20 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	remover, ok1 := s.deps.Git.(gitinfo.WorktreeRemover)
-	inspector, ok2 := s.deps.Git.(gitinfo.WorktreeInspector)
+	status, ok2 := s.deps.Git.(gitinfo.StatusReader)
 	branches, ok3 := s.deps.Git.(gitinfo.BranchReader)
-	if !ok1 || !ok2 || !ok3 {
+	lister, ok4 := s.deps.Git.(gitinfo.WorktreeReader)
+	if !ok1 || !ok2 || !ok3 || !ok4 {
 		writeError(w, http.StatusServiceUnavailable, msgRemoveUnavailable)
 		return
 	}
 	pw, err := s.projectWorktrees(*p)
 	if err != nil {
 		writeStoreError(w, err, "")
+		return
+	}
+	if pw.Error != "" {
+		writeError(w, http.StatusBadGateway, pw.Error)
 		return
 	}
 	idx, mainIdx := -1, -1
@@ -112,8 +134,21 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 
 	// Apagar o pai apagaria o worktree aninhado (e o que ele tem não commitado).
 	for i, x := range pw.Worktrees {
-		if i != idx && strings.HasPrefix(x.Path, strings.TrimRight(v.Path, "/")+"/") {
+		if i != idx && x.Path != v.Path && under(x.Path, v.Path) {
 			writeError(w, http.StatusConflict, "há outro worktree dentro deste ("+x.Path+"); exclua-o antes")
+			return
+		}
+	}
+
+	// Nem a pasta de um projeto cadastrado (de qualquer projeto).
+	projects, err := s.st.ListProjects()
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	for _, o := range projects {
+		if o.Path != "" && under(filepath.Clean(o.Path), v.Path) {
+			writeError(w, http.StatusConflict, "a pasta de um projeto cadastrado está aqui ("+o.Name+"); remova o projeto antes")
 			return
 		}
 	}
@@ -127,17 +162,26 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, x := range all {
 		// Também vale o cwd: um clone independente dentro do alvo grava outra raiz.
-		inside := x.Cwd == v.Path || strings.HasPrefix(x.Cwd, strings.TrimRight(v.Path, "/")+"/")
-		if x.Live() && (worktreeOf(pw.Worktrees, x) == idx || inside) {
+		if x.Live() && (worktreeOf(pw.Worktrees, x) == idx || under(x.Cwd, v.Path)) {
 			writeError(w, http.StatusConflict, "há uma sessão viva neste worktree; encerre-a antes de excluir")
 			return
 		}
 	}
 
-	if !req.Force && !v.Prunable {
-		nc := needsConfirm{Error: msgNeedsConfirm, NeedsConfirm: true, Files: []gitinfo.FileChange{}, Processes: []removeProc{}}
-		if in, err := inspector.Inspect(v.Path, "", "", 0); err == nil {
+	// Prunable só é "pasta sumiu" se a pasta sumiu mesmo. Com ela lá (sem
+	// .git), o status subiria para o repositório de cima: não é confiável.
+	_, statErr := os.Stat(v.Path)
+	missing := v.Prunable && statErr != nil
+	strayFolder := v.Prunable && !missing
+
+	if !req.Force && !missing {
+		nc := newNeedsConfirm(msgNeedsConfirm)
+		if strayFolder {
+			nc.GitUnknown = true
+		} else if in, err := status.FullStatus(v.Path); err == nil {
 			nc.Files, nc.TotalFiles = nonNil(in.Files), in.TotalFiles
+		} else {
+			nc.GitUnknown = true
 		}
 		if s.deps.Resources != nil {
 			procs, ready := s.deps.Resources.Snapshot()
@@ -152,8 +196,13 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 				nc.Processes = append(nc.Processes, removeProc{PID: pr.PID, Name: pr.Comm})
 			}
 		}
-		if nc.TotalFiles > 0 || len(nc.Processes) > 0 || nc.ProcessesUnknown {
-			if nc.TotalFiles == 0 && len(nc.Processes) == 0 {
+		known := nc.TotalFiles > 0 || len(nc.Processes) > 0
+		if known || nc.GitUnknown || nc.ProcessesUnknown {
+			switch {
+			case known:
+			case nc.GitUnknown:
+				nc.Error = msgGitUnknown
+			default:
 				nc.Error = msgProcsUnknown
 			}
 			writeJSON(w, http.StatusConflict, nc)
@@ -161,12 +210,22 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if v.Prunable {
-		err = remover.PruneWorktrees(repo)
+	if missing {
+		// Remove só este registro; o prune (que limpa todos) fica de reserva.
+		if err = remover.RemoveWorktree(repo, v.Path, false); err != nil {
+			err = remover.PruneWorktrees(repo)
+		}
 	} else {
 		err = remover.RemoveWorktree(repo, v.Path, req.Force)
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, gitinfo.ErrSubmodules):
+		writeJSON(w, http.StatusConflict, newNeedsConfirm(msgSubmodules))
+		return
+	case err != nil && strayFolder:
+		writeError(w, http.StatusConflict, msgNotAWorktree)
+		return
+	case err != nil:
 		writeError(w, http.StatusInternalServerError, "não consegui excluir o worktree: "+err.Error())
 		return
 	}
@@ -175,15 +234,20 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 	if req.DeleteBranch && (v.Branch == "" || v.Detached) {
 		res.BranchKeptReason = "o worktree não tem branch (HEAD destacado)"
 	} else if req.DeleteBranch {
-		res.BranchDeleted, res.BranchKeptReason = deleteIntegratedBranch(remover, branches, *p, repo, v.Branch)
+		res.BranchDeleted, res.BranchKeptReason = deleteIntegratedBranch(remover, branches, lister, *p, repo, v.Branch)
 	}
 	s.publish("sessions")
+	if res.BranchDeleted {
+		s.publish("cards")
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 
 // deleteIntegratedBranch apaga branch só se a ponta dele já estiver na base
-// do projeto; devolve se apagou e, se não, o motivo.
-func deleteIntegratedBranch(remover gitinfo.WorktreeRemover, br gitinfo.BranchReader, p domain.Project, repo, branch string) (bool, string) {
+// do projeto (local ou origin/<base>) e nenhum outro worktree o usar; apaga
+// com compare-and-delete na ponta verificada. Devolve se apagou e, se não,
+// o motivo em pt-BR.
+func deleteIntegratedBranch(remover gitinfo.WorktreeRemover, br gitinfo.BranchReader, wr gitinfo.WorktreeReader, p domain.Project, repo, branch string) (bool, string) {
 	base := board.ProjectBase(br, p)
 	switch {
 	case base == "":
@@ -198,8 +262,18 @@ func deleteIntegratedBranch(remover gitinfo.WorktreeRemover, br gitinfo.BranchRe
 	if !br.IsAncestor(repo, tip, base) && !br.IsAncestor(repo, tip, "origin/"+base) {
 		return false, "não está integrado em " + base
 	}
-	if err := remover.DeleteBranch(repo, branch); err != nil {
-		return false, err.Error()
+	// Lista de novo, já sem o worktree removido.
+	list, err := wr.Worktrees(repo)
+	if err != nil {
+		return false, "não consegui apagar o branch: não consegui listar os worktrees"
+	}
+	for _, x := range list {
+		if x.Branch == branch && !x.Detached {
+			return false, "o branch está em uso em outro worktree (" + x.Path + ")"
+		}
+	}
+	if err := remover.DeleteBranchAt(repo, branch, tip); err != nil {
+		return false, "não consegui apagar o branch: " + err.Error()
 	}
 	return true, ""
 }

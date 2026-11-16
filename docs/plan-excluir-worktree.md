@@ -26,9 +26,9 @@
   - Os testes de git criam repositórios reais, com `commit.gpgsign=false` (padrão de `internal/api/worktrees_test.go`).
 - **Git de leitura:** continua por `gitRO`.
 - **Git de escrita:** existe só nesta rota e só com estes argumentos:
-  - `git -C <repo> worktree remove [--force] -- <path>`;
-  - `git -C <repo> worktree prune` (worktree cujo diretório sumiu);
-  - `git -C <repo> branch -d -- <branch>`, nunca `-D`.
+  - `git -C <repo> -c status.showUntrackedFiles=normal worktree remove [--force] -- <path>`;
+  - `git -C <repo> worktree prune` (só se o `worktree remove` de um worktree cujo diretório sumiu falhar);
+  - `git -C <repo> update-ref -d -- refs/heads/<branch> <ponta>` (revisão final: substitui `branch -d`; compare-and-delete na ponta verificada como integrada, só se nenhum outro worktree usa o branch), nunca `branch -D`.
 - **Base para "integrado":** `board.ProjectBase(git, projeto)`. Integrado = a ponta do branch é ancestral da base local ou de `origin/<base>` (mesma regra do detector do NAC-9).
 - **Diálogos:** nunca abrir diálogo do navegador (`confirm`/`alert`); a confirmação é inline, como no "Encerrar agente".
 
