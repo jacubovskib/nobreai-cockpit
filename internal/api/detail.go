@@ -38,8 +38,12 @@ type CardSummary struct {
 	LastActivityAt *time.Time             `json:"last_activity_at"`
 	Totals         store.Total            `json:"totals"`
 	Readiness      domain.ReadinessResult `json:"readiness"`
-	// Signal: "parado" / "aguardando_revisao" quando a última atividade (sessões
-	// ou mudança do card) passou de domain.StaleAfter; SignalSince é essa atividade.
+	// Signal (domain.CardStatusSignal): "bloqueado" (Pausado ou Backlog com
+	// bloqueador existente e não concluído), "pronto_para_retomar" (bloqueador
+	// concluído) e "aguardando_voce" (Pausado com pergunta aberta) valem na
+	// hora; "parado" (Em andamento ou Pausado) e "aguardando_revisao" (Revisão)
+	// quando a última atividade (sessões ou mudança do card) passou de
+	// domain.StaleAfter. SignalSince é essa atividade.
 	Signal      domain.Signal `json:"signal"`
 	SignalSince *time.Time    `json:"signal_since"`
 }

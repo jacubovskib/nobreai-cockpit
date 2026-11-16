@@ -94,17 +94,17 @@ Um banco que não tem as duas chaves novas assume ligado (o comportamento de ant
 | Carência (minutos) | Reconciliador: encerra a sessão cujo processo sumiu. |
 
 ### Limites de custo
-Ação em 100% "Bloquear o agente e mover o card para Pausado": o hook `PreToolUse` nega a ferramenta (comandos `nobre` sempre passam, para o agente registrar o handoff), move o card para Pausado com o motivo "limite de custo" e registra o evento. Na primeira ferramenta permitida depois de o limite ser elevado, o card volta para Em andamento. "Só avisar" não bloqueia nada. O aviso do plano (`plan_warn_pct`) vale na Sala de controle.
+Ação em 100% "Bloquear o agente e mover o card para Pausado": o hook `PreToolUse` nega a ferramenta (comandos `nobre` sempre passam, para o agente registrar o handoff), move o card para Pausado com o motivo "limite de custo" e registra o evento. Na primeira ferramenta permitida depois de o limite ser elevado, o card volta para Em andamento. Se a própria sessão, ainda viva, rodar `nobre done`, o card pausado por limite vai para Revisão e perde o motivo da pausa; fora disso, `nobre done` em card que não está em Em andamento é recusado ("o card está em <coluna>; nobre done só move cards em andamento"). A Sala de controle mostra o evento como "pausado por limite de custo", e o SessionStart não sugere retomar um card pausado que ainda tem sessão viva. "Só avisar" não bloqueia nada. O aviso do plano (`plan_warn_pct`) vale na Sala de controle.
 
 ### Sinais do card
-Mostrados no board, na lista e no card, valem na hora (os três primeiros não esperam 24 h):
+Mostrados no board e na lista de cards da página do projeto (a lista de projetos conta os cards parados e aguardando revisão; a página do card não mostra sinal). Valem na hora (os três primeiros não esperam 24 h):
 - **bloqueado por NAC-x**: card em Pausado ou Backlog com `nobre block NAC-x [--why ...]` e o bloqueador existente e não concluído. `nobre block --clear` remove; chave inexistente é recusada.
 - **pronto para retomar (NAC-x concluído)**: o bloqueador foi concluído.
 - **aguardando você há …**: card em Pausado com pergunta aberta.
 - **parado**: Em andamento ou Pausado sem atividade há mais de 24 h (o agente possivelmente travou: mais de 24 h sem atividade).
 - **aguardando revisão**: card em Revisão sem atividade há mais de 24 h.
 
-`pause_reason`, `handoff_incomplete` e `blocked_by` são limpos quando o card volta para Em andamento (inclusive ao ser retomado por outra sessão). Se o bloqueador for apagado, o card cai na regra normal.
+`pause_reason`, `handoff_incomplete` e `blocked_by` são limpos quando o card volta para Em andamento (inclusive ao ser retomado por outra sessão). Mover o card à mão para outra coluna limpa `pause_reason`, e sair de Pausado limpa `handoff_incomplete` (a marca só aparece em cards pausados). A chave do `nobre block` é normalizada (`nac-2` vira `NAC-2`). Se o bloqueador for apagado, o card cai na regra normal.
 
 ### Ainda "em breve"
 - Modo tmux do "Continuar" (aparece desabilitado).
