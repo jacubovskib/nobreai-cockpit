@@ -329,3 +329,41 @@ func TestListCardsSignalLiveIdleHasNoSignal(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 }
+
+func TestCardSummaryBlockedSignal(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	blocker, _ := a.st.CreateCard(domain.Card{Title: "Bloqueador", ProjectID: p.ID})
+	blocked, _ := a.st.CreateCard(domain.Card{Title: "Bloqueado", ProjectID: p.ID})
+	orphan, _ := a.st.CreateCard(domain.Card{Title: "Órfão", ProjectID: p.ID})
+	a.setCard(t, blocker.Key, domain.EmAndamento, testNow)
+	a.setCard(t, blocked.Key, domain.Pausado, testNow.Add(-time.Minute))
+	a.setCard(t, orphan.Key, domain.Pausado, testNow.Add(-time.Minute))
+	for key, by := range map[string]string{blocked.Key: blocker.Key, orphan.Key: "NAC-999"} {
+		if _, err := a.st.DB.Exec(`UPDATE cards SET blocked_by=? WHERE key=?`, by, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func() map[string]CardSummary {
+		rec := a.do(t, "GET", "/api/cards", nil, 0)
+		if rec.Code != 200 {
+			t.Fatalf("code %d %s", rec.Code, rec.Body)
+		}
+		got := map[string]CardSummary{}
+		for _, c := range decode[[]CardSummary](t, rec) {
+			got[c.Key] = c
+		}
+		return got
+	}
+	got := get()
+	if c := got[blocked.Key]; c.Signal != domain.SignalBloqueado || c.BlockedBy != blocker.Key || c.SignalSince == nil {
+		t.Fatalf("bloqueado = %+v", c)
+	}
+	if c := got[orphan.Key]; c.Signal != "" {
+		t.Fatalf("órfão = %q", c.Signal)
+	}
+	a.setCard(t, blocker.Key, domain.Concluido, testNow)
+	if c := get()[blocked.Key]; c.Signal != domain.SignalProntoParaRetomar {
+		t.Fatalf("pronto = %q", c.Signal)
+	}
+}

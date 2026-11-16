@@ -32,6 +32,7 @@ Agente (use dentro de uma sessão de agente):
   nobre ask "<pergunta>"                                  registra uma pergunta em aberto
   nobre branch <nome>                                     informa o branch de trabalho do card
   nobre answer <id> "<resposta>"                          responde uma pergunta do card
+  nobre block <KEY> [--why "<motivo>"]                    marca o card que bloqueia este (nobre block --clear remove)
   nobre test "<como testar>"                              registra como testar
   nobre done [--force]                                    marca o card como pronto para revisão
   nobre status                                            mostra o card e a prontidão do handoff
@@ -126,6 +127,8 @@ func (c *cli) run(args []string) int {
 		err = c.branch(rest)
 	case "answer":
 		err = c.answer(rest)
+	case "block":
+		err = c.block(rest)
 	case "test":
 		err = c.simple("test", "como testar", rest, "text")
 	case "decide":

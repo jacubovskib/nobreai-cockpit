@@ -1100,3 +1100,42 @@ func TestPreToolUseResumesCardWhenLimitRaised(t *testing.T) {
 		t.Fatalf("card = %+v", got)
 	}
 }
+
+func TestSessionStartPausedListShowsReason(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	blocker, err := e.st.CreateCard(domain.Card{Title: "Bloqueador", ProjectID: p.ID, Branch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(title string, mod func(*domain.Card)) domain.Card {
+		c, err := e.st.CreateCard(domain.Card{Title: title, ProjectID: p.ID, Branch: "main", Column: domain.Pausado})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mod(&c)
+		if err := e.st.UpdateCard(c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	mk("Bloqueado", func(c *domain.Card) { c.BlockedBy = blocker.Key })
+	mk("Limite", func(c *domain.Card) { c.PauseReason = domain.PauseReasonLimit })
+	q := mk("Pergunta", func(*domain.Card) {})
+	if _, err := e.st.AddQuestion(domain.Question{CardID: q.ID, Text: "qual?"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	for _, want := range []string{" · bloqueado por " + blocker.Key, " · pausado por limite de custo", " · aguardando você (1 pergunta(s))", "nobre block <KEY>"} {
+		if !strings.Contains(ctx, want) {
+			t.Fatalf("contexto sem %q:\n%s", want, ctx)
+		}
+	}
+	if err := e.st.MoveCard(blocker.Key, domain.Concluido); err != nil {
+		t.Fatal(err)
+	}
+	ctx = additionalContext(t, e.call(t, "session_start"))
+	if !strings.Contains(ctx, " · pronto para retomar ("+blocker.Key+" concluído)") {
+		t.Fatalf("contexto sem pronto para retomar:\n%s", ctx)
+	}
+}

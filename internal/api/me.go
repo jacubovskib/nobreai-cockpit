@@ -38,6 +38,7 @@ func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/todo", s.withSessionCard(s.meContent(s.addTodo)))
 	mux.HandleFunc("POST /api/me/ask", s.withSessionCard(s.meContent(s.addQuestion)))
 	mux.HandleFunc("POST /api/me/answer", s.withSessionCard(s.meAnswer))
+	mux.HandleFunc("POST /api/me/block", s.withSessionCard(s.meBlock))
 	mux.HandleFunc("POST /api/me/todo-done", s.withSessionCard(s.meTodoDone))
 	mux.HandleFunc("POST /api/me/test", s.withSessionCard(s.meTest))
 	mux.HandleFunc("POST /api/me/branch", s.withSessionCard(s.meBranch))
@@ -551,5 +552,47 @@ func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Sess
 		s.publish("cards")
 	}
 	s.recordEvent(sess.ID, domain.EvDone, map[string]any{})
+	s.writeCard(w, http.StatusOK, c.Key)
+}
+
+// meBlock marca (ou, com key vazia, limpa) o card que bloqueia o card da sessão.
+func (s *server) meBlock(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		Key string `json:"key"`
+		Why string `json:"why"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	key := strings.TrimSpace(in.Key)
+	if key != "" {
+		if strings.EqualFold(key, c.Key) {
+			writeError(w, http.StatusBadRequest, "um card não pode bloquear a si mesmo")
+			return
+		}
+		b, err := s.st.GetCard(key)
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "card "+key+" não encontrado")
+			return
+		}
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		key = b.Key
+	}
+	c.BlockedBy = key
+	if err := s.st.UpdateCard(c); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	if key != "" {
+		if _, err := s.st.AddDecision(domain.Decision{CardID: c.ID, What: "Bloqueado por " + key, Why: in.Why, SessionID: sess.ID, At: s.now()}); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		s.recordEvent(sess.ID, domain.EvDecision, map[string]any{"what": "Bloqueado por " + key, "why": in.Why})
+	}
+	s.publish("cards")
 	s.writeCard(w, http.StatusOK, c.Key)
 }

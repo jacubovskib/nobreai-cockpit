@@ -150,6 +150,7 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		HowToTest    *string        `json:"how_to_test"`
 		WhereStopped *string        `json:"where_stopped"`
 		Column       *domain.Column `json:"column"`
+		BlockedBy    *string        `json:"blocked_by"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -196,6 +197,22 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		if v != nil {
 			*dst = *v
 		}
+	}
+	if in.BlockedBy != nil {
+		key := strings.TrimSpace(*in.BlockedBy)
+		if key != "" {
+			if strings.EqualFold(key, c.Key) {
+				writeError(w, http.StatusBadRequest, "um card não pode bloquear a si mesmo")
+				return
+			}
+			b, err := s.st.GetCard(key)
+			if err != nil {
+				writeStoreError(w, err, "card "+key+" não encontrado")
+				return
+			}
+			key = b.Key
+		}
+		c.BlockedBy = key
 	}
 	set(&c.Goal, in.Goal)
 	set(&c.DoneWhen, in.DoneWhen)

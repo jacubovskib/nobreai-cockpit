@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -138,10 +139,33 @@ func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, er
 	if sum.LastActivityAt != nil && sum.LastActivityAt.After(last) {
 		last = *sum.LastActivityAt
 	}
-	// Sessão viva = o agente está ali; ociosa não vira "parado".
-	if !sum.Live {
-		if sum.Signal = domain.CardSignal(c.Column, last, s.now()); sum.Signal != domain.SignalNone {
-			sum.SignalSince = &last
+	in := domain.SignalInput{Column: c.Column, LastActivity: last, Now: s.now(), BlockedBy: c.BlockedBy}
+	for _, q := range ct.Questions {
+		if q.Answer == "" {
+			in.OpenQuestions++
+		}
+	}
+	if c.BlockedBy != "" {
+		switch b, err := s.st.GetCard(c.BlockedBy); {
+		case err == nil:
+			in.BlockerExists, in.BlockerConcluded = true, b.Column == domain.Concluido
+		case !errors.Is(err, store.ErrNotFound):
+			return sum, err
+		}
+	}
+	sig := domain.CardStatusSignal(in)
+	switch sig {
+	case domain.SignalBloqueado, domain.SignalProntoParaRetomar:
+		// Valem na hora e também com sessão viva; o tempo é o da pausa.
+		sum.Signal, sum.SignalSince = sig, &c.UpdatedAt
+	case domain.SignalAguardandoVoce:
+		if !sum.Live {
+			sum.Signal, sum.SignalSince = sig, &c.UpdatedAt
+		}
+	default:
+		// Sessão viva = o agente está ali; ociosa não vira "parado".
+		if !sum.Live && sig != domain.SignalNone {
+			sum.Signal, sum.SignalSince = sig, &last
 		}
 	}
 	return sum, err

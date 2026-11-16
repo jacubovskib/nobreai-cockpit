@@ -32,7 +32,7 @@ const createGuidance = `Crie um card com nobre start "<título>" quando começar
 const askOnlyGuidance = `Só crie card quando o usuário pedir ("crie um card para isso"); se ele citar uma chave NAC-, use nobre resume <KEY>.`
 
 // commandsGuidance são os comandos nobre para uma sessão com card.
-const commandsGuidance = `Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
+const commandsGuidance = `Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre block <KEY> quando o card só puder continuar depois de outro, antes de parar; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
 
 // guidanceFor são as instruções sem a frase de sessão registrada (o aviso de
 // repositório não cadastrado termina nelas): o critério de criação conforme a
@@ -146,7 +146,7 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 				if where == "" {
 					where = "(onde parei não registrado)"
 				}
-				fmt.Fprintf(&b, "\n- %s · %s · %s", c.Key, c.Title, oneLine(where))
+				fmt.Fprintf(&b, "\n- %s · %s · %s%s", c.Key, c.Title, oneLine(where), a.pauseReason(c))
 			}
 		}
 	}
@@ -213,6 +213,35 @@ func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domai
 		}
 	}
 	return out, nil
+}
+
+// pauseReason é o motivo da pausa no fim da linha do card (" · ..."), ou "".
+func (a *Adapter) pauseReason(c domain.Card) string {
+	in := domain.SignalInput{Column: c.Column, Now: time.Now(), LastActivity: time.Now(), BlockedBy: c.BlockedBy}
+	if c.BlockedBy != "" {
+		if b, err := a.st.GetCard(c.BlockedBy); err == nil {
+			in.BlockerExists, in.BlockerConcluded = true, b.Column == domain.Concluido
+		}
+	}
+	if ct, err := a.st.CardContent(c.ID); err == nil {
+		for _, q := range ct.Questions {
+			if q.Answer == "" {
+				in.OpenQuestions++
+			}
+		}
+	}
+	switch domain.CardStatusSignal(in) {
+	case domain.SignalBloqueado:
+		return " · bloqueado por " + c.BlockedBy
+	case domain.SignalProntoParaRetomar:
+		return " · pronto para retomar (" + c.BlockedBy + " concluído)"
+	case domain.SignalAguardandoVoce:
+		return fmt.Sprintf(" · aguardando você (%d pergunta(s))", in.OpenQuestions)
+	}
+	if c.PauseReason == domain.PauseReasonLimit {
+		return " · pausado por " + domain.PauseReasonLimit
+	}
+	return ""
 }
 
 // oneLine junta as linhas do texto (o "onde parei" vai numa linha da lista).

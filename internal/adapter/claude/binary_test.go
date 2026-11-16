@@ -95,7 +95,7 @@ func TestSkillGatesOnRegisteredPhrase(t *testing.T) {
 	if !strings.Contains(skillContent, registeredPhrase) {
 		t.Fatalf("skill.md não cita a frase %q", registeredPhrase)
 	}
-	for _, want := range []string{unregisteredPhrase, "nobre project scan", "nobre card add"} {
+	for _, want := range []string{unregisteredPhrase, "nobre project scan", "nobre card add", "nobre block"} {
 		if !strings.Contains(skillContent, want) {
 			t.Fatalf("skill.md não contém %q", want)
 		}

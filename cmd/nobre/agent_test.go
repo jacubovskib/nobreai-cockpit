@@ -276,3 +276,25 @@ func TestCLICardAdd(t *testing.T) {
 		t.Fatalf("out = %q", r.stdout)
 	}
 }
+
+func TestCLIBlock(t *testing.T) {
+	var path, body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bs, _ := json.Marshal(b)
+		path, body = r.URL.Path, string(bs)
+		w.Write([]byte(`{"key":"NAC-9","blocked_by":"NAC-2"}`))
+	})
+	r := runCLI(t, addr, "", nil, "block", "NAC-2", "--why", "x")
+	if r.code != 0 || path != "/api/me/block" || body != `{"key":"NAC-2","why":"x"}` || strings.TrimSpace(r.stdout) != "Card NAC-9 bloqueado por NAC-2." {
+		t.Fatalf("%+v path=%s body=%s", r, path, body)
+	}
+	r = runCLI(t, addr, "", nil, "block", "--clear")
+	if r.code != 0 || body != `{"key":""}` || strings.TrimSpace(r.stdout) != "Bloqueio removido." {
+		t.Fatalf("%+v body=%s", r, body)
+	}
+	if r := runCLI(t, addr, "", nil, "block"); r.code != 2 {
+		t.Fatalf("sem argumento: %+v", r)
+	}
+}

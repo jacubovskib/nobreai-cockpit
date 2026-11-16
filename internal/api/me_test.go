@@ -569,3 +569,36 @@ func TestMeCardsDropsBaseBranch(t *testing.T) {
 		t.Fatalf("branch = %q", got.Branch)
 	}
 }
+
+func TestMeBlock(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	other, err := a.st.CreateCard(domain.Card{Title: "Outro", ProjectID: c.ProjectID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/block", map[string]string{"key": other.Key, "why": "precisa do merge"}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("block = %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[domain.Card](t, rec); got.BlockedBy != other.Key {
+		t.Fatalf("card = %+v", got)
+	}
+	ct, _ := a.st.CardContent(c.ID)
+	if len(ct.Decisions) != 1 || ct.Decisions[0].What != "Bloqueado por "+other.Key || ct.Decisions[0].Why != "precisa do merge" {
+		t.Fatalf("decisões = %+v", ct.Decisions)
+	}
+	rec = a.do(t, "POST", "/api/me/block", map[string]string{"key": c.Key}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "um card não pode bloquear a si mesmo" {
+		t.Fatalf("própria = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/me/block", map[string]string{"key": "NAC-999"}, 4242)
+	if rec.Code != http.StatusNotFound || decode[map[string]string](t, rec)["error"] != "card NAC-999 não encontrado" {
+		t.Fatalf("inexistente = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/me/block", map[string]string{"key": ""}, 4242)
+	if rec.Code != http.StatusOK || decode[domain.Card](t, rec).BlockedBy != "" {
+		t.Fatalf("limpar = %d %s", rec.Code, rec.Body)
+	}
+}

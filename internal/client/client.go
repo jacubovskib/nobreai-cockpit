@@ -183,6 +183,17 @@ func (c *Client) AnswerQuestion(ctx context.Context, id int64, answer string) er
 	return c.Do(ctx, "POST", "/api/me/answer", map[string]any{"id": id, "answer": answer}, nil)
 }
 
+// Block marca o card que bloqueia o card da sessão (key vazia limpa) e devolve o card.
+func (c *Client) Block(ctx context.Context, key, why string) (domain.Card, error) {
+	body := map[string]string{"key": key}
+	if why != "" {
+		body["why"] = why
+	}
+	var card domain.Card
+	err := c.Do(ctx, "POST", "/api/me/block", body, &card)
+	return card, err
+}
+
 // SetBranch informa o branch de trabalho do card da sessão.
 func (c *Client) SetBranch(ctx context.Context, branch string) error {
 	return c.Do(ctx, "POST", "/api/me/branch", map[string]string{"branch": branch}, nil)
