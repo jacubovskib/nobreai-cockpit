@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { TerminalView, type TermLike, type WsLike } from './TerminalView'
+import { BASE_FONT, MIN_FONT, TerminalView, fontToFit, type TermLike, type WsLike } from './TerminalView'
 
 class FakeTerm implements TermLike {
   cols = 100
@@ -9,6 +9,8 @@ class FakeTerm implements TermLike {
   writeCbs: (() => void)[] = []
   resized: [number, number][] = []
   fits = 0
+  fontSize = 13
+  fonts: number[] = []
   resets = 0
   disposed = false
   dataCb: (d: string) => void = () => {}
@@ -71,6 +73,64 @@ describe('TerminalView', () => {
     act(() => socks[0].msg(new TextEncoder().encode('olá').buffer))
     expect(text(term.written[0])).toBe('olá')
     expect(socks[0].sent).toHaveLength(0)
+  })
+
+  it('fontToFit diminui a fonte até o PTY caber, entre o mínimo e a base', () => {
+    expect(fontToFit(13, 1000, 539, 920, 680)).toBe(10) // 13 × 539/680 = 10,3
+    expect(fontToFit(13, 2000, 2000, 920, 680)).toBe(BASE_FONT) // nunca passa da base
+    expect(fontToFit(10, 1200, 900, 708, 523)).toBe(13) // contêiner cresceu: volta a crescer até a base
+    expect(fontToFit(13, 100, 100, 920, 680)).toBe(MIN_FONT) // PTY enorme: para no mínimo
+    expect(fontToFit(13, 0, 0, 920, 680)).toBe(13) // contêiner ainda sem tamanho
+    expect(fontToFit(13, 800, 600, 0, 0)).toBe(13) // terminal ainda sem tamanho
+  })
+
+  // A tela do xterm escala com a fonte (natural = medida na fonte base), como no xterm real.
+  const sizes = (h: HTMLElement, screenEl: HTMLElement, natural: { w: number; h: number }, term: FakeTerm) => {
+    Object.defineProperty(h, 'clientWidth', { configurable: true, value: 1016 })
+    Object.defineProperty(h, 'clientHeight', { configurable: true, value: 555 }) // 539 úteis (padding 8 + 8)
+    const xs = document.createElement('div')
+    xs.className = 'xterm-screen'
+    screenEl.appendChild(xs)
+    Object.defineProperty(xs, 'offsetWidth', { configurable: true, get: () => natural.w * term.fontSize / BASE_FONT })
+    Object.defineProperty(xs, 'offsetHeight', { configurable: true, get: () => natural.h * term.fontSize / BASE_FONT })
+  }
+
+  it('seguindo o PTY, um terminal maior que o contêiner ganha fonte menor para caber inteiro', () => {
+    const { term, socks } = setup()
+    const h = host()
+    const screenEl = h.firstElementChild as HTMLElement
+    expect(screenEl.style.width).toBe('100%') // o pai do xterm ocupa o contêiner (FitAddon mede o pai)
+    expect(screenEl.style.height).toBe('100%')
+    sizes(h, screenEl, { w: 920, h: 680 }, term)
+    act(() => socks[0].open())
+    act(() => socks[0].msg(JSON.stringify({ type: 'info', id: 't1', cols: 120, rows: 40 })))
+    expect(term.fontSize).toBe(10)
+    expect(term.resized.at(-1)).toEqual([120, 40]) // linhas e colunas continuam as do PTY
+    expect(screenEl.style.transform).toBe('') // sem transform: mouse e seleção alinhados
+  })
+
+  it('ao interagir a fonte volta à base antes do ajuste ao contêiner', () => {
+    const { term, socks } = setup()
+    const h = host()
+    sizes(h, h.firstElementChild as HTMLElement, { w: 920, h: 680 }, term)
+    act(() => socks[0].open())
+    act(() => socks[0].msg(JSON.stringify({ type: 'info', id: 't1', cols: 120, rows: 40 })))
+    expect(term.fontSize).toBe(10)
+    fireEvent.keyDown(h, { key: 'a' })
+    expect(term.fontSize).toBe(BASE_FONT)
+    expect(term.fits).toBeGreaterThan(0)
+  })
+
+  it('o botão Interagir (reconexão sem seguir o PTY) também volta a fonte à base', () => {
+    const { term, socks } = setup({ readonly: true })
+    const h = host()
+    sizes(h, h.firstElementChild as HTMLElement, { w: 920, h: 680 }, term)
+    act(() => socks[0].open())
+    act(() => socks[0].msg(JSON.stringify({ type: 'info', id: 't1', cols: 120, rows: 40 })))
+    expect(term.fontSize).toBe(10)
+    fireEvent.click(screen.getByRole('button', { name: 'Interagir' }))
+    act(() => socks[1].open())
+    expect(term.fontSize).toBe(BASE_FONT)
   })
 
   it('usa o tamanho do PTY (mensagem info) até o usuário interagir, sem fit', () => {
