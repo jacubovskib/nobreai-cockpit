@@ -438,7 +438,8 @@ func usd(v float64) string {
 // último "Onde parei" (o Stop dispara a cada resposta: os demais itens da regra
 // de handoff só aparecem na UI e no fim da sessão); com a regra "where_stopped"
 // desligada, não bloqueia, pois esse é o único critério por turno. Sem card, lembra uma única
-// vez de criar card quando a sessão já editou ReminderEditThreshold arquivos.
+// vez de criar card quando a sessão já editou ReminderEditThreshold arquivos (só se o agente
+// cria cards por conta própria: AgentCreatesCards).
 func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
 	if p.StopHookActive || !sess.FullCapture {
 		return adapter.HookReply{}, nil
@@ -465,7 +466,7 @@ func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (adapter.H
 		}
 		return jsonReply(map[string]any{"decision": "block", "reason": reason})
 	}
-	if set.ReminderEditThreshold <= 0 {
+	if set.ReminderEditThreshold <= 0 || !set.AgentCreatesCards {
 		return adapter.HookReply{}, nil
 	}
 	if reminded, err := a.st.SessionReminded(sess.ID); err != nil || reminded {

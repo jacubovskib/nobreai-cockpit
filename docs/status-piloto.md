@@ -78,8 +78,8 @@ Branch `feat/configuracoes` (plano `docs/plan-configuracoes.md`). Cada opção d
 | Opção | Onde vale |
 |---|---|
 | Quando eu pedir | Sempre ativo. |
-| Quando o agente identificar que está começando algo que precisa de histórico (`agent_creates_cards`, padrão ligado) | `SessionStart`: o contexto injetado traz o critério de criação. Desligada, ele diz "Só crie card quando o usuário pedir". Vale também no aviso de repositório não cadastrado. |
-| Se ele esquecer, lembrar (`reminder_edit_threshold`, padrão 3 arquivos; desligado = 0) | Hook `Stop`: numa sessão sem card, lembra o agente uma vez por sessão (bloqueia o fim do turno) quando ela editou esse número de arquivos distintos ou mais. 0 desliga. |
+| Quando o agente identificar que está começando algo que precisa de histórico (`agent_creates_cards`, padrão ligado) | `SessionStart`: o contexto injetado traz o critério de criação. Desligada, ele diz "Só crie card quando o usuário pedir" (a skill obedece), o aviso de repositório não cadastrado mantém o cadastro e o levantamento mas manda listar ao usuário os cards sugeridos em vez de criá-los, e o lembrete do hook `Stop` não dispara. |
+| Se ele esquecer, lembrar (`reminder_edit_threshold`, padrão 3 arquivos; desligado = 0) | Hook `Stop`: numa sessão sem card (e com `agent_creates_cards` ligado), lembra o agente uma vez por sessão (bloqueia o fim do turno) quando ela editou esse número de arquivos distintos ou mais. 0 desliga. |
 | Mostrar cards pausados no início da sessão (`inject_paused_cards`, padrão ligado) | `SessionStart`: lista os cards pausados do mesmo repositório e branch. Desligada, a seção "Cards pausados neste repositório" não aparece. |
 
 Um banco que não tem as duas chaves novas assume ligado (o comportamento de antes).

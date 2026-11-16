@@ -1139,3 +1139,20 @@ func TestSessionStartPausedListShowsReason(t *testing.T) {
 		t.Fatalf("contexto sem pronto para retomar:\n%s", ctx)
 	}
 }
+
+// I2: com agent_creates_cards desligado, o Stop não lembra de criar card.
+func TestStopReminderSkippedWithoutAgentCreatesCards(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	set := domain.DefaultSettings()
+	set.AgentCreatesCards = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"post_tool_use_edit", "post_tool_use_write", "post_tool_use_multiedit"} {
+		e.call(t, f)
+	}
+	if r := e.call(t, "stop"); r.Stdout != "" {
+		t.Fatalf("lembrete com a opção desligada: %q", r.Stdout)
+	}
+}

@@ -45,6 +45,15 @@ func guidanceFor(set domain.Settings) string {
 	return create + "\n" + commandsGuidance
 }
 
+// scanCardsStep é o que fazer com os cards do levantamento no aviso de
+// repositório não cadastrado: criar, ou só sugerir com AgentCreatesCards desligado.
+func scanCardsStep(set domain.Settings) string {
+	if !set.AgentCreatesCards {
+		return "liste ao usuário os cards sugeridos (não crie sem ele pedir)"
+	}
+	return "crie os cards importantes com nobre card add"
+}
+
 // guidance é o texto com os padrões.
 var guidance = guidanceFor(domain.DefaultSettings())
 
@@ -111,7 +120,7 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "SessionStart",
 			"additionalContext": unregisteredPhrase + " (" + root + ").\nAntes de seguir com o pedido do usuário, cadastre com nobre project add " + root +
-				" e faça o levantamento com nobre project scan; crie os cards importantes com nobre card add (veja a skill nobre-cockpit). O cadastro liga esta sessão ao board.\n\n" + guidanceFor(set),
+				" e faça o levantamento com nobre project scan; " + scanCardsStep(set) + " (veja a skill nobre-cockpit). O cadastro liga esta sessão ao board.\n\n" + guidanceFor(set),
 		}})
 	}
 

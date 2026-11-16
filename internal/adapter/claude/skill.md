@@ -32,6 +32,7 @@ Se o usuário não quiser o repositório no board, ele desliga a captura do proj
 - Se o usuário citar uma chave `NAC-`, não crie outro: retome com `nobre resume NAC-12`.
 - Perguntas rápidas e ajustes de uma linha não viram card.
 - Antes de criar, veja se o contexto da sessão lista cards pausados deste repositório e branch; retome em vez de duplicar.
+- Se o contexto da sessão disser "Só crie card quando o usuário pedir", só crie card quando o usuário pedir (vale também para os cards do levantamento: liste-os ao usuário).
 
 ## Comandos
 
