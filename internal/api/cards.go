@@ -177,6 +177,12 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if *in.Column != c.Column {
+			c.PauseReason = ""
+			if *in.Column == domain.EmAndamento {
+				c.HandoffIncomplete, c.BlockedBy = false, ""
+			}
+		}
 		c.Column = *in.Column
 	}
 	if in.Title != nil {

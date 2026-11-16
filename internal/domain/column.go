@@ -31,7 +31,11 @@ const (
 	EvHeartbeat     = "heartbeat"
 	EvDone          = "done"        // nobre done: agente marcou o card como pronto para revisão
 	EvHowToTest     = "how_to_test" // nobre test: agente registrou "como testar"
+	EvLimitPause    = "limit_pause" // limite de custo pausou o card
 )
+
+// PauseReasonLimit é o motivo gravado quando o limite de custo pausa o card.
+const PauseReasonLimit = "limite de custo"
 
 // Transition é um evento que pode mover um card entre colunas.
 type Transition int

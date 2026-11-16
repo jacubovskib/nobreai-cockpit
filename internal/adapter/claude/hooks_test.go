@@ -1045,3 +1045,58 @@ func TestStopIgnoresWhereStoppedWhenRuleDisabled(t *testing.T) {
 		t.Fatalf("não deveria bloquear: %q", r.Stdout)
 	}
 }
+
+func TestPreToolUsePauseMovesCardToPaused(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	e.overLimit(t, "pause")
+	r := e.call(t, "pre_tool_use_bash")
+	if !strings.Contains(r.Stdout, `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout = %s", r.Stdout)
+	}
+	got, _ := e.st.GetCard(c.Key)
+	if got.Column != domain.Pausado || got.PauseReason != "limite de custo" {
+		t.Fatalf("card = %+v", got)
+	}
+	evs, err := e.st.EventsByKind(domain.EvLimitPause, 10)
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("eventos = %+v, err = %v", evs, err)
+	}
+	if !e.published("cards") {
+		t.Fatal("cards não publicado")
+	}
+	e.call(t, "pre_tool_use_bash")
+	if evs, _ := e.st.EventsByKind(domain.EvLimitPause, 10); len(evs) != 1 {
+		t.Fatalf("evento duplicado: %d", len(evs))
+	}
+}
+
+func TestPreToolUseWarnKeepsCardInProgress(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	e.overLimit(t, "warn")
+	e.call(t, "pre_tool_use_bash")
+	if got, _ := e.st.GetCard(c.Key); got.Column != domain.EmAndamento {
+		t.Fatalf("column = %s", got.Column)
+	}
+}
+
+func TestPreToolUseResumesCardWhenLimitRaised(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "Migrar OAuth2"})
+	e.overLimit(t, "pause")
+	e.call(t, "pre_tool_use_bash")
+	if got, _ := e.st.GetCard(c.Key); got.Column != domain.Pausado {
+		t.Fatalf("column = %s", got.Column)
+	}
+	if err := e.st.PutLimit(domain.Limit{Agent: "claude", DailyUSD: 100, WarnPct: 80, Action: "pause"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.call(t, "pre_tool_use_bash"); r.Stdout != "" {
+		t.Fatalf("não deveria negar: %s", r.Stdout)
+	}
+	got, _ := e.st.GetCard(c.Key)
+	if got.Column != domain.EmAndamento || got.PauseReason != "" {
+		t.Fatalf("card = %+v", got)
+	}
+}

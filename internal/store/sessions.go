@@ -232,8 +232,13 @@ func moveCardTx(tx *sql.Tx, cardID int64, ev domain.Transition) error {
 		return err
 	}
 	next := domain.NextColumn(cur, ev)
-	if next == cur {
+	if next == cur && next != domain.EmAndamento {
 		return nil
+	}
+	if next == domain.EmAndamento {
+		// Novo dono vivo: as marcas da pausa e do handoff anterior caem.
+		_, err := tx.Exec(`UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, blocked_by='', updated_at=? WHERE id=?`, string(next), fmtTime(time.Now()), cardID)
+		return err
 	}
 	_, err := tx.Exec(`UPDATE cards SET col=?, updated_at=? WHERE id=?`, string(next), fmtTime(time.Now()), cardID)
 	return err

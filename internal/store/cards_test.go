@@ -187,3 +187,78 @@ func TestSetCardBranchResetsMarks(t *testing.T) {
 		t.Fatalf("marcas não zeradas: %+v", got)
 	}
 }
+
+func TestPauseForLimitOnlyFromInProgress(t *testing.T) {
+	s := newTestStore(t)
+	c := seedCard(t, s, domain.EmAndamento)
+	ok, err := s.PauseForLimit(c.ID, time.Now())
+	if err != nil || !ok {
+		t.Fatalf("ok = %v, err = %v", ok, err)
+	}
+	got, _ := s.GetCard(c.Key)
+	if got.Column != domain.Pausado || got.PauseReason != "limite de custo" {
+		t.Fatalf("card = %+v", got)
+	}
+	if ok, _ := s.PauseForLimit(c.ID, time.Now()); ok {
+		t.Fatal("segunda chamada não deveria mudar")
+	}
+}
+
+func TestResumeFromLimitOnlyWhenPausedByLimit(t *testing.T) {
+	s := newTestStore(t)
+	c := seedCard(t, s, domain.Pausado)
+	if ok, err := s.ResumeFromLimit(c.ID, time.Now()); err != nil || ok {
+		t.Fatalf("pausado sem motivo: ok = %v, err = %v", ok, err)
+	}
+	c2 := seedCard(t, s, domain.EmAndamento)
+	if _, err := s.PauseForLimit(c2.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.ResumeFromLimit(c2.ID, time.Now())
+	if err != nil || !ok {
+		t.Fatalf("ok = %v, err = %v", ok, err)
+	}
+	got, _ := s.GetCard(c2.Key)
+	if got.Column != domain.EmAndamento || got.PauseReason != "" {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+func TestAttachClearsCardFlags(t *testing.T) {
+	s := newTestStore(t)
+	c := seedCard(t, s, domain.EmAndamento)
+	for _, id := range []string{"claude:a", "claude:b"} {
+		if err := s.StartSession(newSession(id, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.AttachSession("claude:a", c.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PauseForLimit(c.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHandoffIncomplete(c.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AttachSession("claude:b", c.Key, true); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetCard(c.Key)
+	if got.Column != domain.EmAndamento || got.PauseReason != "" || got.HandoffIncomplete {
+		t.Fatalf("card = %+v", got)
+	}
+}
+
+func TestUpdateCardPersistsFlags(t *testing.T) {
+	s := newTestStore(t)
+	c := seedCard(t, s, domain.Backlog)
+	c.BlockedBy, c.HandoffIncomplete = "NAC-9", true
+	if err := s.UpdateCard(c); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetCard(c.Key)
+	if got.BlockedBy != "NAC-9" || !got.HandoffIncomplete {
+		t.Fatalf("card = %+v", got)
+	}
+}

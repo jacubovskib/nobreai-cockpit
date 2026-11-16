@@ -30,10 +30,16 @@ type Card struct {
 	BranchHead     string     `json:"branch_head"`
 	BranchDiverged bool       `json:"branch_diverged"`
 	BranchMergedAt *time.Time `json:"branch_merged_at"`
-	ProjectID      int64      `json:"project_id"`
-	Column         Column     `json:"column"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	// PauseReason diz por que o card está pausado ("" = pausa comum);
+	// HandoffIncomplete marca sessão encerrada sem "Onde parei"; BlockedBy é a
+	// chave do card que bloqueia este.
+	PauseReason       string    `json:"pause_reason"`
+	HandoffIncomplete bool      `json:"handoff_incomplete"`
+	BlockedBy         string    `json:"blocked_by"`
+	ProjectID         int64     `json:"project_id"`
+	Column            Column    `json:"column"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type Session struct {

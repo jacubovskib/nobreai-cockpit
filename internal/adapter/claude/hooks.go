@@ -383,11 +383,26 @@ func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (ada
 		return adapter.HookReply{}, err
 	}
 	if !ls.Over || ls.Action != "pause" {
+		if sess.CardID != nil {
+			if ok, err := a.st.ResumeFromLimit(*sess.CardID, now); err != nil {
+				log.Printf("hook claude: retomar card após limite: %v", err)
+			} else if ok {
+				a.publish("cards")
+			}
+		}
 		return adapter.HookReply{}, nil
 	}
 	detail, err := a.limitDetail(ls, sess.CardID)
 	if err != nil {
 		return adapter.HookReply{}, err
+	}
+	if sess.CardID != nil {
+		if ok, err := a.st.PauseForLimit(*sess.CardID, now); err != nil {
+			log.Printf("hook claude: pausar card por limite: %v", err)
+		} else if ok {
+			a.event(sess.ID, domain.EvLimitPause, map[string]any{"detail": detail}, now)
+			a.publish("cards")
+		}
 	}
 	return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 		"hookEventName":            "PreToolUse",
