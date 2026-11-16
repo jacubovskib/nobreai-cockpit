@@ -223,7 +223,7 @@ function Limits({ limits }: { limits: Limit[] }) {
                   <td style={td}><input style={{ ...small, width: 80 }} inputMode="numeric" aria-label={`Percentual de aviso de ${n}`} value={r.warn} onChange={(e) => set(a, { warn: e.target.value })} /></td>
                   <td style={td}>
                     <select style={{ ...input, minHeight: 36 }} aria-label={`Ação em 100% para ${n}`} value={r.action} onChange={(e) => set(a, { action: e.target.value as 'pause' | 'warn' })}>
-                      <option value="pause">Pausar a sessão e mover o card para Handoff</option>
+                      <option value="pause">Bloquear o agente e mover o card para Pausado</option>
                       <option value="warn">Só avisar</option>
                     </select>
                   </td>
@@ -243,12 +243,14 @@ function CardCreation({ settings }: { settings: Settings }) {
   const save = useSaveSettings(settings)
   const [on, setOn] = useState(settings.reminder_edit_threshold > 0)
   const [n, setN] = useState(String(settings.reminder_edit_threshold > 0 ? settings.reminder_edit_threshold : 3))
+  const [creates, setCreates] = useState(settings.agent_creates_cards !== false)
+  const [inject, setInject] = useState(settings.inject_paused_cards !== false)
   const [bad, setBad] = useState<Error | null>(null)
   const submit = () => {
     const v = parseNum(n)
     if (on && !(Number.isInteger(v) && v >= 1)) return setBad(new Error('Informe um número inteiro de arquivos (1 ou mais).'))
     setBad(null)
-    save.mutate({ reminder_edit_threshold: on ? v : 0 })
+    save.mutate({ reminder_edit_threshold: on ? v : 0, agent_creates_cards: creates, inject_paused_cards: inject })
   }
   return (
     <Section id="cards" title="Criação de cards" hint="Toda sessão é registrada, com tokens e custo. Um card só nasce quando o trabalho precisa de histórico.">
@@ -257,8 +259,8 @@ function CardCreation({ settings }: { settings: Settings }) {
         <span>Quando eu pedir<br /><span style={muted}>“crie um card para isso”, <span className="mono">nobre start</span> ou um ID com <span className="mono">nobre resume</span> (sempre ativo)</span></span>
       </label>
       <label style={check}>
-        <input type="checkbox" disabled />
-        <span>Quando o agente identificar que está começando algo que precisa de histórico <span className="badge">em breve</span><br /><span style={muted}>Tarefa de várias etapas ou que pode ser continuada por outro agente. Perguntas rápidas não viram card.</span></span>
+        <input type="checkbox" checked={creates} onChange={(e) => setCreates(e.target.checked)} />
+        <span>Quando o agente identificar que está começando algo que precisa de histórico<br /><span style={muted}>Tarefa de várias etapas ou que pode ser continuada por outro agente. Perguntas rápidas não viram card.</span></span>
       </label>
       <label style={check}>
         <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />
@@ -270,8 +272,8 @@ function CardCreation({ settings }: { settings: Settings }) {
         </label>
       )}
       <label style={check}>
-        <input type="checkbox" disabled />
-        <span>Mostrar cards pausados no início da sessão <span className="badge">em breve</span><br /><span style={muted}>O agente recebe os cards pausados do mesmo repositório e branch e pode retomar um deles em vez de criar outro.</span></span>
+        <input type="checkbox" checked={inject} onChange={(e) => setInject(e.target.checked)} />
+        <span>Mostrar cards pausados no início da sessão<br /><span style={muted}>O agente recebe os cards pausados do mesmo repositório e branch e pode retomar um deles em vez de criar outro.</span></span>
       </label>
       <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} onSave={submit} />
     </Section>
@@ -285,13 +287,20 @@ function Handoff({ settings }: { settings: Settings }) {
   const [ttl, setTtl] = useState(String(settings.where_stopped_ttl_min))
   const [action, setAction] = useState(settings.incomplete_action)
   const [mode, setMode] = useState(settings.launch_mode || 'terminal')
+  const [grace, setGrace] = useState(String(settings.grace_min ?? 15))
+  const [term, setTerm] = useState((settings.terminal_cmd ?? []).join(' '))
   const [bad, setBad] = useState<Error | null>(null)
   const count = RULES.filter(([k]) => rules[k]).length
   const submit = () => {
     const v = parseNum(ttl)
     if (!(Number.isInteger(v) && v >= 0)) return setBad(new Error('A validade do “Onde parei” precisa ser um número de minutos.'))
+    const g = parseNum(grace)
+    if (!(Number.isInteger(g) && g >= 0)) return setBad(new Error('A carência precisa ser um número inteiro de minutos (0 ou mais).'))
     setBad(null)
-    save.mutate({ rules, where_stopped_ttl_min: v, incomplete_action: action, launch_mode: mode })
+    save.mutate({
+      rules, where_stopped_ttl_min: v, incomplete_action: action, launch_mode: mode, grace_min: g,
+      ...(mode === 'terminal' ? { terminal_cmd: term.split(/\s+/).filter(Boolean) } : {}),
+    })
   }
   return (
     <Section id="handoff" title="Regra de “pronto para handoff”" hint="O mínimo para outro agente continuar sem perguntar nada. Vale para todos os projetos.">
@@ -310,7 +319,7 @@ function Handoff({ settings }: { settings: Settings }) {
         <label style={field}>Se a sessão terminar sem cumprir a regra
           <select style={{ ...input, minHeight: 40 }} value={action} onChange={(e) => setAction(e.target.value)}>
             <option value="ask_agent">Pedir ao agente que complete antes de sair</option>
-            <option value="mark">Marcar “handoff incompleto” e avisar</option>
+            <option value="mark">Marcar o card como “handoff incompleto” e avisar na Sala de controle</option>
           </select>
         </label>
         <label style={field}>Ao clicar em “Continuar com…”, abrir o agente em
@@ -320,6 +329,14 @@ function Handoff({ settings }: { settings: Settings }) {
             <option value="background">Segundo plano, com saída na interface</option>
           </select>
         </label>
+        <label style={field}>Carência antes de encerrar uma sessão cujo processo sumiu (minutos)
+          <input style={small} inputMode="numeric" value={grace} onChange={(e) => setGrace(e.target.value)} />
+        </label>
+        {mode === 'terminal' && (
+          <label style={field}>Comando do terminal (separado por espaços)
+            <input style={{ ...input, minHeight: 40, width: 280 }} className="mono" value={term} onChange={(e) => setTerm(e.target.value)} />
+          </label>
+        )}
       </div>
       <p style={{ ...muted, margin: 0 }}>Hoje: {count} {count === 1 ? 'critério ativo' : 'critérios ativos'}. O board mostra o progresso de cada card como barrinhas.</p>
       <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} onSave={submit} />

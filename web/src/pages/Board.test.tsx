@@ -79,3 +79,35 @@ describe('Board por projeto', () => {
     expect(screen.getByRole('article', { name: /NAC-2/ })).not.toHaveTextContent('branch integrada')
   })
 })
+
+describe('Board marcas e sinais', () => {
+  it('mostra as marcas do card', async () => {
+    mock({
+      ...routes,
+      '/api/cards': [
+        card({ id: 1, key: 'NAC-1', title: 'Limite', column: 'pausado', pause_reason: 'limite de custo' }),
+        card({ id: 2, key: 'NAC-2', title: 'Incompleto', column: 'pausado', handoff_incomplete: true }),
+        card({ id: 3, key: 'NAC-3', title: 'Completo', column: 'pausado', handoff_incomplete: true, readiness: { met: 5, total: 5, ready: true } }),
+      ],
+    })
+    wrap(<Board />, '/board')
+    await screen.findByText('Limite')
+    expect(screen.getAllByText('pausado por limite de custo')).toHaveLength(1)
+    expect(screen.getAllByText('handoff incompleto')).toHaveLength(1)
+  })
+
+  it('mostra os sinais de pausa', async () => {
+    mock({
+      ...routes,
+      '/api/cards': [
+        card({ id: 1, key: 'NAC-1', title: 'A', column: 'pausado', signal: 'bloqueado', signal_since: ago(2), blocked_by: 'NAC-4' }),
+        card({ id: 2, key: 'NAC-2', title: 'B', column: 'pausado', signal: 'pronto_para_retomar', signal_since: ago(2), blocked_by: 'NAC-4' }),
+        card({ id: 3, key: 'NAC-3', title: 'C', column: 'pausado', signal: 'aguardando_voce', signal_since: ago(3) }),
+      ],
+    })
+    wrap(<Board />, '/board')
+    expect(await screen.findByText('bloqueado por NAC-4')).toBeInTheDocument()
+    expect(screen.getByText('pronto para retomar (NAC-4 concluído)')).toBeInTheDocument()
+    expect(screen.getByText(/aguardando você há/)).toBeInTheDocument()
+  })
+})

@@ -3,6 +3,8 @@
 
 export type Column = 'backlog' | 'em_andamento' | 'pausado' | 'revisao' | 'concluido'
 
+export type Signal = '' | 'parado' | 'aguardando_revisao' | 'aguardando_voce' | 'bloqueado' | 'pronto_para_retomar'
+
 export interface Health { ok: boolean; version: string }
 
 export interface Project { id: number; name: string; path: string; capture: boolean; base_branch: string }
@@ -20,6 +22,10 @@ export interface Card {
   branch_head: string
   branch_diverged: boolean
   branch_merged_at: string | null
+  // pause_reason: 'limite de custo' quando o limite pausou o card; blocked_by: chave do card bloqueador.
+  pause_reason: string
+  handoff_incomplete: boolean
+  blocked_by: string
   project_id: number
   column: Column
   created_at: string
@@ -118,6 +124,8 @@ export interface Settings {
   incomplete_action: 'ask_agent' | 'mark' | string
   plan_warn_pct: number
   demo: boolean
+  agent_creates_cards: boolean
+  inject_paused_cards: boolean
 }
 
 export interface ReadinessItem { rule: string; label: string; ok: boolean }
@@ -151,8 +159,9 @@ export interface CardSummary extends Card {
   last_activity_at: string | null
   totals: Total
   readiness: ReadinessResult
-  // signal: parado (em andamento/pausado) ou aguardando_revisao, após 24 h sem atividade.
-  signal: '' | 'parado' | 'aguardando_revisao'
+  // signal: parado (em andamento/pausado) ou aguardando_revisao, após 24 h sem atividade;
+  // aguardando_voce, bloqueado e pronto_para_retomar vêm do card pausado.
+  signal: Signal
   signal_since: string | null
 }
 

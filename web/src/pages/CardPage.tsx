@@ -9,7 +9,8 @@ import { Money } from '../ui/Money'
 import { StatusBadge } from '../ui/StatusBadge'
 import { formatTokens } from '../ui/Tokens'
 import { WorktreeTag } from '../ui/WorktreeTag'
-import { minutesSince, plural } from './board'
+import { cardMarks, minutesSince, plural } from './board'
+import { BlockedBy } from './card/BlockedBy'
 import { CardTerminal } from './card/CardTerminal'
 import { CliPanel } from './card/CliPanel'
 import { ContinuePanel } from './card/ContinuePanel'
@@ -73,6 +74,7 @@ export function CardPage() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span className="mono" style={muted}>{c.key}</span>
           <StatusBadge column={c.column} live={!!c.live} />
+          {cardMarks(c, c.readiness.ready).map((m) => <span key={m} className="badge">{m}</span>)}
           {c.branch_merged_at && c.column !== 'concluido' && <span className="badge">branch integrada</span>}
           {c.live && <span style={muted}>{agentInfo(c.live.agent).name} ao vivo</span>}
           {stale && <span style={{ color: 'var(--warn)' }}>{agentInfo(stale.agent).name} · processo encerrado há {minutesSince(stale.pid_dead_at)} min</span>}
@@ -86,6 +88,7 @@ export function CardPage() {
           <span>{formatTokens(tokens)} tokens</span>
           <span><Money usd={t.cost_usd} unpriced={t.unpriced} currency={currency} rate={rate} /> no total</span>
         </div>
+        <BlockedBy key={`${c.key}:${c.blocked_by}`} card={c} />
         {c.column === 'revisao' && (
           <div>
             <button type="button" style={btnPrimary} disabled={approve.isPending} onClick={() => approve.mutate()}>
