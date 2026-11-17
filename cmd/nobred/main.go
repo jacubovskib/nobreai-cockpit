@@ -106,11 +106,15 @@ func run(dbPath string, seedDemo bool) error {
 	// PATH das sessões e da busca do claude: o do shell de login do usuário,
 	// consultado na hora (a unidade do systemd só tem o mínimo, de reserva),
 	// sempre com o diretório do nobre (a sessão nova chama nobre pela skill).
-	userPATH := &launch.UserPATH{Shell: launch.LoginShell(), Fallback: os.Getenv("PATH")}
+	// Quando o PATH muda, o próprio daemon passa a usá-lo: o git, o terminal
+	// do "Continuar" e o claude --version são procurados por ele.
+	userPATH := &launch.UserPATH{Shell: launch.LoginShell(), Fallback: os.Getenv("PATH"), Logf: log.Printf,
+		OnChange: func(p string) { os.Setenv("PATH", p) }}
 	if paths.NobreBin != "" {
 		userPATH.NobreDir = filepath.Dir(paths.NobreBin)
 	}
 	paths.SearchPATH = func() string { return userPATH.Get(time.Minute) }
+	go userPATH.Get(0) // já na partida, sem atrasar o servidor
 	claudeAdapter.SetPaths(paths)
 	// As leituras de transcript em segundo plano terminam antes de st.Close
 	// (defers rodam em ordem inversa).

@@ -92,7 +92,7 @@ func TestSetupInstallsEverythingAndRegistersProject(t *testing.T) {
 	// nobred) sobrevivem a restart/stop do serviço.
 	if !strings.Contains(string(unit), "ExecStart=/opt/x/bin/nobred\n") || !strings.Contains(string(unit), "Restart=on-failure") ||
 		!strings.Contains(string(unit), "\nKillMode=process\n") ||
-		!strings.Contains(string(unit), "\nEnvironment=\"PATH=/opt/x/bin:/usr/local/bin:/usr/bin:/bin\"\n") {
+		!strings.Contains(string(unit), "\nEnvironment=\"PATH=/opt/x/bin:/usr/bin:/home/u/.local/bin:/usr/local/bin:/bin\"\n") {
 		t.Fatalf("unit: %s", unit)
 	}
 	if len(e.ran) != 3 ||
@@ -430,15 +430,15 @@ func TestSetupGivesUpWaitingForDaemon(t *testing.T) {
 	}
 }
 
-// A unidade guarda só o mínimo de reserva: o diretório do nobre, o do claude
-// (onde o setup o achou) e os do sistema. venv, nvm e mise ficam de fora: o
-// daemon pergunta o PATH ao shell de login na hora de usar.
-func TestUnitPATHKeepsOnlyNobreClaudeAndSystem(t *testing.T) {
+// A reserva da unidade: nobre, claude (onde o setup o achou), o PATH do
+// terminal do setup e os do sistema, sem repetir. Com bash/zsh o daemon põe
+// o PATH do shell de login na frente (launch.UserPATH).
+func TestUnitPATHFallbackOrder(t *testing.T) {
 	claudeDir := t.TempDir()
 	os.WriteFile(filepath.Join(claudeDir, "claude"), []byte("#!/bin/sh\n"), 0o755)
 	term := "/home/u/.venv/bin:/home/u/.local/share/mise/installs/node/24/bin:" + claudeDir + ":/usr/bin"
 	got := unitPATH(term, "/opt/x/bin")
-	want := "/opt/x/bin:" + claudeDir + ":/usr/local/bin:/usr/bin:/bin"
+	want := "/opt/x/bin:" + claudeDir + ":/home/u/.venv/bin:/home/u/.local/share/mise/installs/node/24/bin:/usr/bin:/usr/local/bin:/bin"
 	if got != want {
 		t.Fatalf("unitPATH = %q, quer %q", got, want)
 	}

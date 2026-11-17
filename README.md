@@ -170,8 +170,8 @@ O daemon não guarda o `PATH` do terminal onde você rodou o setup. Toda vez que
 abre um agente ("Continuar" ou `nobre run`) ou procura o `claude`, ele pergunta
 o `PATH` ao seu shell de login (bash ou zsh). Assim, trocar a versão do Node,
 de um venv ou do mise não quebra nada, e não é preciso reinstalar. A unidade do
-systemd guarda só o mínimo, de reserva: o diretório do `nobre`, o do `claude` e
-os do sistema.
+systemd guarda o `PATH` do terminal do setup só como reserva, para quando o
+shell não puder ser consultado (fish, por exemplo).
 
 O `make setup` faz, em ordem:
 
@@ -429,8 +429,12 @@ O design está em [`docs/spec.md`](docs/spec.md), o estado atual em
 do seu shell de login. Confira em **Configuração → Agentes detectados** se o
 item "CLI encontrado" está ok. Se não estiver, coloque o diretório do `claude`
 no `PATH` do seu `~/.zshrc` ou `~/.bashrc` (não precisa reiniciar o daemon). Com
-um shell que não seja bash nem zsh, o daemon usa só o `PATH` de reserva da
-unidade: rode `make setup` num terminal onde o `claude` funciona.
+um shell que não seja bash nem zsh, o daemon usa o `PATH` de reserva da
+unidade: rode `make setup` num terminal onde o `claude` funciona. Se a consulta
+ao shell falhar, o motivo aparece em `make logs`.
+
+**O "Continuar" não abre o terminal.** Confira em **Configuração** o comando do
+terminal. O daemon o procura no `PATH` do seu shell de login.
 
 **A interface diz que o binário foi gerado sem a interface.** Rode
 `make build` (ele compila a interface antes) e `make update`.

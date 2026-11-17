@@ -1,9 +1,9 @@
 package launch
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,42 +20,106 @@ const pathMarker = "__NOBRE_PATH__"
 // hora de usar, em vez de confiar no PATH congelado na unidade do systemd
 // (que guardaria o venv, o nvm ou o mise de quando o setup rodou).
 //
-// Só bash e zsh são consultados (-lic lê o perfil e o rc interativo). Em
-// qualquer falha (shell desconhecido, sem marcador, erro, timeout) vale
-// Fallback, e a falha não fica em cache. O diretório do nobre sempre entra.
+// Só bash e zsh são consultados (-lic lê o perfil e o rc interativo). Uma
+// consulta que falha (shell desconhecido, sem marcador, erro, timeout) fica
+// guardada por FailTTL e devolve o último PATH bom, ou Fallback se nunca
+// houve um. O diretório do nobre sempre entra. Chamadas simultâneas esperam
+// uma única consulta, sem prender quem só quer o cache.
 type UserPATH struct {
 	Shell    string        // $SHELL do usuário
 	Fallback string        // PATH do daemon (o da unidade)
 	NobreDir string        // diretório do nobre; entra se faltar
 	Timeout  time.Duration // limite do shell; 0 = 3 s
+	FailTTL  time.Duration // quanto uma falha fica guardada; 0 = 30 s
+	// OnChange recebe o PATH novo quando ele muda (o daemon atualiza o
+	// próprio PATH, que o git, o terminal e o claude --version usam).
+	OnChange func(path string)
+	// Logf registra as falhas da consulta (nil = não registra).
+	Logf func(format string, args ...any)
 
-	mu     sync.Mutex
-	cached string
-	at     time.Time
+	mu       sync.Mutex
+	good     string // último PATH bom
+	goodAt   time.Time
+	failedAt time.Time
+	inflight chan struct{}
 }
 
-// Get devolve o PATH. maxAge=0 consulta o shell agora; senão aceita o
-// resultado da última consulta bem-sucedida feita há menos de maxAge.
+// Get devolve o PATH. maxAge=0 consulta o shell agora (salvo falha recente);
+// senão aceita o resultado bom de até maxAge.
 func (u *UserPATH) Get(maxAge time.Duration) string {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if maxAge > 0 && u.cached != "" && time.Since(u.at) < maxAge {
-		return u.cached
+	for {
+		u.mu.Lock()
+		switch {
+		case maxAge > 0 && u.good != "" && time.Since(u.goodAt) < maxAge:
+			p := u.good
+			u.mu.Unlock()
+			return p
+		case !u.failedAt.IsZero() && time.Since(u.failedAt) < u.failTTL():
+			p := u.current()
+			u.mu.Unlock()
+			return p
+		case u.inflight != nil:
+			ch := u.inflight
+			u.mu.Unlock()
+			<-ch
+			u.mu.Lock()
+			p := u.current()
+			u.mu.Unlock()
+			return p
+		}
+		ch := make(chan struct{})
+		u.inflight = ch
+		u.mu.Unlock()
+
+		login, ok, why := u.probe()
+
+		u.mu.Lock()
+		var changed string
+		if ok {
+			p := PathWithDir(mergePATH(login, u.Fallback), u.NobreDir)
+			if p != u.good {
+				changed = p
+			}
+			u.good, u.goodAt, u.failedAt = p, time.Now(), time.Time{}
+		} else {
+			if u.failedAt.IsZero() && u.Logf != nil && why != "" {
+				u.Logf("PATH do shell de login (%s): %s; usando o PATH de reserva", u.Shell, why)
+			}
+			u.failedAt = time.Now()
+		}
+		p := u.current()
+		u.inflight = nil
+		u.mu.Unlock()
+		close(ch)
+		if changed != "" && u.OnChange != nil {
+			u.OnChange(changed)
+		}
+		return p
 	}
-	login, ok := u.probe()
-	if !ok {
-		return PathWithDir(u.Fallback, u.NobreDir)
-	}
-	u.cached = PathWithDir(mergePATH(login, u.Fallback), u.NobreDir)
-	u.at = time.Now()
-	return u.cached
 }
 
-func (u *UserPATH) probe() (string, bool) {
+// current: o último PATH bom, ou o de reserva. Chamado com mu preso.
+func (u *UserPATH) current() string {
+	if u.good != "" {
+		return u.good
+	}
+	return PathWithDir(u.Fallback, u.NobreDir)
+}
+
+func (u *UserPATH) failTTL() time.Duration {
+	if u.FailTTL > 0 {
+		return u.FailTTL
+	}
+	return 30 * time.Second
+}
+
+// probe roda o shell e devolve o PATH dele. why explica a falha ("" quando o
+// shell não é consultável, o que não é erro).
+func (u *UserPATH) probe() (path string, ok bool, why string) {
 	switch filepath.Base(u.Shell) {
 	case "bash", "zsh":
 	default:
-		return "", false
+		return "", false, ""
 	}
 	timeout := u.Timeout
 	if timeout <= 0 {
@@ -64,33 +128,38 @@ func (u *UserPATH) probe() (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, u.Shell, "-lic", `printf '\n`+pathMarker+`%s\n' "$PATH"`)
-	cmd.Stdin = nil // /dev/null
-	cmd.Stderr = nil
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stdin = nil  // /dev/null
+	cmd.Stderr = nil // /dev/null: um filho do rc com o stderr herdado não segura pipe
 	if home, err := os.UserHomeDir(); err == nil {
 		cmd.Dir = home
 	}
-	// Sessão própria: o timeout mata o grupo inteiro, inclusive filhos que o
-	// rc deixou em segundo plano segurando o stdout.
+	// Sessão própria: o grupo inteiro morre no fim, inclusive filhos que o rc
+	// deixou em segundo plano segurando o stdout.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = 500 * time.Millisecond
-	out, err := cmd.Output()
-	if err != nil {
-		return "", false
+	cmd.WaitDelay = 300 * time.Millisecond
+	err := cmd.Run()
+	if cmd.Process != nil {
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	// ErrWaitDelay: o shell saiu bem, mas um filho dele segurava o stdout; o
+	// que ele escreveu antes de sair vale.
+	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+		return "", false, err.Error()
 	}
 	var last string
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(sc.Text(), pathMarker); ok {
+	for _, line := range strings.Split(out.String(), "\n") {
+		if v, ok := strings.CutPrefix(line, pathMarker); ok {
 			last = v
 		}
 	}
 	last = strings.TrimSpace(last)
 	if !strings.Contains(last, "/") {
-		return "", false
+		return "", false, "a saída do shell não trouxe o PATH"
 	}
-	return last, true
+	return last, true, ""
 }
 
 // mergePATH põe os diretórios de first e depois os de second que ainda não

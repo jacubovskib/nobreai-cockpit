@@ -84,13 +84,19 @@ func unitContent(nobred, path string) string {
 }
 
 // unitPATH é o PATH de reserva da unidade: o diretório do nobre, o do claude
-// achado no PATH deste terminal e os do sistema. O resto (venv, nvm, mise) o
-// daemon pega do shell de login na hora de usar (launch.UserPATH); congelá-lo
-// aqui quebraria o "Continuar" quando o usuário trocasse de versão.
+// achado no PATH deste terminal, o resto do PATH deste terminal e os do
+// sistema. Com bash ou zsh o daemon põe na frente o PATH do shell de login,
+// lido na hora de usar (launch.UserPATH); esta reserva só decide sozinha com
+// outros shells (fish, por exemplo) ou quando a consulta falha.
 func unitPATH(termPATH, nobreDir string) string {
 	dirs := []string{nobreDir}
 	if p := launch.LookPathIn("claude", termPATH); p != "" {
 		dirs = append(dirs, filepath.Dir(p))
+	}
+	for _, d := range strings.Split(termPATH, ":") {
+		if filepath.IsAbs(d) && !strings.ContainsAny(d, "\n\r") {
+			dirs = append(dirs, d)
+		}
 	}
 	dirs = append(dirs, "/usr/local/bin", "/usr/bin", "/bin")
 	seen := map[string]bool{}
