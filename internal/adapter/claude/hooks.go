@@ -408,7 +408,7 @@ func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (ada
 	return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 		"hookEventName":            "PreToolUse",
 		"permissionDecision":       "deny",
-		"permissionDecisionReason": "NobreAI Cockpit: limite de custo atingido (" + detail + "). Registre “Onde parei” com nobre note e encerre.",
+		"permissionDecisionReason": "NobreAI Cockpit: limite de custo atingido (" + detail + "). Registre “Onde parei” com nobre note 'texto' (uma chamada só, texto entre aspas simples, sem $, crase, heredoc ou redirecionamento) e encerre.",
 	}})
 }
 
