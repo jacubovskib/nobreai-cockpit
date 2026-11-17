@@ -622,6 +622,10 @@ func TestPreToolUseDeniesOverLimitButAllowsNobre(t *testing.T) {
 	if r := e.call(t, "pre_tool_use_bash_nobre"); r.Stdout != "" {
 		t.Fatalf("nobre precisa passar: %q", r.Stdout)
 	}
+	composto := with("tool_input", map[string]any{"command": `nobre status && make test`})
+	if r := e.call(t, "pre_tool_use_bash_nobre", composto); !strings.Contains(r.Stdout, `"deny"`) {
+		t.Fatalf("nobre seguido de outro comando não pode furar o limite: %q", r.Stdout)
+	}
 }
 
 func TestPreToolUseWarnOnlyDoesNotDeny(t *testing.T) {

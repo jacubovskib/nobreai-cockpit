@@ -369,13 +369,14 @@ func exitCode(raw json.RawMessage) (int, bool) {
 }
 
 // preToolUse nega a ferramenta quando o limite (diário do agente ou do card)
-// foi atingido com ação "pause". Comandos `nobre ` sempre passam: o agente
-// precisa conseguir registrar o handoff.
+// foi atingido com ação "pause". Uma chamada simples do nobre sempre passa (o
+// agente precisa conseguir registrar o handoff); encadeada com outro comando,
+// não (plainNobreCommand).
 func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
 	if !sess.FullCapture {
 		return adapter.HookReply{}, nil
 	}
-	if p.ToolName == "Bash" && strings.HasPrefix(strings.TrimSpace(p.input().Command), "nobre ") {
+	if p.ToolName == "Bash" && plainNobreCommand(p.input().Command) {
 		return adapter.HookReply{}, nil
 	}
 	ls, err := board.LimitStatus(a.st, a.Name(), sess.CardID, now)
