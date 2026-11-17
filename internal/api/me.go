@@ -294,7 +294,7 @@ func (s *server) syncBranch(cardID int64, branch string) bool {
 	return changed
 }
 
-// projectBase devolve a base do projeto id (ver board.ProjectBase; "" se o
+// projectBase devolve a base do projeto id (ver board.RepoBase; "" se o
 // projeto não existe ou não tem base).
 func (s *server) projectBase(id int64) (string, error) {
 	ps, err := s.st.ListProjects()
@@ -303,7 +303,7 @@ func (s *server) projectBase(id int64) (string, error) {
 	}
 	for _, p := range ps {
 		if p.ID == id {
-			return board.ProjectBase(s.branchReader(), p), nil
+			return board.RepoBase(s.st, s.branchReader(), p), nil
 		}
 	}
 	return "", nil

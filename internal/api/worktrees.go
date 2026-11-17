@@ -90,6 +90,13 @@ func (s *server) listWorktrees(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]ProjectWorktrees, 0, len(projects))
 	for _, p := range projects {
+		// App de monorepo: o repositório aparece uma vez, no item do pai.
+		if repo, err := s.st.RepoProject(p); err != nil {
+			writeStoreError(w, err, "")
+			return
+		} else if repo.ID != p.ID {
+			continue
+		}
 		pw, err := s.projectWorktrees(p)
 		if err != nil {
 			writeStoreError(w, err, "")
@@ -102,6 +109,9 @@ func (s *server) listWorktrees(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) projectWorktrees(p domain.Project) (ProjectWorktrees, error) {
 	pw := ProjectWorktrees{Project: p, Worktrees: []WorktreeView{}, Orphans: []WorktreeSession{}}
+	if p.Path == "" {
+		return pw, nil // grupo: não tem repositório; os filhos têm o seu item
+	}
 	wr, ok := s.deps.Git.(gitinfo.WorktreeReader)
 	if !ok {
 		pw.Error = msgNoWorktreeReader
@@ -112,7 +122,12 @@ func (s *server) projectWorktrees(p domain.Project) (ProjectWorktrees, error) {
 		pw.Error = "não consegui listar os worktrees de " + p.Path + ": não é um repositório git?"
 		return pw, nil
 	}
-	cards, err := s.st.ListCards(store.CardFilter{ProjectID: p.ID})
+	// Num monorepo os cards e as sessões dos apps entram no worktree do pai.
+	family, err := s.st.FamilyIDs(p.ID)
+	if err != nil {
+		return pw, err
+	}
+	cards, err := s.st.ListCards(store.CardFilter{ProjectIDs: family})
 	if err != nil {
 		return pw, err
 	}
@@ -120,7 +135,7 @@ func (s *server) projectWorktrees(p domain.Project) (ProjectWorktrees, error) {
 	for _, c := range cards {
 		byID[c.ID] = c
 	}
-	sessions, err := s.st.ProjectSessionsSince(p.ID, s.now().Add(-worktreeWindow))
+	sessions, err := s.st.ProjectsSessionsSince(family, s.now().Add(-worktreeWindow))
 	if err != nil {
 		return pw, err
 	}

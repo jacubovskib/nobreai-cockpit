@@ -55,3 +55,40 @@ func TestSyncCardBranchIgnoresBase(t *testing.T) {
 		t.Fatal("sem git deveria sincronizar")
 	}
 }
+
+func TestRepoBaseUsesParent(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	parent, _ := st.CreateProject("mono", "/w/mono")
+	if err := st.SetProjectBase(parent.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	parent.BaseBranch = "main"
+	app, _, err := st.CreateChild("web", "/w/mono/web", parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectBase(app.ID, "x"); err != nil {
+		t.Fatal(err)
+	}
+	app.BaseBranch = "x"
+	g := fakeBranches{base: "develop"}
+	if got := RepoBase(st, g, app); got != "main" {
+		t.Fatalf("RepoBase(app) = %q, want main", got)
+	}
+	if got := RepoBase(st, g, parent); got != "main" {
+		t.Fatalf("RepoBase(parent) = %q, want main", got)
+	}
+	// Um filho de grupo tem repositório próprio: usa a própria base.
+	group, _ := st.CreateGroup("grupo")
+	kid, _, err := st.CreateChild("svc", "/w/svc", group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := RepoBase(st, g, kid); got != "develop" {
+		t.Fatalf("RepoBase(filho de grupo) = %q, want develop", got)
+	}
+}

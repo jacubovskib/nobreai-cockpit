@@ -1335,3 +1335,24 @@ func TestCardWithoutBranchFollowsOutsideSwitchOnBash(t *testing.T) {
 		t.Fatalf("card vazio deveria ir para feat/y: %q", got.Branch)
 	}
 }
+
+// Numa sessão na raiz do monorepo, o pausado de um app no mesmo branch entra no contexto.
+func TestPausedCardsIncludeFamily(t *testing.T) {
+	e := newEnv(t)
+	e.a.deps.Git = fakeGit{branch: "feat/x"}
+	p := e.project(t)
+	if err := e.st.SetProjectBase(p.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	web, _, err := e.st.CreateChild("web", "/w/api/web", p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.CreateCard(domain.Card{Title: "Tela do app", ProjectID: web.ID, Branch: "feat/x", Column: domain.Pausado}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if !strings.Contains(ctx, "NAC-1 · Tela do app") {
+		t.Fatalf("contexto sem o pausado do app:\n%s", ctx)
+	}
+}

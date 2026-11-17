@@ -280,3 +280,19 @@ func TestScanEndpointNoBase409(t *testing.T) {
 		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestScanGroupRefused(t *testing.T) {
+	a := newTestAPI(t)
+	grp, err := a.st.CreateGroup("grupo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "GET", "/api/projects/"+strconv.FormatInt(grp.ID, 10)+"/scan", nil, 0)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
+	}
+	want := "grupo não tem repositório; rode o levantamento em cada sub-projeto"
+	if got := decode[map[string]string](t, rec)["error"]; got != want {
+		t.Fatalf("erro = %q", got)
+	}
+}

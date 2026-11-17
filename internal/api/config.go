@@ -279,10 +279,18 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return
 	}
+	oldBase := p.BaseBranch
+	isApp := false
+	if repo, err := s.st.RepoProject(*p); err == nil && repo.ID != p.ID {
+		isApp = true
+	}
 	if !readJSON(w, r, p) {
 		return
 	}
 	p.ID = id
+	if isApp {
+		p.BaseBranch = oldBase // a base de um app é a do repositório do pai
+	}
 	if strings.TrimSpace(p.Name) == "" {
 		writeError(w, http.StatusBadRequest, "nome obrigatório")
 		return

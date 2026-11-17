@@ -95,6 +95,13 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return
 	}
+	// O worktree de um app é o do repositório do pai.
+	repoP, err := s.st.RepoProject(*p)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	p = &repoP
 	remover, ok1 := s.deps.Git.(gitinfo.WorktreeRemover)
 	status, ok2 := s.deps.Git.(gitinfo.StatusReader)
 	branches, ok3 := s.deps.Git.(gitinfo.BranchReader)

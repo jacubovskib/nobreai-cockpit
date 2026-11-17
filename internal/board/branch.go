@@ -15,6 +15,16 @@ func ProjectBase(git gitinfo.BranchReader, p domain.Project) string {
 	return git.DetectBase(p.Path)
 }
 
+// RepoBase é a base do repositório de p: um app de monorepo usa a base do pai,
+// pois o git é do projeto do repositório.
+func RepoBase(st *store.Store, git gitinfo.BranchReader, p domain.Project) string {
+	repo, err := st.RepoProject(p)
+	if err != nil {
+		repo = p
+	}
+	return ProjectBase(git, repo)
+}
+
 // SyncCardBranch faz o branch do card acompanhar o branch de trabalho da
 // sessão. Ignora "", "HEAD" (detached) e a base do projeto, para o card nunca
 // ficar na base (sem git, só a base configurada conta). Devolve se o branch do card mudou.
@@ -32,7 +42,7 @@ func SyncCardBranch(st *store.Store, git gitinfo.BranchReader, cardID int64, bra
 	}
 	for _, p := range ps {
 		// Sem git só vale a base configurada (ProjectBase não detecta com git nil).
-		if p.ID == c.ProjectID && ProjectBase(git, p) == branch {
+		if p.ID == c.ProjectID && RepoBase(st, git, p) == branch {
 			return false, nil
 		}
 	}

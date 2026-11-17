@@ -1,6 +1,7 @@
 package board
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -297,5 +298,37 @@ func TestIntegrationStaleBranchWritesNothing(t *testing.T) {
 	got, _ = st.GetCardByID(c.ID)
 	if got.BranchMergedAt != nil || got.Column != domain.Revisao || len(decisionsOf(t, st, c)) != 0 {
 		t.Fatalf("integração gravada no branch novo: %+v", got)
+	}
+}
+
+// O pai de um monorepo cobre os cards dos apps: o branch do card do app
+// integrado na base do pai ganha BranchMergedAt.
+func TestIntegrationCoversFamilyCards(t *testing.T) {
+	st, d, c := integFixture(t, domain.Revisao, "feat/x")
+	parents, err := st.ListProjects()
+	if err != nil || len(parents) != 1 {
+		t.Fatalf("projetos = %v, %v", parents, err)
+	}
+	if err := os.MkdirAll(filepath.Join(d, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app, _, err := st.CreateChild("web", filepath.Join(d, "web"), parents[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectBase(app.ID, "x"); err != nil { // a base do app não vale
+		t.Fatal(err)
+	}
+	if err := st.SetCardProject(c.ID, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	runCheck(t, st) // 1ª passada: registra o branch divergente
+	mergeFeat(t, d)
+	if !runCheck(t, st) {
+		t.Fatal("a passada após o merge deveria mudar")
+	}
+	got, _ := st.GetCardByID(c.ID)
+	if got.BranchMergedAt == nil || got.Column != domain.Concluido {
+		t.Fatalf("card do app: %+v", got)
 	}
 }

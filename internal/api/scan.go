@@ -50,8 +50,23 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return
 	}
+	if p.Path == "" {
+		writeError(w, http.StatusBadRequest, "grupo não tem repositório; rode o levantamento em cada sub-projeto")
+		return
+	}
+	// App de monorepo: o levantamento roda na pasta do pai.
+	repo, err := s.st.RepoProject(*p)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	family, err := s.st.FamilyIDs(p.ID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
 	now := s.now()
-	res, err := scan.Run(p.Path, board.ProjectBase(s.branchReader(), *p), now)
+	res, err := scan.Run(repo.Path, board.ProjectBase(s.branchReader(), repo), now)
 	var be *scan.BaseError
 	if errors.As(err, &be) {
 		writeError(w, http.StatusConflict, be.Error())
@@ -63,10 +78,10 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	}
 	since := now.AddDate(0, 0, -scanSessionDays)
 	sessions := []scanSession{}
-	ss, err := s.st.ProjectSessionsSince(p.ID, since)
+	ss, err := s.st.ProjectsSessionsSince(family, since)
 	if err == nil {
 		var costs map[string]store.Total
-		costs, err = s.totalsWhere(store.TotalsFilter{GroupBy: "session", From: since, ProjectID: &p.ID})
+		costs, err = s.totalsWhere(store.TotalsFilter{GroupBy: "session", From: since, ProjectIDs: family})
 		for _, x := range ss {
 			if c := costs[x.ID].CostUSD; c > 0 {
 				sessions = append(sessions, scanSession{x.ID, x.StartedAt, x.EndedAt, x.Branch, x.Cwd, c})
@@ -81,7 +96,7 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	if len(sessions) > scanMaxSessions {
 		sessions = sessions[:scanMaxSessions]
 	}
-	cs, err := s.st.ListCards(store.CardFilter{ProjectID: p.ID})
+	cs, err := s.st.ListCards(store.CardFilter{ProjectIDs: family})
 	if err != nil {
 		writeStoreError(w, err, "")
 		return

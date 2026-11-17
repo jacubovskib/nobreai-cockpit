@@ -203,12 +203,24 @@ func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domai
 	}
 	onBase := sess.Branch == ""
 	br, _ := a.deps.Git.(gitinfo.BranchReader) // nil: só a base configurada conta
+	// Num monorepo a base e os cards são os da família do pai.
+	family := []int64{*sess.ProjectID}
 	for _, p := range ps {
-		if p.ID == *sess.ProjectID && !onBase {
-			onBase = board.ProjectBase(br, p) == sess.Branch
+		if p.ID != *sess.ProjectID {
+			continue
+		}
+		repo, err := a.st.RepoProject(p)
+		if err != nil {
+			return nil, err
+		}
+		if !onBase {
+			onBase = board.ProjectBase(br, repo) == sess.Branch
+		}
+		if family, err = a.st.FamilyIDs(repo.ID); err != nil {
+			return nil, err
 		}
 	}
-	cards, err := a.st.ListCards(store.CardFilter{ProjectID: *sess.ProjectID})
+	cards, err := a.st.ListCards(store.CardFilter{ProjectIDs: family})
 	if err != nil {
 		return nil, err
 	}
