@@ -13,6 +13,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
 // setupDeps são os caminhos e comandos do `nobre setup`. Os testes injetam
@@ -116,12 +117,13 @@ func (c *cli) setup(args []string) error {
 	dry := fs.Bool("dry-run", false, "mostra o que mudaria sem gravar nada")
 	noSL := fs.Bool("sem-statusline", false, "não integra a status line do Claude Code")
 	rmSL := fs.Bool("remover-statusline", false, "só remove a integração da status line (devolve o comando original)")
+	rmAll := fs.Bool("remover", false, "desfaz o setup: hooks, status line, skill e serviço do nobred")
 	pos, err := c.parse(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(pos) != 0 || (*noSL && *rmSL) {
-		return usagef("uso: nobre setup [--dry-run] [--sem-statusline | --remover-statusline]")
+	if len(pos) != 0 || (*noSL && *rmSL) || (*rmAll && (*noSL || *rmSL)) {
+		return usagef("uso: nobre setup [--dry-run] [--sem-statusline | --remover-statusline | --remover]")
 	}
 	d := c.sd
 	if d == nil {
@@ -138,6 +140,9 @@ func (c *cli) setup(args []string) error {
 
 	if *rmSL {
 		return c.removeStatusLine(d, *dry, l)
+	}
+	if *rmAll {
+		return c.removeAll(d, *dry, l)
 	}
 
 	// 1. Hooks e status line do Claude Code (uma só leitura/gravação do
@@ -202,6 +207,79 @@ func (c *cli) removeStatusLine(d *setupDeps, dry bool, l *checklist) error {
 		l.ok("%s%s", prefix, m)
 	}
 	return nil
+}
+
+// removeAll é o "nobre setup --remover": desfaz o setup na ordem inversa do
+// uso. Primeiro os hooks e a status line (o Claude Code para de chamar o
+// nobre), depois a skill e por fim o serviço. Binários e banco ficam.
+func (c *cli) removeAll(d *setupDeps, dry bool, l *checklist) error {
+	prefix := ""
+	if dry {
+		prefix = "[dry-run] "
+	}
+	rep, slErr, err := claude.UninstallSettings(d.SettingsPath, dry)
+	if err != nil {
+		l.bad("Hooks do Claude Code: %v", err)
+	} else {
+		for _, m := range rep.Messages {
+			l.ok("%s%s", prefix, m)
+		}
+	}
+	if slErr != nil {
+		l.bad("Status line do Claude Code: %v", slErr)
+	}
+
+	skill := claude.SkillFile(d.SkillsDir)
+	switch {
+	case !isFile(skill):
+		l.ok("Skill do Cockpit não instalada; nada a remover")
+	case dry:
+		l.ok("%sRemoveria a skill %s", prefix, skill)
+	default:
+		if _, err := claude.UninstallSkill(d.SkillsDir); err != nil {
+			l.bad("Skill do Cockpit: %v", err)
+		} else {
+			l.ok("Skill removida: %s", skill)
+		}
+	}
+
+	c.removeService(d, dry, l)
+
+	if dir := filepath.Dir(d.NobreBin); !dry {
+		fmt.Fprintf(c.out, "\nOs binários em %s e o banco em %s não foram tocados (o make uninstall também apaga os binários).\n"+
+			"Reinicie as sessões do Claude Code abertas: elas guardam os hooks de quando começaram.\n", dir, filepath.Dir(store.DefaultPath()))
+	}
+	if l.warn {
+		return errors.New("Remoção terminou com pendências (itens com !).")
+	}
+	return nil
+}
+
+func (c *cli) removeService(d *setupDeps, dry bool, l *checklist) {
+	unit := filepath.Join(d.UnitDir, "nobred.service")
+	if !isFile(unit) {
+		l.ok("Serviço do nobred não instalado; nada a remover")
+		return
+	}
+	if dry {
+		l.ok("[dry-run] Rodaria: systemctl --user disable --now nobred")
+		l.ok("[dry-run] Apagaria %s", unit)
+		l.ok("[dry-run] Rodaria: systemctl --user daemon-reload")
+		return
+	}
+	if err := d.Run("systemctl", "--user", "disable", "--now", "nobred"); err != nil {
+		l.bad("systemctl --user disable --now nobred: %v", err)
+		return
+	}
+	if err := os.Remove(unit); err != nil {
+		l.bad("Unidade do systemd: %v", err)
+		return
+	}
+	if err := d.Run("systemctl", "--user", "daemon-reload"); err != nil {
+		l.bad("systemctl --user daemon-reload: %v", err)
+		return
+	}
+	l.ok("Serviço do nobred parado e removido (%s)", unit)
 }
 
 const sessionEnvVars = "DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS"

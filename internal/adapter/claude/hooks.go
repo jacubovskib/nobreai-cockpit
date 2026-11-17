@@ -369,13 +369,14 @@ func exitCode(raw json.RawMessage) (int, bool) {
 }
 
 // preToolUse nega a ferramenta quando o limite (diário do agente ou do card)
-// foi atingido com ação "pause". Comandos `nobre ` sempre passam: o agente
-// precisa conseguir registrar o handoff.
+// foi atingido com ação "pause". Uma chamada simples de um subcomando de
+// handoff do nobre sempre passa (o agente precisa conseguir registrar o
+// handoff); nobre run, setup ou algo encadeado, não (plainNobreCommand).
 func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
 	if !sess.FullCapture {
 		return adapter.HookReply{}, nil
 	}
-	if p.ToolName == "Bash" && strings.HasPrefix(strings.TrimSpace(p.input().Command), "nobre ") {
+	if p.ToolName == "Bash" && plainNobreCommand(p.input().Command) {
 		return adapter.HookReply{}, nil
 	}
 	ls, err := board.LimitStatus(a.st, a.Name(), sess.CardID, now)
@@ -407,7 +408,7 @@ func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (ada
 	return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 		"hookEventName":            "PreToolUse",
 		"permissionDecision":       "deny",
-		"permissionDecisionReason": "NobreAI Cockpit: limite de custo atingido (" + detail + "). Registre “Onde parei” com nobre note e encerre.",
+		"permissionDecisionReason": "NobreAI Cockpit: limite de custo atingido (" + detail + "). Registre “Onde parei” com nobre note 'texto' (uma chamada só, texto entre aspas simples, sem $, crase, heredoc ou redirecionamento) e encerre.",
 	}})
 }
 

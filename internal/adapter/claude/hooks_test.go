@@ -614,13 +614,17 @@ func TestPreToolUseDeniesOverLimitButAllowsNobre(t *testing.T) {
 			t.Fatalf("%s: stdout = %q", f, r.Stdout)
 		}
 		h := out.HookSpecificOutput
-		want := "NobreAI Cockpit: limite de custo atingido (diário: US$ 2,00 de US$ 1,00). Registre “Onde parei” com nobre note e encerre."
+		want := "NobreAI Cockpit: limite de custo atingido (diário: US$ 2,00 de US$ 1,00). Registre “Onde parei” com nobre note 'texto' (uma chamada só, texto entre aspas simples, sem $, crase, heredoc ou redirecionamento) e encerre."
 		if h.HookEventName != "PreToolUse" || h.PermissionDecision != "deny" || h.PermissionDecisionReason != want {
 			t.Fatalf("%s: %+v", f, h)
 		}
 	}
 	if r := e.call(t, "pre_tool_use_bash_nobre"); r.Stdout != "" {
 		t.Fatalf("nobre precisa passar: %q", r.Stdout)
+	}
+	composto := with("tool_input", map[string]any{"command": `nobre status && make test`})
+	if r := e.call(t, "pre_tool_use_bash_nobre", composto); !strings.Contains(r.Stdout, `"deny"`) {
+		t.Fatalf("nobre seguido de outro comando não pode furar o limite: %q", r.Stdout)
 	}
 }
 

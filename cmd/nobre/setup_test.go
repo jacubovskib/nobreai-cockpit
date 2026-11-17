@@ -304,3 +304,78 @@ func TestSetupRemoveStatusLine(t *testing.T) {
 		t.Fatalf("flags conflitantes: %+v", r)
 	}
 }
+
+func TestSetupRemoverUndoesEverything(t *testing.T) {
+	e := newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	orig := `{"model":"opus","statusLine":{"type":"command","command":"echo hi"},` +
+		`"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/x/other stop"}]}]}}`
+	os.WriteFile(e.settings, []byte(orig), 0o600)
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir()); r.code != 0 {
+		t.Fatalf("setup: %+v", r)
+	}
+	unit := filepath.Join(e.d.UnitDir, "nobred.service")
+	installed, _ := os.ReadFile(e.settings)
+
+	// Dry-run: nada muda.
+	e.ran = nil
+	r := e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover", "--dry-run")
+	if b, _ := os.ReadFile(e.settings); r.code != 0 || len(e.ran) != 0 || string(b) != string(installed) {
+		t.Fatalf("dry-run alterou: %+v ran=%v", r, e.ran)
+	}
+	if _, err := os.Stat(unit); err != nil {
+		t.Fatal("dry-run apagou a unidade")
+	}
+	for _, want := range []string{"Removeria os hooks", "Removeria a skill", "Rodaria: systemctl --user disable --now nobred"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("falta %q em %s", want, r.stdout)
+		}
+	}
+
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover")
+	if r.code != 0 || strings.Contains(r.stdout, "!") {
+		t.Fatalf("remover: %+v", r)
+	}
+	var got, want any
+	b, _ := os.ReadFile(e.settings)
+	json.Unmarshal(b, &got)
+	json.Unmarshal([]byte(orig), &want)
+	if !jsonEqual(got, want) {
+		t.Fatalf("settings depois de remover: %s", b)
+	}
+	if _, err := os.Stat(filepath.Join(e.d.SkillsDir, "nobre-cockpit")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("skill ficou")
+	}
+	if _, err := os.Stat(unit); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unidade ficou")
+	}
+	if len(e.ran) != 2 || strings.Join(e.ran[0], " ") != "systemctl --user disable --now nobred" ||
+		strings.Join(e.ran[1], " ") != "systemctl --user daemon-reload" {
+		t.Fatalf("ran = %v", e.ran)
+	}
+	if !strings.Contains(r.stdout, "/opt/x/bin") {
+		t.Fatalf("não lembrou dos binários: %s", r.stdout)
+	}
+
+	// De novo: nada a remover, sem systemctl.
+	e.ran = nil
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover")
+	if r.code != 0 || len(e.ran) != 0 || !strings.Contains(r.stdout, "nada a remover") {
+		t.Fatalf("segunda vez: %+v ran=%v", r, e.ran)
+	}
+}
+
+func TestSetupRemoverRejectsOtherFlags(t *testing.T) {
+	e := newSetupEnv(t)
+	for _, f := range []string{"--sem-statusline", "--remover-statusline"} {
+		if r := e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover", f); r.code == 0 {
+			t.Fatalf("--remover %s deveria ser recusado: %+v", f, r)
+		}
+	}
+}
+
+func jsonEqual(a, b any) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
+}
