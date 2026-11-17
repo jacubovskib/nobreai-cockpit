@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
@@ -78,6 +79,9 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// PATH do usuário consultado agora: o adaptador procura o CLI nele (com
+	// cache curto) e o terminal o recebe.
+	path := s.sessionPATH(0)
 	// Caminho absoluto: o terminal e o systemd não têm ~/.local/bin no PATH.
 	bin := ad.Binary()
 	if bin == "" {
@@ -155,7 +159,7 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 		if resolve == nil {
 			resolve = launch.ResolveBinary
 		}
-		argv = launch.TerminalArgvWith(resolve, set.TerminalCmd, s.sessionPATH(), dir, map[string]string{"NOBRE_RESUME": c.Key}, cmd)
+		argv = launch.TerminalArgvWith(resolve, set.TerminalCmd, path, dir, map[string]string{"NOBRE_RESUME": c.Key}, cmd)
 	}
 	for _, a := range argv {
 		if len(a) >= maxArgBytes { // MAX_ARG_STRLEN do Linux é 131072
@@ -172,7 +176,7 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	terminalID := ""
 	if background {
 		tm, err := s.startTerminal(pty.StartSpec{
-			Argv: argv, Dir: dir, Env: setEnv(s.terminalEnv(), "NOBRE_RESUME", c.Key),
+			Argv: argv, Dir: dir, Env: setEnv(s.terminalEnv(path), "NOBRE_RESUME", c.Key),
 			CardKey: c.Key, Agent: in.Agent, Origin: termOriginPlatform,
 		})
 		switch {
@@ -204,8 +208,12 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// sessionPATH é o PATH das sessões abertas pelo daemon (terminal ou PTY).
-func (s *server) sessionPATH() string {
+// sessionPATH é o PATH das sessões abertas pelo daemon (terminal ou PTY):
+// o do shell de login do usuário (UserPATH, até maxAge), senão o fixo.
+func (s *server) sessionPATH(maxAge time.Duration) string {
+	if s.deps.UserPATH != nil {
+		return s.deps.UserPATH.Get(maxAge)
+	}
 	if s.deps.SessionPATH != "" {
 		return s.deps.SessionPATH
 	}

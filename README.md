@@ -166,9 +166,12 @@ make check     # confere as dependências
 make setup     # compila, instala em ~/.local/bin e configura tudo
 ```
 
-**Rode o `make setup` num terminal onde o `claude` funciona.** A unidade do
-systemd guarda o `PATH` desse terminal, e é com ele que o daemon acha o
-`claude` para abrir o "Continuar".
+O daemon não guarda o `PATH` do terminal onde você rodou o setup. Toda vez que
+abre um agente ("Continuar" ou `nobre run`) ou procura o `claude`, ele pergunta
+o `PATH` ao seu shell de login (bash ou zsh). Assim, trocar a versão do Node,
+de um venv ou do mise não quebra nada, e não é preciso reinstalar. A unidade do
+systemd guarda o `PATH` do terminal do setup só como reserva, para quando o
+shell não puder ser consultado (fish, por exemplo).
 
 O `make setup` faz, em ordem:
 
@@ -351,8 +354,8 @@ O `make update` recompila, reinstala os binários e reinicia o `nobred`.
 terminal normais continuam. Se houver agentes rodando na plataforma, use
 `make install` agora e `make restart` depois.
 
-Só é preciso rodar `make setup` de novo se a skill, os hooks ou o `PATH`
-mudarem. O setup é idempotente: o que já está certo fica como está.
+Só é preciso rodar `make setup` de novo se a skill ou os hooks mudarem (o
+`PATH` o daemon pega do seu shell na hora). O setup é idempotente: o que já está certo fica como está.
 
 ## Onde ficam os arquivos
 
@@ -422,9 +425,16 @@ O design está em [`docs/spec.md`](docs/spec.md), o estado atual em
 **`make check` diz que `~/.local/bin` não está no PATH.** Acrescente ao
 `~/.zshrc` ou `~/.bashrc`: `export PATH="$HOME/.local/bin:$PATH"`.
 
-**O "Continuar" não abre o terminal ou não acha o `claude`.** A unidade do
-systemd guarda o `PATH` do terminal onde o setup rodou. Rode `make setup` de
-novo num terminal onde `claude` funciona e depois `make restart`.
+**O "Continuar" não acha o `claude`.** O daemon procura o `claude` no `PATH`
+do seu shell de login. Confira em **Configuração → Agentes detectados** se o
+item "CLI encontrado" está ok. Se não estiver, coloque o diretório do `claude`
+no `PATH` do seu `~/.zshrc` ou `~/.bashrc` (não precisa reiniciar o daemon). Com
+um shell que não seja bash nem zsh, o daemon usa o `PATH` de reserva da
+unidade: rode `make setup` num terminal onde o `claude` funciona. Se a consulta
+ao shell falhar, o motivo aparece em `make logs`.
+
+**O "Continuar" não abre o terminal.** Confira em **Configuração** o comando do
+terminal. O daemon o procura no `PATH` do seu shell de login.
 
 **A interface diz que o binário foi gerado sem a interface.** Rode
 `make build` (ele compila a interface antes) e `make update`.

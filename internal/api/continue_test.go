@@ -60,6 +60,12 @@ func continueAPI(t *testing.T, g gitinfo.GitInfo, claudeBin ...string) (*testAPI
 // continueAPIWith é continueAPI com um gerenciador de terminais (nil = sem).
 func continueAPIWith(t *testing.T, g gitinfo.GitInfo, mgr *pty.Manager, claudeBin ...string) (*testAPI, *fakeLauncher) {
 	t.Helper()
+	return continueAPIDeps(t, g, mgr, nil, claudeBin...)
+}
+
+// continueAPIDeps é continueAPIWith com um ajuste nas Deps antes do New.
+func continueAPIDeps(t *testing.T, g gitinfo.GitInfo, mgr *pty.Manager, tweak func(*Deps), claudeBin ...string) (*testAPI, *fakeLauncher) {
+	t.Helper()
 	st, err := store.Open(t.TempDir() + "/cockpit.db")
 	if err != nil {
 		t.Fatal(err)
@@ -76,14 +82,18 @@ func continueAPIWith(t *testing.T, g gitinfo.GitInfo, mgr *pty.Manager, claudeBi
 	}
 	ad.SetPaths(claude.Paths{ClaudeBin: bin})
 	l := &fakeLauncher{}
-	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub,
+	deps := Deps{Now: func() time.Time { return testNow }, Hub: hub,
 		Adapters: map[string]adapter.Adapter{"claude": ad}, Launcher: l, Git: g, Terminals: mgr, SessionPATH: sessionPATH,
 		ResolveTerminal: func(n string) (string, error) {
 			if n == "x-terminal-emulator" {
 				return "/usr/bin/terminator", nil
 			}
 			return "", errors.New("não achei")
-		}})}
+		}}
+	if tweak != nil {
+		tweak(&deps)
+	}
+	a := &testAPI{st: st, hub: hub, h: New(st, deps)}
 	p, err := st.CreateProject("api", "/w/api")
 	if err != nil {
 		t.Fatal(err)
@@ -399,4 +409,33 @@ func TestContinueBackgroundFromSettingsDefault(t *testing.T) {
 func TestContinueBackgroundWithoutManager(t *testing.T) {
 	a, _ := continueAPI(t, &fakeGit{branch: "feat/x", clean: true})
 	errOf(t, a, http.StatusServiceUnavailable, map[string]any{"mode": "background"})
+}
+
+type fakeUserPATH struct {
+	path string
+	ages []time.Duration
+}
+
+func (f *fakeUserPATH) Get(maxAge time.Duration) string {
+	f.ages = append(f.ages, maxAge)
+	return f.path
+}
+
+// Com UserPATH, o "Continuar" consulta o PATH do usuário na hora (maxAge 0)
+// e o exporta no script, no lugar do PATH fixo do daemon.
+func TestContinueUsesFreshUserPATH(t *testing.T) {
+	g := &fakeGit{branch: "main", clean: true}
+	up := &fakeUserPATH{path: "/novo/bin:/usr/bin"}
+	a, l := continueAPIDeps(t, g, nil, func(d *Deps) { d.UserPATH = up })
+	rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"agent": "claude", "mode": "platform", "prompt_slug": ""}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	last := l.calls[0][len(l.calls[0])-1]
+	if !strings.Contains(last, "export PATH=") || !strings.Contains(last, "/novo/bin:/usr/bin") || strings.Contains(last, sessionPATH) {
+		t.Fatalf("script = %q", last)
+	}
+	if len(up.ages) == 0 || up.ages[0] != 0 {
+		t.Fatalf("consultas = %v (a primeira precisa ser fresca)", up.ages)
+	}
 }

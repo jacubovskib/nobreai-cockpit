@@ -308,3 +308,26 @@ func TestDetectEventsFromLastSession(t *testing.T) {
 		}
 	}
 }
+
+// O CLI é procurado no PATH do usuário (SearchPATH), consultado a cada
+// chamada: um claude que mudou de lugar aparece sem reiniciar o daemon.
+func TestCLIPathUsesSearchPATH(t *testing.T) {
+	e := newEnv(t)
+	dirA, dirB := t.TempDir(), t.TempDir()
+	cur := dirA
+	e.a.SetPaths(Paths{SettingsPath: writeSettings(t, ""), SkillsDir: t.TempDir(), SearchPATH: func() string { return cur }})
+	if got := e.a.Binary(); got != "" && !strings.HasSuffix(got, "/.local/bin/claude") {
+		t.Fatalf("sem claude no PATH: %q", got)
+	}
+	exe := filepath.Join(dirB, "claude")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cur = "/nao/existe:" + dirB
+	if got := e.a.Binary(); got != exe {
+		t.Fatalf("Binary = %q, quer %q", got, exe)
+	}
+	if d := e.a.Detect(); !d.Found || d.Path != exe {
+		t.Fatalf("Detect = %+v", d)
+	}
+}

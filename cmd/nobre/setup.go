@@ -70,9 +70,9 @@ func isFile(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
-// unitContent monta a unidade do nobred. path vai em Environment=PATH: o
-// systemd do usuário só tem /usr/local/bin e /usr/bin, e o daemon precisa
-// achar o claude e passar o PATH ao terminal do "Continuar".
+// unitContent monta a unidade do nobred. path (unitPATH) vai em
+// Environment=PATH: é a reserva do daemon quando o shell de login do usuário
+// não responde (launch.UserPATH).
 func unitContent(nobred, path string) string {
 	env := ""
 	if q := systemdPATH(path); q != "" {
@@ -81,6 +81,33 @@ func unitContent(nobred, path string) string {
 	return "[Unit]\nDescription=NobreAI Cockpit (nobred)\nAfter=network.target\n\n" +
 		"[Service]\n" + env + "ExecStart=" + nobred + "\nRestart=on-failure\nKillMode=process\n\n" +
 		"[Install]\nWantedBy=default.target\n"
+}
+
+// unitPATH é o PATH de reserva da unidade: o diretório do nobre, o do claude
+// achado no PATH deste terminal, o resto do PATH deste terminal e os do
+// sistema. Com bash ou zsh o daemon põe na frente o PATH do shell de login,
+// lido na hora de usar (launch.UserPATH); esta reserva só decide sozinha com
+// outros shells (fish, por exemplo) ou quando a consulta falha.
+func unitPATH(termPATH, nobreDir string) string {
+	dirs := []string{nobreDir}
+	if p := launch.LookPathIn("claude", termPATH); p != "" {
+		dirs = append(dirs, filepath.Dir(p))
+	}
+	for _, d := range strings.Split(termPATH, ":") {
+		if filepath.IsAbs(d) && !strings.ContainsAny(d, "\n\r") {
+			dirs = append(dirs, d)
+		}
+	}
+	dirs = append(dirs, "/usr/local/bin", "/usr/bin", "/bin")
+	seen := map[string]bool{}
+	out := dirs[:0]
+	for _, d := range dirs {
+		if d != "" && !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	return strings.Join(out, ":")
 }
 
 // systemdPATH devolve "PATH=<path>" entre aspas duplas para o Environment=
@@ -293,8 +320,7 @@ func (c *cli) setupService(d *setupDeps, dry bool, l *checklist) {
 		return
 	}
 	unit := filepath.Join(d.UnitDir, "nobred.service")
-	// O PATH deste terminal (onde o claude funciona) mais o diretório do nobre.
-	want := unitContent(d.NobredBin, launch.PathWithDir(c.getenv("PATH"), filepath.Dir(d.NobreBin)))
+	want := unitContent(d.NobredBin, unitPATH(c.getenv("PATH"), filepath.Dir(d.NobreBin)))
 	cur, _ := os.ReadFile(unit)
 	if dry {
 		if string(cur) == want {
