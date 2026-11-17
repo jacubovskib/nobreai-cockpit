@@ -16,7 +16,7 @@ sessão gastou e quanto isso custou, e aplica limites de custo.
 
 ## Sumário
 
-- [Como funciona](#como-funciona)
+- [Como funciona](#como-funciona) (inclui o [design](#design))
 - [Requisitos](#requisitos)
 - [Instalação](#instalação)
 - [Primeiros passos](#primeiros-passos)
@@ -107,6 +107,19 @@ Abra com `nobre ui` (ou em `http://127.0.0.1:7420`):
 | Prompts | Prompts salvos com variáveis |
 | Analytics | Tokens e custo por sessão, card, agente e dia |
 | Configuração | Agentes detectados, projetos, preços, moeda, limites e regras de handoff |
+
+### Design
+
+As telas foram desenhadas no Claude Design, no canvas
+[NobreAI Cockpit](https://claude.ai/artifact/VZs84mPU4RS1rWCPQg2K8L) (acesso
+restrito). Ele tem três páginas:
+
+- **Beta 1 · PT:** Sala de controle, Board, Card (handoff), Analytics,
+  Configuração e Prompts. É a base da interface atual.
+- **Beta 2 · EN:** o roadmap, com privacidade, setup guiado, inbox de
+  aprovações, sessão ao vivo, projetos, times, cobrança, login e celular. A
+  maior parte ainda não está implementada.
+- **Brand & site:** propostas de ícone e quatro direções de site.
 
 ## Requisitos
 
