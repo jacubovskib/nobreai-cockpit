@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -437,5 +438,107 @@ func TestContinueUsesFreshUserPATH(t *testing.T) {
 	}
 	if len(up.ages) == 0 || up.ages[0] != 0 {
 		t.Fatalf("consultas = %v (a primeira precisa ser fresca)", up.ages)
+	}
+}
+
+// A prévia do Continuar devolve exatamente o texto que o Continuar envia:
+// sem o pacote (que chega pelo SessionStart) e sem abrir nada.
+func TestContinuePreviewMatchesWhatIsSent(t *testing.T) {
+	g := &fakeGit{branch: "feat/x", clean: true}
+	a, l := continueAPI(t, g)
+	c, _ := a.st.GetCard("NAC-1")
+	if _, err := a.st.AddDecision(domain.Decision{CardID: c.ID, What: "Usar PKCE", Why: "app público"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "pac", Slug: "pac", Body: "Card {{card.id}}.[{{card.pacote}}]\n\n"}); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"pac":    "Card NAC-1.[]",
+		"nenhum": "Continue o card NAC-1.",
+	}
+	for slug, want := range cases {
+		rec := a.do(t, "POST", "/api/cards/NAC-1/continue/preview", map[string]any{"prompt_slug": slug}, 0)
+		var got struct {
+			Text string `json:"text"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &got)
+		if rec.Code != http.StatusOK || got.Text != want {
+			t.Fatalf("%s: %d %q, quer %q", slug, rec.Code, got.Text, want)
+		}
+	}
+	// O padrão ("") usa o prompt de handoff padrão, como o Continuar.
+	rec := a.do(t, "POST", "/api/cards/NAC-1/continue/preview", map[string]any{"prompt_slug": ""}, 0)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "continuando o card NAC-1") || strings.Contains(rec.Body.String(), "Usar PKCE") {
+		t.Fatalf("padrão: %d %s", rec.Code, rec.Body)
+	}
+	if len(g.checkouts) != 0 || len(l.calls) != 0 {
+		t.Fatalf("a prévia não pode abrir nada: checkouts %v, lançamentos %d", g.checkouts, len(l.calls))
+	}
+	p, _ := a.st.GetPrompt("pac")
+	if p.Uses != 0 {
+		t.Fatalf("a prévia não conta uso: %d", p.Uses)
+	}
+	// O enviado é o mesmo texto.
+	if rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"prompt_slug": "pac"}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("continue: %d %s", rec.Code, rec.Body)
+	}
+	if last := l.calls[0][len(l.calls[0])-1]; !strings.Contains(last, "Card NAC-1.[]") {
+		t.Fatalf("enviado: %q", last)
+	}
+	for slug, code := range map[string]int{"nao-existe": 404} {
+		if rec := a.do(t, "POST", "/api/cards/NAC-1/continue/preview", map[string]any{"prompt_slug": slug}, 0); rec.Code != code {
+			t.Fatalf("%s: %d", slug, rec.Code)
+		}
+	}
+	if rec := a.do(t, "POST", "/api/cards/NAC-99/continue/preview", map[string]any{"prompt_slug": ""}, 0); rec.Code != 404 {
+		t.Fatalf("card inexistente: %d", rec.Code)
+	}
+}
+
+// O argumento que o agente recebe é igual, byte a byte, ao texto da prévia;
+// e um prompt grande demais é recusado já na prévia, como no envio.
+func TestContinuePreviewEqualsAgentArgument(t *testing.T) {
+	got := filepath.Join(t.TempDir(), "arg")
+	claudeBin := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(claudeBin, []byte("#!/bin/sh\nprintf '%s' \"$2\" > "+got+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mgr := pty.NewManager(pty.Options{})
+	t.Cleanup(mgr.Close)
+	a, _ := continueAPIWith(t, &fakeGit{branch: "main", clean: true}, mgr, claudeBin)
+	p, _ := a.st.CreateProject("real", t.TempDir())
+	c, err := a.st.CreateCard(domain.Card{Title: "Título com 'aspas' e $VAR", ProjectID: p.ID, WhereStopped: "linha 1\nlinha 2  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "x", Slug: "x", Body: "{{card.id}} {{card.titulo}}\n{{card.onde_parei}}\n{{card.pacote}}\n"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/cards/"+c.Key+"/continue/preview", map[string]any{"prompt_slug": "x"}, 0)
+	preview := decode[map[string]string](t, rec)["text"]
+	if rec.Code != http.StatusOK || preview == "" {
+		t.Fatalf("prévia: %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/cards/"+c.Key+"/continue", map[string]any{"mode": "background", "prompt_slug": "x"}, 0)
+	id, _ := decode[map[string]any](t, rec)["terminal_id"].(string)
+	tm, ok := mgr.Get(id)
+	if !ok {
+		t.Fatalf("continue: %d %s", rec.Code, rec.Body)
+	}
+	select {
+	case <-tm.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("agente não terminou")
+	}
+	if b, _ := os.ReadFile(got); string(b) != preview {
+		t.Fatalf("enviado %q\nprévia   %q", b, preview)
+	}
+
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "g", Slug: "g", Body: strings.Repeat("x", 130<<10)}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/cards/"+c.Key+"/continue/preview", map[string]any{"prompt_slug": "g"}, 0); rec.Code != 422 {
+		t.Fatalf("prévia de prompt grande: %d", rec.Code)
 	}
 }

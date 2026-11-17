@@ -4,11 +4,11 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 // Cada kind do stream invalida as queries cujo primeiro elemento da chave
 // está na lista. Kinds desconhecidos invalidam tudo.
 const KIND_KEYS: Record<string, string[]> = {
-  cards: ['cards', 'card', 'overview', 'events', 'worktrees'],
+  cards: ['cards', 'card', 'continue-preview', 'overview', 'events', 'worktrees'],
   sessions: ['sessions', 'card', 'cards', 'overview', 'usage', 'events', 'worktrees'],
   config: ['settings', 'limits', 'prices', 'projects', 'overview', 'worktrees'],
   usage: ['usage', 'overview', 'cards', 'card'],
-  prompts: ['prompts'],
+  prompts: ['prompts', 'continue-preview'],
   terminals: ['terminals'],
   plan: ['plan', 'overview'],
 }

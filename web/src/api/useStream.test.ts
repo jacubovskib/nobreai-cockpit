@@ -21,9 +21,9 @@ describe('createInvalidator', () => {
     inv.push('prompts')
     expect(spy).not.toHaveBeenCalled()
     vi.advanceTimersByTime(50)
-    expect(keysOf(spy)).toEqual(['prompts'])
+    expect(keysOf(spy)).toEqual(['prompts', 'continue-preview'])
     vi.advanceTimersByTime(1000)
-    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledTimes(2)
   })
 
   it('kinds diferentes não se juntam', () => {
@@ -31,7 +31,7 @@ describe('createInvalidator', () => {
     inv.push('prompts')
     inv.push('cards')
     vi.advanceTimersByTime(250)
-    expect(keysOf(spy)).toEqual(['prompts', 'cards', 'card', 'overview', 'events', 'worktrees'])
+    expect(keysOf(spy)).toEqual(['prompts', 'continue-preview', 'cards', 'card', 'continue-preview', 'overview', 'events', 'worktrees'])
   })
 
   it('cancel descarta o que estava pendente', () => {
@@ -50,5 +50,15 @@ describe('kind plan', () => {
     const spy = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue()
     invalidateForKind(qc, 'plan')
     expect(spy.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0])).toEqual(['plan', 'overview'])
+  })
+})
+
+describe('prévia do Continuar', () => {
+  it.each(['cards', 'prompts'])('o kind %s invalida a prévia do Continuar', async (kind) => {
+    const { invalidateForKind } = await import('./useStream')
+    const qc = new QueryClient()
+    const spy = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue()
+    invalidateForKind(qc, kind)
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0])).toContain('continue-preview')
   })
 })
