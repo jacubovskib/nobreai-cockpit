@@ -52,13 +52,30 @@ func (s *Store) UpdateProject(p domain.Project) error {
 	if err != nil {
 		return err
 	}
+	kids, err := childrenTx(tx, p.ID)
+	if err != nil {
+		return err
+	}
 	if cur.ParentID != nil {
 		parent, err := getProjectTx(tx, *cur.ParentID)
 		if err != nil {
 			return err
 		}
+		if p.Path == "" {
+			return familyErr("o sub-projeto precisa de uma pasta")
+		}
 		if err := checkInside(parent, p.Path); err != nil {
 			return err
+		}
+		p.Capture = parent.Capture // a captura do sub-projeto é a do pai
+	} else if len(kids) > 0 && p.Path != cur.Path {
+		if (p.Path == "") != (cur.Path == "") {
+			return familyErr("um projeto com sub-projetos não pode trocar entre ter pasta e ser grupo")
+		}
+		for _, k := range kids {
+			if err := checkInside(domain.Project{Path: p.Path}, k.Path); err != nil {
+				return err
+			}
 		}
 	}
 	if !strings.EqualFold(cur.Name, p.Name) {

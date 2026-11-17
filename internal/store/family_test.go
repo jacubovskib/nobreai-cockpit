@@ -340,3 +340,54 @@ func TestTotalsProjectIDs(t *testing.T) {
 		t.Fatalf("cards: %v %v", cs, err)
 	}
 }
+
+func TestUpdateProjectKeepsFamilyInvariants(t *testing.T) {
+	s := newTestStore(t)
+	loja := mustProject(t, s, "loja", "/r/loja")
+	web := mustChild(t, s, "web", "/r/loja/web", loja.ID)
+
+	moved := loja
+	moved.Path = "/r/outra"
+	if err := s.UpdateProject(moved); !errors.Is(err, ErrFamily) {
+		t.Fatalf("pai muda de pasta deixando filho fora: %v", err)
+	}
+	flip := loja
+	flip.Path = ""
+	if err := s.UpdateProject(flip); !errors.Is(err, ErrFamily) {
+		t.Fatalf("monorepo virando grupo: %v", err)
+	}
+	out := web
+	out.Path = "/r/outro"
+	if err := s.UpdateProject(out); !errors.Is(err, ErrFamily) {
+		t.Fatalf("filho fora do pai: %v", err)
+	}
+	out.Path = ""
+	if err := s.UpdateProject(out); !errors.Is(err, ErrFamily) {
+		t.Fatalf("filho sem pasta: %v", err)
+	}
+	// o pai pode mudar de pasta se os filhos continuam dentro? so se continuam dentro da nova.
+	same := loja
+	same.Name = "loja2"
+	if err := s.UpdateProject(same); err != nil {
+		t.Fatalf("renomear pai: %v", err)
+	}
+	// captura do filho segue o pai
+	web.Capture = false
+	if err := s.UpdateProject(web); err != nil {
+		t.Fatal(err)
+	}
+	kids, _ := s.Children(loja.ID)
+	if !kids[0].Capture {
+		t.Fatal("captura do filho divergiu do pai")
+	}
+}
+
+func TestUpdateGroupWithChildrenCannotGainPath(t *testing.T) {
+	s := newTestStore(t)
+	g, _ := s.CreateGroup("g")
+	mustChild(t, s, "front", "/r/front", g.ID)
+	g.Path = "/r"
+	if err := s.UpdateProject(g); !errors.Is(err, ErrFamily) {
+		t.Fatalf("grupo virando monorepo: %v", err)
+	}
+}
