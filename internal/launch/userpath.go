@@ -130,6 +130,9 @@ func (u *UserPATH) probe() (path string, ok bool, why string) {
 	cmd := exec.CommandContext(ctx, u.Shell, "-lic", `printf '\n`+pathMarker+`%s\n' "$PATH"`)
 	var out bytes.Buffer
 	cmd.Stdout = &out
+	// Parte do PATH de reserva, não do PATH do daemon (já mesclado pelo
+	// OnChange): senão um diretório que saiu do rc nunca sairia do PATH.
+	cmd.Env = append(withoutPATH(os.Environ()), "PATH="+u.Fallback)
 	cmd.Stdin = nil  // /dev/null
 	cmd.Stderr = nil // /dev/null: um filho do rc com o stderr herdado não segura pipe
 	if home, err := os.UserHomeDir(); err == nil {
@@ -212,4 +215,14 @@ func LoginShell() string {
 		}
 	}
 	return ""
+}
+
+func withoutPATH(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "PATH=") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }

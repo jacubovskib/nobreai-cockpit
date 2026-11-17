@@ -186,3 +186,14 @@ func TestUserPATHHugeLineBeforeMarker(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// O shell parte do PATH de reserva, não do PATH do daemon (que o OnChange já
+// mesclou): um diretório que saiu do rc sai também do PATH.
+func TestUserPATHProbeStartsFromFallback(t *testing.T) {
+	t.Setenv("PATH", "/venv-velho/bin:/usr/bin:/bin")
+	sh := fakeShell(t, "bash", `printf '__NOBRE_PATH__/rc:%s\n' "$PATH"`)
+	u := &UserPATH{Shell: sh, Fallback: "/usr/bin:/bin", Timeout: 2 * time.Second}
+	if got := u.Get(0); got != "/rc:/usr/bin:/bin" {
+		t.Fatalf("%q", got)
+	}
+}
