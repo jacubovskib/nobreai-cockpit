@@ -45,6 +45,7 @@ por ele mesmo.</sub>
 - [Desinstalar](#desinstalar)
 - [Desenvolvimento](#desenvolvimento)
 - [Problemas comuns](#problemas-comuns)
+- [Licença](#licença)
 
 ## Como funciona
 
@@ -445,3 +446,7 @@ terminal. O daemon o procura no `PATH` do seu shell de login.
 **Os cards não aparecem.** Confira `make status`; veja `make logs`; confirme
 que o repositório está em `nobre project list` e que o Claude Code mostra os
 hooks em **Configuração → Agentes detectados**.
+
+## Licença
+
+MIT. Veja [LICENSE](LICENSE).
