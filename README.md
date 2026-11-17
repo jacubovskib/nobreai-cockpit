@@ -1,14 +1,27 @@
 # NobreAI Cockpit
 
-Um kanban local feito para agentes de IA. Cada tarefa vira um **card** que
-guarda o que importa para continuar o trabalho: objetivo, onde parou,
-decisões, arquivos essenciais, pendências, perguntas e como testar. Quando a
-tarefa passa para outra sessão ou para outro agente, o novo agente lê o card e
-continua de onde o anterior parou, sem precisar perguntar o que estava sendo
-feito.
+**Troque de sessão ou de agente sem perder o contexto.** Hooks do Claude Code
+registram decisões, arquivos, pendências e custo em cards que qualquer agente
+retoma com `nobre resume`. Local-first, Go + SQLite.
 
-O Cockpit também mostra quais agentes estão rodando agora, quantos tokens cada
-sessão gastou e quanto isso custou, e aplica limites de custo.
+```text
+sessão 1   nobre start "Login com OAuth" --goal "entrar com Google"
+           nobre decide "PKCE em vez de segredo no cliente" --why "o app é público"
+           nobre note "callback pronto; falta validar o state"
+           ... a sessão acaba, o card vai para Pausado ...
+sessão 2   nobre resume NAC-7   # objetivo, decisões, arquivos, onde parou e o que falta
+```
+
+Na prática, você nem digita esses comandos: a skill instalada ensina o agente
+a manter o card, e os hooks registram o esqueleto (prompts, arquivos editados,
+comandos e tokens) mesmo quando ele esquece. A sessão nova começa a trabalhar
+sem perguntar o que estava sendo feito.
+
+Além disso, o Cockpit mostra quais agentes estão rodando agora, quantos tokens
+cada sessão, card e projeto gastou e quanto isso custou, e pode pausar um
+agente que estoure o limite de custo. Tudo roda na sua máquina: um daemon que
+escuta só em `127.0.0.1`, um banco SQLite e uma interface web embutida no
+binário.
 
 > Estado atual: piloto funcional com o **Claude Code**, em **Linux com
 > systemd**. Os adaptadores para Codex e Kiro, o modo tmux, os limites mensais
