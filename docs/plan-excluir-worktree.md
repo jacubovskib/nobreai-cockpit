@@ -156,3 +156,4 @@ it('após excluir volta para a lista')
 - **Ficam como limitação conhecida:**
   - um repositório aninhado dentro de pasta ignorada pelo git é apagado junto (o aviso sobre arquivos ignorados cobre o caso);
   - o `prune` de reserva para git antigo limpa todos os registros com pasta sumida.
+  - worktree cuja pasta foi apagada à mão: o registro sai sem conferir commits soltos no HEAD que ficou na pasta administrativa (o mesmo que o `git worktree prune` faria).
