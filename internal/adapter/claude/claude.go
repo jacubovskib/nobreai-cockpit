@@ -25,6 +25,11 @@ type Adapter struct {
 	// repoRoots guarda o topo do repositório de cada diretório de projeto
 	// (chave e valor: string), para traduzir caminhos de worktrees.
 	repoRoots sync.Map
+	// outsideSwitch marca a troca de branch vista de fora do agente (prompt,
+	// fim de turno) que ainda não levou o card: chave ID da sessão, valor o
+	// branch que a sessão tinha antes. Só em memória: perder a marca num
+	// restart só deixa o card onde estava.
+	outsideSwitch sync.Map
 }
 
 var _ adapter.Adapter = (*Adapter)(nil)

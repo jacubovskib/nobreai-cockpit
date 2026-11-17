@@ -1214,3 +1214,124 @@ func TestSessionStartSkipsPausedCardWithLiveSession(t *testing.T) {
 		t.Fatalf("contexto:\n%s", ctx)
 	}
 }
+
+// Troca de branch feita fora do agente (no terminal do usuário, na IDE) é
+// vista no próximo prompt ou fim de turno, mesmo sem nenhum Bash do agente.
+func TestPromptAndStopFollowExternalBranchSwitch(t *testing.T) {
+	for _, fixture := range []string{"user_prompt_submit", "stop"} {
+		t.Run(fixture, func(t *testing.T) {
+			e := newEnv(t)
+			c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+			if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+				t.Fatal(err)
+			}
+			e.a.deps.Git = fakeGit{branch: "feat/fora"}
+			e.call(t, fixture)
+			if s, _ := e.st.GetSession(sessID); s.Branch != "feat/fora" || s.Cwd != "/w/api" {
+				t.Fatalf("sessão = %+v", s)
+			}
+		})
+	}
+}
+
+// Um subagente no mesmo cwd não move nada: só o principal relê o branch.
+func TestSubagentPromptDoesNotFollowBranch(t *testing.T) {
+	e := newEnv(t)
+	e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	before, _ := e.st.GetSession(sessID)
+	e.a.deps.Git = fakeGit{branch: "feat/sub"}
+	e.call(t, "stop", with("agent_id", "sub-1"))
+	if s, _ := e.st.GetSession(sessID); s.Branch != before.Branch {
+		t.Fatalf("subagente mudou o branch: %q", s.Branch)
+	}
+}
+
+// Troca vista no prompt/fim de turno pode ser do usuário (revisando outro
+// branch na IDE): a sessão acompanha, o card não.
+func TestExternalBranchSwitchUpdatesSessionNotCard(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado, Branch: "feat/a"})
+	if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := e.st.GetCardByID(c.ID)
+	e.a.deps.Git = fakeGit{branch: "feat/revisao"}
+	e.call(t, "stop")
+	if s, _ := e.st.GetSession(sessID); s.Branch != "feat/revisao" {
+		t.Fatalf("sessão = %q", s.Branch)
+	}
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != before.Branch {
+		t.Fatalf("o card não deveria seguir troca de fora: %q", got.Branch)
+	}
+	// Um Bash do agente no branch novo: aí o card acompanha.
+	e.call(t, "post_tool_use_bash")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/revisao" {
+		t.Fatalf("depois do Bash do agente: %q", got.Branch)
+	}
+}
+
+// claude --resume depois de trocar de branch no terminal: o SessionStart da
+// sessão reaberta já usa o branch atual (cards pausados do branch certo).
+func TestResumedSessionStartRereadsBranch(t *testing.T) {
+	e := newEnv(t)
+	e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	if err := e.st.EndSession(sessID, "fim", t0); err != nil {
+		t.Fatal(err)
+	}
+	e.a.deps.Git = fakeGit{branch: "feat/b"}
+	e.call(t, "session_start", withPID(9999))
+	if s, _ := e.st.GetSession(sessID); s.Branch != "feat/b" {
+		t.Fatalf("sessão reaberta = %q", s.Branch)
+	}
+}
+
+// nobre branch dado de propósito (card num worktree, sessão no checkout
+// principal noutro branch) não é desfeito pelos Bash seguintes.
+func TestBashDoesNotUndoDeliberateCardBranch(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	e.a.deps.Git = fakeGit{branch: "fix/outro"}
+	e.call(t, "post_tool_use_bash") // sessão e card vão para fix/outro
+	if _, err := e.st.SetCardBranch(c.ID, "feat/x"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		e.call(t, "post_tool_use_bash")
+	}
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/x" {
+		t.Fatalf("o Bash desfez o nobre branch: %q", got.Branch)
+	}
+	// Uma troca de fora depois disso também não leva o card (ele não estava
+	// no branch da sessão).
+	e.a.deps.Git = fakeGit{branch: "feat/revisao"}
+	e.call(t, "stop")
+	e.call(t, "post_tool_use_bash")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/x" {
+		t.Fatalf("troca de fora levou o card: %q", got.Branch)
+	}
+}
+
+// Card nascido na base (sem branch): depois de um git switch -c no terminal,
+// o Bash seguinte do agente leva o card para o branch novo.
+func TestCardWithoutBranchFollowsOutsideSwitchOnBash(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.SetCardBranch(c.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.a.deps.Git = fakeGit{branch: "feat/y"}
+	e.call(t, "stop")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "" {
+		t.Fatalf("o stop não move o card: %q", got.Branch)
+	}
+	e.call(t, "post_tool_use_bash")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/y" {
+		t.Fatalf("card vazio deveria ir para feat/y: %q", got.Branch)
+	}
+}

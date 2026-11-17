@@ -105,6 +105,7 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 		a.ingestAsync(sess.ID, transcriptPath(p, sess))
 		return reply, err
 	case "SessionEnd":
+		a.outsideSwitch.Delete(sess.ID)
 		return a.sessionEnd(sess, p, now)
 	}
 	return adapter.HookReply{}, nil
@@ -135,7 +136,19 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 			return sess, err
 		}
 		a.publish("sessions", "cards")
-		return a.st.GetSession(id)
+		sess, err := a.st.GetSession(id)
+		if err != nil {
+			return sess, err
+		}
+		// claude --resume depois de um git switch no terminal: o SessionStart
+		// (cards pausados do branch) já precisa do branch atual.
+		if p.AgentID == "" && mainOnlyEvents[event] {
+			if p.Cwd != "" && p.Cwd != sess.Cwd {
+				return a.moveSession(sess, p.Cwd)
+			}
+			return a.followBranch(sess, false), nil
+		}
+		return sess, nil
 	}
 	if err := a.st.TouchSession(id, now); err != nil {
 		return sess, err
@@ -146,12 +159,20 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 	if p.Cwd != "" && p.Cwd != sess.Cwd && mainOnlyEvents[event] && p.AgentID == "" {
 		return a.moveSession(sess, p.Cwd)
 	}
+	// Mesmo diretório: o branch pode ter sido trocado fora do agente (no
+	// terminal do usuário, na IDE), sem nenhum Bash que o PostToolUse visse.
+	// Só a sessão acompanha: o usuário pode estar só revisando outro branch, e
+	// o card segue o que o próprio agente faz (Bash, nobre branch/start/resume).
+	if mainOnlyEvents[event] && p.AgentID == "" {
+		return a.followBranch(sess, false), nil
+	}
 	return sess, nil
 }
 
 // moveSession grava o novo diretório da sessão (o agente entrou num worktree,
 // por exemplo) com branch, HEAD e worktree de lá. O projeto ligado não muda.
 func (a *Adapter) moveSession(sess domain.Session, cwd string) (domain.Session, error) {
+	a.outsideSwitch.Delete(sess.ID) // o card acompanha a mudança de diretório
 	l := a.locate(cwd)
 	if err := a.st.UpdateSessionLocation(sess.ID, l); err != nil {
 		return sess, err
@@ -302,30 +323,59 @@ func (a *Adapter) postToolUse(sess domain.Session, p payload, now time.Time) err
 			data["exit_code"] = code
 		}
 		a.event(sess.ID, domain.EvCommand, data, now)
-		a.followBranch(sess)
+		a.followBranch(sess, true)
 	}
 	return nil
 }
 
 // followBranch percebe troca de branch no mesmo diretório (git switch num
-// comando Bash): grava o branch atual na sessão e o card acompanha. Custa um
-// git rev-parse por comando; falhas só vão para o log.
-func (a *Adapter) followBranch(sess domain.Session) {
+// comando Bash, ou fora do agente): grava o branch atual na sessão e devolve
+// a sessão atualizada; com syncCard, o card acompanha. Custa um git
+// rev-parse por comando, prompt e fim de turno; falhas só vão para o log.
+func (a *Adapter) followBranch(sess domain.Session, syncCard bool) domain.Session {
 	if a.deps.Git == nil || sess.Cwd == "" {
-		return
+		return sess
 	}
 	b := a.deps.Git.Branch(sess.Cwd)
-	if b == "" || b == sess.Branch {
-		return
+	if b == "" {
+		return sess
+	}
+	if b == sess.Branch {
+		// A sessão já acompanhou (uma troca vista no prompt ou no fim de
+		// turno, que não move o card): agora que o próprio agente trabalha
+		// nesse branch, o card vem junto.
+		// Só quando o card seguia a sessão: estava no branch de antes da
+		// troca, ou sem branch (o card nunca guarda a base). Um nobre branch
+		// dado de propósito fica.
+		if prev, ok := a.outsideSwitch.Load(sess.ID); ok && syncCard && sess.CardID != nil {
+			a.outsideSwitch.Delete(sess.ID)
+			if c, err := a.st.GetCardByID(*sess.CardID); err == nil && (c.Branch == prev.(string) || c.Branch == "") {
+				a.syncCardBranch(sess)
+			}
+		}
+		return sess
 	}
 	l := a.locate(sess.Cwd)
+	// Vale uma leitura só: se a do locate discordar (falhou ou o branch mudou
+	// no meio), nada é gravado; o próximo evento tenta de novo.
+	if l.Branch != b {
+		return sess
+	}
 	if err := a.st.UpdateSessionLocation(sess.ID, l); err != nil {
 		log.Printf("hook claude: branch da sessão %s: %v", sess.ID, err)
-		return
+		return sess
 	}
 	a.publish("sessions")
+	prev := sess.Branch
 	sess.Branch, sess.GitHead, sess.Worktree, sess.WorktreeLinked = l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
-	a.syncCardBranch(sess)
+	if syncCard {
+		a.outsideSwitch.Delete(sess.ID)
+		a.syncCardBranch(sess)
+	} else {
+		// Guarda o branch de antes da primeira troca de fora (A→B→C: vale A).
+		a.outsideSwitch.LoadOrStore(sess.ID, prev)
+	}
+	return sess
 }
 
 // projectRelative devolve o caminho relativo à raiz do projeto da sessão
