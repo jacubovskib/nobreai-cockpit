@@ -2,6 +2,7 @@ package gitinfo
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -50,6 +51,26 @@ type WorktreeInspector interface {
 }
 
 var _ WorktreeInspector = Exec{}
+
+// StatusReader lê as alterações de um worktree vendo sempre os arquivos
+// novos, qualquer que seja o status.showUntrackedFiles do usuário (é o que
+// decide se excluir o worktree perde algo).
+type StatusReader interface {
+	FullStatus(dir string) (Inspection, error)
+}
+
+var _ StatusReader = Exec{}
+
+// FullStatus roda git status --porcelain=v1 -z -unormal em dir.
+func (Exec) FullStatus(dir string) (Inspection, error) {
+	in := Inspection{Files: []FileChange{}, Commits: []Commit{}}
+	out, err := gitRO(dir, "status", "--porcelain=v1", "-z", "-unormal")
+	if err != nil {
+		return in, err
+	}
+	parseStatus(out, &in)
+	return in, nil
+}
 
 // gitRO roda um comando git só de leitura sem pegar locks opcionais: o
 // git status não atualiza o índice (nem disputa index.lock com quem está
@@ -147,3 +168,51 @@ func parseStatus(out string, in *Inspection) {
 // ReadOnly expõe gitRO a outros pacotes (o levantamento do projeto): só
 // leitura, sem locks opcionais, nunca busca na rede.
 func ReadOnly(dir string, args ...string) (string, error) { return gitRO(dir, args...) }
+
+// OrphanReader acha o que a remoção de um worktree perderia além dos arquivos:
+// commits alcançáveis só pelo HEAD dele (HEAD destacado, rebase parado no
+// meio), já que o reflog do worktree some com a pasta administrativa.
+type OrphanReader interface {
+	OrphanCommits(dir string) (commits []Commit, total int, rebase bool, err error)
+}
+
+var _ OrphanReader = Exec{}
+
+// OrphanCommits lista até 20 commits de HEAD que nenhum branch, tag ou
+// remoto alcança, o total deles e se há um rebase em andamento.
+func (Exec) OrphanCommits(dir string) ([]Commit, int, bool, error) {
+	commits := []Commit{}
+	rebase := false
+	for _, p := range []string{"rebase-merge", "rebase-apply"} {
+		if out, err := gitRO(dir, "rev-parse", "--path-format=absolute", "--git-path", p); err == nil {
+			if st, err := os.Stat(strings.TrimSpace(out)); err == nil && st.IsDir() {
+				rebase = true
+			}
+		}
+	}
+	if _, err := gitRO(dir, "rev-parse", "--verify", "-q", "HEAD"); err != nil {
+		return commits, 0, rebase, nil // sem commits ainda
+	}
+	not := []string{"HEAD", "--not", "--branches", "--tags", "--remotes", "--"}
+	out, err := gitRO(dir, append([]string{"rev-list", "--count"}, not...)...)
+	if err != nil {
+		return commits, 0, rebase, err
+	}
+	total, _ := strconv.Atoi(strings.TrimSpace(out))
+	if total == 0 {
+		return commits, 0, rebase, nil
+	}
+	out, err = gitRO(dir, append([]string{"log", "-n", "20", "--format=%H%x00%s%x00%an%x00%aI"}, not...)...)
+	if err != nil {
+		return commits, total, rebase, err
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		f := strings.Split(line, "\x00")
+		if len(f) != 4 {
+			continue
+		}
+		at, _ := time.Parse(time.RFC3339, f[3])
+		commits = append(commits, Commit{Hash: f[0], Subject: f[1], Author: f[2], At: at})
+	}
+	return commits, total, rebase, nil
+}

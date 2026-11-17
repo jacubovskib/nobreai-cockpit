@@ -1,7 +1,8 @@
-import { render, screen, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WorktreeDetailPage } from './WorktreeDetail'
+import { Worktrees } from './Worktrees'
 import type { WorktreeDetail } from '../api/types'
 import { ago, res, session, wt } from './worktreeFixtures'
 
@@ -107,5 +108,224 @@ describe('WorktreeDetailPage', () => {
     wrap()
     expect(await screen.findByText('o diretório do worktree não existe mais')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Recursos' })).not.toBeInTheDocument()
+  })
+
+  describe('excluir worktree', () => {
+    const free: WorktreeDetail = {
+      ...detail,
+      worktree: { ...detail.worktree, locked: false, lock_reason: '' },
+      sessions: detail.sessions.map((x) => ({ ...x, live: false })),
+      git: { ...detail.git!, ahead: 0 },
+    }
+    type Call = { url: string; method: string; body: unknown; ct: string | null }
+    function mockDelete(detailBody: WorktreeDetail, answers: Array<{ status: number; body: unknown }>, log: string[] = []) {
+      const calls: Call[] = []
+      vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET'
+        log.push(`${method} ${url}`)
+        if (method === 'DELETE') {
+          calls.push({ url, method, body: JSON.parse(String(init?.body)), ct: new Headers(init?.headers).get('Content-Type') })
+          const a = answers.shift()!
+          return new Response(JSON.stringify(a.body), { status: a.status })
+        }
+        if (url === detailURL) return new Response(JSON.stringify(detailBody), { status: 200 })
+        if (url === '/api/worktrees' || url === '/api/projects') return new Response('[]', { status: 200 })
+        return new Response('{}', { status: 200 })
+      }))
+      return calls
+    }
+    const question = (_: string, el: Element | null) => el?.tagName === 'SPAN' && el.textContent === 'Excluir a pasta /w/api-oauth?'
+    const ok = { status: 200, body: { removed: true, branch_deleted: true, branch_kept_reason: '' } }
+
+    it('não mostra Excluir no checkout principal', async () => {
+      mockDelete({ ...free, worktree: { ...free.worktree, main: true } }, [])
+      wrap()
+      await screen.findByRole('heading', { level: 1, name: 'api-oauth' })
+      expect(screen.queryByRole('button', { name: 'Excluir worktree' })).not.toBeInTheDocument()
+    })
+
+    it('desabilita Excluir com sessão viva e explica', async () => {
+      mockDelete({ ...free, sessions: detail.sessions }, [])
+      wrap()
+      expect(await screen.findByRole('button', { name: 'Excluir worktree' })).toBeDisabled()
+      expect(screen.getByText('Há uma sessão viva neste worktree.')).toBeInTheDocument()
+    })
+
+    it('desabilita Excluir com worktree travado e explica', async () => {
+      mockDelete({ ...free, worktree: { ...free.worktree, locked: true } }, [])
+      wrap()
+      expect(await screen.findByRole('button', { name: 'Excluir worktree' })).toBeDisabled()
+      expect(screen.getByText('Worktree travado.')).toBeInTheDocument()
+    })
+
+    it('confirma inline e envia DELETE com project, path e delete_branch', async () => {
+      const calls = mockDelete(free, [ok])
+      wrap()
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      expect(screen.getByText(question)).toBeInTheDocument()
+      expect(screen.getByText('Arquivos ignorados pelo git (como .env e node_modules) também serão apagados.')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Também apagar o branch feat/oauth' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
+      await waitFor(() => expect(calls).toHaveLength(1))
+      expect(calls[0]).toEqual({ url: '/api/worktrees', method: 'DELETE', ct: 'application/json', body: { project: 1, path: '/w/api-oauth', force: false, delete_branch: true } })
+    })
+
+    it('Cancelar fecha a confirmação sem enviar', async () => {
+      const calls = mockDelete(free, [])
+      wrap()
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+      expect(screen.queryByText(question)).not.toBeInTheDocument()
+      expect(calls).toHaveLength(0)
+    })
+
+    it('needs_confirm lista arquivos e reenvia com force', async () => {
+      const files = Array.from({ length: 12 }, (_, i) => ({ path: `f${i}.go`, code: ' M' }))
+      const calls = mockDelete(free, [
+        { status: 409, body: { error: 'confirme', needs_confirm: true, files, total_files: 14, processes: [{ pid: 77, name: 'node' }] } },
+        ok,
+      ])
+      wrap()
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
+      expect(await screen.findByText('O worktree tem alterações não commitadas ou processos rodando:')).toBeInTheDocument()
+      expect(screen.getByText('M f0.go')).toBeInTheDocument()
+      expect(screen.getByText('M f9.go')).toBeInTheDocument()
+      expect(screen.queryByText('M f10.go')).not.toBeInTheDocument()
+      expect(screen.getByText('+4')).toBeInTheDocument()
+      expect(screen.getByText('node (pid 77)')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Excluir mesmo assim' }))
+      await waitFor(() => expect(calls).toHaveLength(2))
+      expect(calls[1].body).toEqual({ project: 1, path: '/w/api-oauth', force: true, delete_branch: false })
+    })
+
+    it('erro do servidor aparece em alerta', async () => {
+      mockDelete(free, [{ status: 409, body: { error: 'há outro worktree dentro deste (/w/api-oauth/x); exclua-o antes' } }])
+      wrap()
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('há outro worktree dentro deste (/w/api-oauth/x); exclua-o antes')
+    })
+
+    it('após excluir volta para a lista, mantendo o projeto, e avisa do branch mantido', async () => {
+      mockDelete(free, [{ status: 200, body: { removed: true, branch_deleted: false, branch_kept_reason: 'não está integrado em main' } }])
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      render(
+        <QueryClientProvider client={qc}>
+          <MemoryRouter initialEntries={['/worktrees/detalhe?project=1&path=%2Fw%2Fapi-oauth&projeto=1']}>
+            <Routes>
+              <Route path="/worktrees/detalhe" element={<WorktreeDetailPage />} />
+              <Route path="/worktrees" element={<Worktrees />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Também apagar o branch feat/oauth' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
+      expect(await screen.findByRole('heading', { level: 1, name: 'Worktrees' })).toBeInTheDocument()
+      expect(screen.getByText('Branch feat/oauth mantido: não está integrado em main.')).toBeInTheDocument()
+    })
+
+    it('com commits à frente da base, a caixa do branch continua liberada e só avisa', async () => {
+      const calls = mockDelete({ ...free, git: { ...free.git!, ahead: 3 } }, [ok])
+      wrap()
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      const box = screen.getByRole('checkbox', { name: 'Também apagar o branch feat/oauth' })
+      expect(box).toBeEnabled()
+      expect(screen.getByText('(3 commits à frente de main; só será apagado se já estiver integrado na base do projeto)')).toBeInTheDocument()
+      fireEvent.click(box)
+      fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
+      await waitFor(() => expect(calls).toHaveLength(1))
+      expect(calls[0].body).toEqual({ project: 1, path: '/w/api-oauth', force: false, delete_branch: true })
+    })
+
+    it('sem commits à frente da base, não mostra o aviso do branch', async () => {
+      mockDelete(free, [])
+      wrap()
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      expect(screen.getByRole('checkbox', { name: 'Também apagar o branch feat/oauth' })).toBeEnabled()
+      expect(screen.queryByText(/só será apagado se já estiver integrado/)).not.toBeInTheDocument()
+    })
+
+    it('needs_confirm mostra commits soltos, rebase e sessões do repositório', async () => {
+      mockDelete(free, [{ status: 409, body: { error: 'confirme', needs_confirm: true, files: [], total_files: 0, processes: [],
+        commits: [{ hash: 'abcdef1234567890', subject: 'trabalho solto' }], total_commits: 3, rebase_in_progress: true, repo_sessions: 2 } }])
+      wrap()
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
+      expect(await screen.findByText('Commits que só existem neste worktree (3) e se perdem com ele:')).toBeInTheDocument()
+      expect(screen.getByText('abcdef1 trabalho solto')).toBeInTheDocument()
+      expect(screen.getByText('+2')).toBeInTheDocument()
+      expect(screen.getByText('Há um rebase em andamento neste worktree.')).toBeInTheDocument()
+      expect(screen.getByText(/2 sessões vivas em outro lugar deste repositório/)).toBeInTheDocument()
+      expect(screen.queryByText('confirme')).not.toBeInTheDocument()
+      expect(screen.queryByText('O worktree tem alterações não commitadas ou processos rodando:')).not.toBeInTheDocument()
+    })
+
+    it.each([
+      ['processes_unknown', 'não consegui verificar os processos agora; confirme para excluir mesmo assim'],
+      ['git_unknown', 'não consegui ler o estado do git agora; confirme para excluir mesmo assim'],
+    ])('needs_confirm com %s mostra o motivo do servidor', async (flag, msg) => {
+      mockDelete(free, [{ status: 409, body: { error: msg, needs_confirm: true, files: [], total_files: 0, processes: [], [flag]: true } }])
+      wrap()
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
+      expect(await screen.findByText(msg)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Excluir mesmo assim' })).toBeInTheDocument()
+    })
+
+    function Probe() {
+      const loc = useLocation()
+      const nav = useNavigate()
+      return (
+        <>
+          <span aria-label="estado">{JSON.stringify(loc.state)}</span>
+          <button type="button" onClick={() => nav(-1)}>Voltar</button>
+        </>
+      )
+    }
+    // Do detalhe (vindo de /outra) exclui com o branch mantido e espera a lista.
+    async function deleteAndLand(log: string[]) {
+      mockDelete(free, [{ status: 200, body: { removed: true, branch_deleted: false, branch_kept_reason: 'não está integrado em main' } }], log)
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      render(
+        <QueryClientProvider client={qc}>
+          <MemoryRouter initialEntries={['/outra', '/worktrees/detalhe?project=1&path=%2Fw%2Fapi-oauth&projeto=1']} initialIndex={1}>
+            <Probe />
+            <Routes>
+              <Route path="/outra" element={<h1>Outra página</h1>} />
+              <Route path="/worktrees/detalhe" element={<WorktreeDetailPage />} />
+              <Route path="/worktrees" element={<Worktrees />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Também apagar o branch feat/oauth' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
+      expect(await screen.findByRole('heading', { level: 1, name: 'Worktrees' })).toBeInTheDocument()
+    }
+
+    it('após excluir não busca de novo o detalhe apagado', async () => {
+      const log: string[] = []
+      await deleteAndLand(log)
+      await waitFor(() => expect(log).toContain('GET /api/worktrees'))
+      const afterDelete = log.slice(log.findIndex((l) => l.startsWith('DELETE')) + 1)
+      expect(afterDelete).not.toContain(`GET ${detailURL}`)
+    })
+
+    it('após excluir substitui o detalhe no histórico', async () => {
+      await deleteAndLand([])
+      fireEvent.click(screen.getByRole('button', { name: 'Voltar' }))
+      expect(await screen.findByRole('heading', { level: 1, name: 'Outra página' })).toBeInTheDocument()
+    })
+
+    it('o aviso do branch mantido sai do estado do histórico, mas continua na tela', async () => {
+      await deleteAndLand([])
+      await waitFor(() => expect(screen.getByLabelText('estado')).toHaveTextContent('null'))
+      expect(screen.getByText('Branch feat/oauth mantido: não está integrado em main.')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 1, name: 'Worktrees' })).toBeInTheDocument()
+    })
   })
 })

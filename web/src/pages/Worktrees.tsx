@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useWorktrees } from '../api/queries'
 import { useProjectFilter, useWithProject } from '../app/project'
 import type { ProjectWorktrees, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
@@ -121,6 +122,15 @@ function ProjectSection({ p }: { p: ProjectWorktrees }) {
 export function Worktrees() {
   const { data, isPending, isError } = useWorktrees()
   const { projectId } = useProjectFilter()
+  const location = useLocation()
+  const navigate = useNavigate()
+  // O aviso (branch mantido) vem no estado do histórico: guarda e limpa o
+  // estado, para recarregar a página não repetir o aviso.
+  const stateNotice = (location.state as { notice?: string } | null)?.notice
+  const [notice] = useState(stateNotice)
+  useEffect(() => {
+    if (stateNotice) navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null })
+  }, [stateNotice, location.pathname, location.search, navigate])
   if (isError) return <p role="alert" style={{ color: 'var(--err)' }}>Não foi possível carregar os worktrees.</p>
   if (isPending || !data) return <p className="placeholder">Carregando…</p>
   const shown = data.filter((p) => projectId === null || p.project.id === projectId)
@@ -132,6 +142,7 @@ export function Worktrees() {
           Onde cada agente está trabalhando. Clique num worktree para ver recursos, processos, git, sessões e atividade · atualizado ao vivo
         </p>
       </header>
+      {notice && <p role="status" style={{ margin: 0, fontSize: 13, color: 'var(--warn)' }}>{notice}</p>}
       {data.length === 0 && (
         <p style={{ margin: 0, color: 'var(--text-2)' }}>
           Nenhum projeto cadastrado. Cadastre com <span style={mono}>nobre project add</span> ou em <Link to="/config">Configuração</Link>.
