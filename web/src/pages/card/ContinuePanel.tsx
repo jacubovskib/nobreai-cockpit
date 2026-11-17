@@ -42,8 +42,10 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
   // é o texto que o agente recebe.
   const preview = useQuery({
     queryKey: ['continue-preview', cardKey, effectiveSlug],
-    enabled: previewOpen && prompts.isSuccess,
+    // Com a lista de prompts falhando, vale o padrão do servidor ('').
+    enabled: previewOpen && !prompts.isPending,
     retry: false,
+    staleTime: 0,
     queryFn: () => post<{ text: string }>(`/api/cards/${cardKey}/continue/preview`, { prompt_slug: effectiveSlug }),
   })
   const start = useMutation({
@@ -84,18 +86,19 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...muted }}>
         Prompt inicial
         <select style={input} value={effectiveSlug} onChange={(e) => setSlug(e.target.value)}>
+          {!list.some((p) => p.is_default_handoff) && <option value="">Texto padrão do Cockpit</option>}
           {list.map((p) => <option key={p.slug} value={p.slug}>{p.name}{p.is_default_handoff ? ' (padrão)' : ''}</option>)}
           <option value={NO_PROMPT}>Nenhum: só o pacote de retomada</option>
         </select>
       </label>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <button type="button" style={{ ...linkBtn }} aria-expanded={previewOpen} onClick={() => setPreviewOpen((v) => !v)}>
+        <button type="button" style={{ ...linkBtn }} aria-expanded={previewOpen} aria-controls={`cont-prev-${cardKey}`} onClick={() => setPreviewOpen((v) => !v)}>
           {previewOpen ? 'Ocultar o que será enviado' : 'Ver o que será enviado'}
         </button>
         {previewOpen && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div id={`cont-prev-${cardKey}`} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {preview.error ? <ErrorLine error={preview.error} /> : (
-              <div aria-label="Texto que será enviado" style={{ whiteSpace: 'pre-wrap', fontSize: 13, padding: '10px 12px', borderRadius: 8, background: '#14171D', border: '1px solid #2A2F3A', maxHeight: 260, overflow: 'auto' }}>
+              <div role="status" aria-live="polite" aria-label="Texto que será enviado" style={{ whiteSpace: 'pre-wrap', fontSize: 13, padding: '10px 12px', borderRadius: 8, background: '#14171D', border: '1px solid #2A2F3A', maxHeight: 260, overflow: 'auto' }}>
                 {preview.data ? preview.data.text : <span style={muted}>Montando…</span>}
               </div>
             )}

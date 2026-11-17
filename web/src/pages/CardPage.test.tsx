@@ -168,6 +168,17 @@ describe('ContinuePanel', () => {
     expect(screen.queryByText('Você está continuando o card NAC-42.')).not.toBeInTheDocument()
   })
 
+  it('sem prompt de handoff padrão, a seleção mostra o texto padrão do Cockpit (o que é enviado)', async () => {
+    const fn = mock({ ...base, '/api/prompts': [{ slug: 'a', name: 'Revisar', is_default_handoff: false }], 'POST /api/cards/NAC-42/continue': { ok: true } })
+    wrap(<ContinuePanel cardKey="NAC-42" enabled />)
+    await screen.findByRole('option', { name: 'Revisar' })
+    expect(screen.getByRole('combobox', { name: 'Prompt inicial' })).toHaveValue('')
+    expect((screen.getByRole('option', { name: 'Texto padrão do Cockpit' }) as HTMLOptionElement).selected).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Iniciar Claude Code neste card' }))
+    await waitFor(() => expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')).toHaveLength(1))
+    expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue')[0].prompt_slug).toBe('')
+  })
+
   it('envia continue com prompt padrão e mostra o 409 em linha', async () => {
     const fn = mock({ ...base, 'POST /api/cards/NAC-42/continue': { status: 409, body: { error: 'NAC-42 já tem uma sessão viva.' } } })
     wrap(<ContinuePanel cardKey="NAC-42" enabled />)

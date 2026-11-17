@@ -211,7 +211,7 @@ describe('Prompts', () => {
   })
 
   it('prévia com {{card.pacote}} avisa que o Continuar não envia o pacote no texto', async () => {
-    mock({ ...routes, '/api/prompts': [{ ...prompt, body: 'Oi {{card.id}}\n{{card.pacote}}' }], 'POST /api/prompts/render': { text: 'Oi NAC-1\n# pacote' } })
+    mock({ ...routes, '/api/prompts': [{ ...prompt, body: 'Oi {{card.id}}\n{{ card.pacote }}' }], 'POST /api/prompts/render': { text: 'Oi NAC-1\n# pacote' } })
     wrap(<Prompts />)
     fireEvent.click(await screen.findByRole('button', { name: /Retomar/ }))
     expect(await screen.findByText(/No Continuar, \{\{card\.pacote\}\} fica vazio/)).toBeInTheDocument()

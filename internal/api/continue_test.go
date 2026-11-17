@@ -495,3 +495,50 @@ func TestContinuePreviewMatchesWhatIsSent(t *testing.T) {
 		t.Fatalf("card inexistente: %d", rec.Code)
 	}
 }
+
+// O argumento que o agente recebe é igual, byte a byte, ao texto da prévia;
+// e um prompt grande demais é recusado já na prévia, como no envio.
+func TestContinuePreviewEqualsAgentArgument(t *testing.T) {
+	got := filepath.Join(t.TempDir(), "arg")
+	claudeBin := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(claudeBin, []byte("#!/bin/sh\nprintf '%s' \"$2\" > "+got+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mgr := pty.NewManager(pty.Options{})
+	t.Cleanup(mgr.Close)
+	a, _ := continueAPIWith(t, &fakeGit{branch: "main", clean: true}, mgr, claudeBin)
+	p, _ := a.st.CreateProject("real", t.TempDir())
+	c, err := a.st.CreateCard(domain.Card{Title: "Título com 'aspas' e $VAR", ProjectID: p.ID, WhereStopped: "linha 1\nlinha 2  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "x", Slug: "x", Body: "{{card.id}} {{card.titulo}}\n{{card.onde_parei}}\n{{card.pacote}}\n"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/cards/"+c.Key+"/continue/preview", map[string]any{"prompt_slug": "x"}, 0)
+	preview := decode[map[string]string](t, rec)["text"]
+	if rec.Code != http.StatusOK || preview == "" {
+		t.Fatalf("prévia: %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/cards/"+c.Key+"/continue", map[string]any{"mode": "background", "prompt_slug": "x"}, 0)
+	id, _ := decode[map[string]any](t, rec)["terminal_id"].(string)
+	tm, ok := mgr.Get(id)
+	if !ok {
+		t.Fatalf("continue: %d %s", rec.Code, rec.Body)
+	}
+	select {
+	case <-tm.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("agente não terminou")
+	}
+	if b, _ := os.ReadFile(got); string(b) != preview {
+		t.Fatalf("enviado %q\nprévia   %q", b, preview)
+	}
+
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "g", Slug: "g", Body: strings.Repeat("x", 130<<10)}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/cards/"+c.Key+"/continue/preview", map[string]any{"prompt_slug": "g"}, 0); rec.Code != 422 {
+		t.Fatalf("prévia de prompt grande: %d", rec.Code)
+	}
+}

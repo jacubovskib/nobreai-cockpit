@@ -63,6 +63,11 @@ func (s *server) continuePrompt(w http.ResponseWriter, c domain.Card, slug strin
 	if text = strings.TrimRight(text, " \t\r\n"); text != "" {
 		initial = text
 	}
+	// As mesmas recusas do envio: a prévia não mostra o que não iria.
+	if strings.ContainsRune(initial, 0) || len(initial) >= maxArgBytes {
+		writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
+		return "", "", false
+	}
 	return initial, pr.Slug, true
 }
 

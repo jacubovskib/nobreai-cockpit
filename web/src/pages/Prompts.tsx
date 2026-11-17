@@ -96,7 +96,7 @@ function Preview({ body, cardKey }: { body: string; cardKey: string }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ whiteSpace: 'pre-wrap' }}>{q.data.text}</div>
-      {debounced.includes('{{card.pacote}}') && (
+      {/\{\{\s*card\.pacote\s*\}\}/.test(debounced) && (
         <p style={{ ...muted, margin: 0, fontSize: 12 }}>
           Esta prévia é o texto do nobre prompt use, com o pacote. No Continuar, {'{{card.pacote}}'} fica vazio: o pacote chega no contexto da sessão nova (a prévia exata fica no painel Continuar do card).
         </p>
