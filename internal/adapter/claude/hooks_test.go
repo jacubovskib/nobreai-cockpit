@@ -1214,3 +1214,37 @@ func TestSessionStartSkipsPausedCardWithLiveSession(t *testing.T) {
 		t.Fatalf("contexto:\n%s", ctx)
 	}
 }
+
+// Troca de branch feita fora do agente (no terminal do usuário, na IDE) é
+// vista no próximo prompt ou fim de turno, mesmo sem nenhum Bash do agente.
+func TestPromptAndStopFollowExternalBranchSwitch(t *testing.T) {
+	for _, fixture := range []string{"user_prompt_submit", "stop"} {
+		t.Run(fixture, func(t *testing.T) {
+			e := newEnv(t)
+			c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+			if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+				t.Fatal(err)
+			}
+			e.a.deps.Git = fakeGit{branch: "feat/fora"}
+			e.call(t, fixture)
+			if s, _ := e.st.GetSession(sessID); s.Branch != "feat/fora" || s.Cwd != "/w/api" {
+				t.Fatalf("sessão = %+v", s)
+			}
+			if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/fora" {
+				t.Fatalf("branch do card = %q", got.Branch)
+			}
+		})
+	}
+}
+
+// Um subagente no mesmo cwd não move nada: só o principal relê o branch.
+func TestSubagentPromptDoesNotFollowBranch(t *testing.T) {
+	e := newEnv(t)
+	e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	before, _ := e.st.GetSession(sessID)
+	e.a.deps.Git = fakeGit{branch: "feat/sub"}
+	e.call(t, "stop", with("agent_id", "sub-1"))
+	if s, _ := e.st.GetSession(sessID); s.Branch != before.Branch {
+		t.Fatalf("subagente mudou o branch: %q", s.Branch)
+	}
+}

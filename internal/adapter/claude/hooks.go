@@ -146,6 +146,11 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 	if p.Cwd != "" && p.Cwd != sess.Cwd && mainOnlyEvents[event] && p.AgentID == "" {
 		return a.moveSession(sess, p.Cwd)
 	}
+	// Mesmo diretório: o branch pode ter sido trocado fora do agente (no
+	// terminal do usuário, na IDE), sem nenhum Bash que o PostToolUse visse.
+	if mainOnlyEvents[event] && p.AgentID == "" {
+		return a.followBranch(sess), nil
+	}
 	return sess, nil
 }
 
@@ -308,24 +313,26 @@ func (a *Adapter) postToolUse(sess domain.Session, p payload, now time.Time) err
 }
 
 // followBranch percebe troca de branch no mesmo diretório (git switch num
-// comando Bash): grava o branch atual na sessão e o card acompanha. Custa um
-// git rev-parse por comando; falhas só vão para o log.
-func (a *Adapter) followBranch(sess domain.Session) {
+// comando Bash, ou fora do agente): grava o branch atual na sessão, o card
+// acompanha, e devolve a sessão atualizada. Custa um git rev-parse por
+// comando, prompt e fim de turno; falhas só vão para o log.
+func (a *Adapter) followBranch(sess domain.Session) domain.Session {
 	if a.deps.Git == nil || sess.Cwd == "" {
-		return
+		return sess
 	}
 	b := a.deps.Git.Branch(sess.Cwd)
 	if b == "" || b == sess.Branch {
-		return
+		return sess
 	}
 	l := a.locate(sess.Cwd)
 	if err := a.st.UpdateSessionLocation(sess.ID, l); err != nil {
 		log.Printf("hook claude: branch da sessão %s: %v", sess.ID, err)
-		return
+		return sess
 	}
 	a.publish("sessions")
 	sess.Branch, sess.GitHead, sess.Worktree, sess.WorktreeLinked = l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
 	a.syncCardBranch(sess)
+	return sess
 }
 
 // projectRelative devolve o caminho relativo à raiz do projeto da sessão
