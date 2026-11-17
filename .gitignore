@@ -4,3 +4,7 @@ web/dist/*
 /nobre
 /nobred
 *.tsbuildinfo
+
+# Notas locais de agentes
+.claude/
+napkin.md
