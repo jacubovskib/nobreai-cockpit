@@ -130,6 +130,8 @@ type TotalsFilter struct {
 	CardID   *int64
 	// ProjectID restringe ao uso do projeto: o do card do uso, senão o da sessão.
 	ProjectID *int64
+	// ProjectIDs vale junto com ProjectID, como IN (...).
+	ProjectIDs []int64
 }
 
 type Total struct {
@@ -173,6 +175,12 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 	if f.ProjectID != nil {
 		q += ` AND COALESCE(c.project_id, s.project_id) = ?`
 		args = append(args, *f.ProjectID)
+	}
+	if len(f.ProjectIDs) > 0 {
+		q += ` AND COALESCE(c.project_id, s.project_id) IN (` + placeholders(len(f.ProjectIDs)) + `)`
+		for _, id := range f.ProjectIDs {
+			args = append(args, id)
+		}
 	}
 	if !f.From.IsZero() {
 		q += ` AND julianday(u.at) >= julianday(?)`

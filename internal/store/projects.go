@@ -10,7 +10,7 @@ import (
 
 // CreateProject cadastra um projeto (captura ligada por padrão).
 func (s *Store) CreateProject(name, path string) (domain.Project, error) {
-	res, err := s.DB.Exec(`INSERT INTO projects(name, path) VALUES (?, ?)`, name, path)
+	res, err := s.DB.Exec(`INSERT INTO projects(name, path) VALUES (?, NULLIF(?, ''))`, name, path)
 	if err != nil {
 		return domain.Project{}, fmt.Errorf("criar projeto: %w", err)
 	}
@@ -39,13 +39,43 @@ func (s *Store) ListProjects() ([]domain.Project, error) {
 	return out, rows.Err()
 }
 
-// UpdateProject atualiza nome, caminho e captura.
+// UpdateProject atualiza nome, caminho e captura. Num projeto com
+// sub-projetos, a captura nova vale também para eles. O nome continua único na
+// família e a pasta de um sub-projeto de monorepo continua dentro da do pai.
 func (s *Store) UpdateProject(p domain.Project) error {
-	res, err := s.DB.Exec(`UPDATE projects SET name=?, path=?, capture=?, base_branch=? WHERE id=?`, p.Name, p.Path, p.Capture, p.BaseBranch, p.ID)
+	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
-	return requireAffected(res)
+	defer tx.Rollback()
+	cur, err := getProjectTx(tx, p.ID)
+	if err != nil {
+		return err
+	}
+	if cur.ParentID != nil {
+		parent, err := getProjectTx(tx, *cur.ParentID)
+		if err != nil {
+			return err
+		}
+		if err := checkInside(parent, p.Path); err != nil {
+			return err
+		}
+	}
+	if !strings.EqualFold(cur.Name, p.Name) {
+		if err := checkNameFree(tx, cur, p.Name); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE projects SET name=?, path=NULLIF(?, ''), capture=?, base_branch=? WHERE id=?`,
+		p.Name, p.Path, p.Capture, p.BaseBranch, p.ID); err != nil {
+		return err
+	}
+	if cur.Capture != p.Capture {
+		if _, err := tx.Exec(`UPDATE projects SET capture=? WHERE parent_id=?`, p.Capture, p.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // SetProjectBase grava o branch base do projeto ("" volta a detectar pelo git).
@@ -57,8 +87,15 @@ func (s *Store) SetProjectBase(id int64, base string) error {
 	return requireAffected(res)
 }
 
-// DeleteProject remove o projeto.
+// DeleteProject remove o projeto; recusa um projeto que ainda tem sub-projetos.
 func (s *Store) DeleteProject(id int64) error {
+	var n int
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM projects WHERE parent_id=?`, id).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return familyErr("o projeto tem sub-projetos; desligue-os antes de excluir")
+	}
 	res, err := s.DB.Exec(`DELETE FROM projects WHERE id=?`, id)
 	if err != nil {
 		return err
