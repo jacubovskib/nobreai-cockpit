@@ -108,12 +108,13 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "tamanho de terminal inválido")
 		return
 	}
+	path := s.sessionPATH(0)
 	bin := ad.Binary()
 	if bin == "" {
 		writeError(w, http.StatusConflict, msgNoAgentBin)
 		return
 	}
-	env := s.terminalEnv()
+	env := s.terminalEnv(path)
 	for k, v := range in.Env {
 		env = setEnv(env, k, v)
 	}
@@ -156,7 +157,7 @@ func (s *server) startTerminal(spec pty.StartSpec) (*pty.Terminal, error) {
 // terminalEnv é o ambiente do daemon com o PATH de sessão, TERM do xterm e
 // cor de 24 bits. NOBRE_RESUME/NOBRE_AGENT_PID herdados do daemon ligariam o
 // agente ao card ou processo errado: só valem os da requisição.
-func (s *server) terminalEnv() []string {
+func (s *server) terminalEnv(path string) []string {
 	env := make([]string, 0, 64)
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
@@ -166,7 +167,7 @@ func (s *server) terminalEnv() []string {
 		}
 		env = append(env, kv)
 	}
-	return append(env, "PATH="+s.sessionPATH(), "TERM=xterm-256color", "COLORTERM=truecolor")
+	return append(env, "PATH="+path, "TERM=xterm-256color", "COLORTERM=truecolor")
 }
 
 // setEnv define k=v substituindo ocorrências anteriores (o getenv da libc

@@ -34,6 +34,9 @@ type Deps struct {
 	// SessionPATH é o PATH exportado no script do terminal aberto pelo
 	// "Continuar" (vazio = o PATH do daemon).
 	SessionPATH string
+	// UserPATH, se definido, vale no lugar de SessionPATH: o PATH do shell de
+	// login do usuário (launch.UserPATH). maxAge=0 consulta agora.
+	UserPATH PathSource
 	// Resources mede CPU, memória e disco dos worktrees (nil = sem medição;
 	// /api/worktrees devolve resources null).
 	Resources ResourceReader
@@ -51,6 +54,11 @@ type server struct {
 }
 
 // New monta o roteador da API.
+// PathSource devolve o PATH do usuário, aceitando um resultado de até maxAge.
+type PathSource interface {
+	Get(maxAge time.Duration) string
+}
+
 func New(st *store.Store, deps Deps) http.Handler {
 	if deps.Now == nil {
 		deps.Now = time.Now

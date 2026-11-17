@@ -33,7 +33,7 @@ check: ## confere as dependências (go, node, pnpm, systemd, claude, PATH)
 	if systemctl --user show-environment >/dev/null 2>&1; then echo "✓ systemd do usuário disponível"; \
 	else echo "! systemctl --user não responde (o nobred roda como serviço de usuário do systemd)"; ok=0; fi; \
 	if command -v claude >/dev/null 2>&1; then echo "✓ claude     $$(command -v claude)"; \
-	else echo "! claude não está no PATH deste terminal (rode o setup num terminal onde o claude funciona)"; ok=0; fi; \
+	else echo "! claude não está no PATH deste terminal (instale o Claude Code ou ponha o diretório dele no PATH)"; ok=0; fi; \
 	case ":$$PATH:" in *":$(BINDIR):"*) echo "✓ $(BINDIR) está no PATH";; \
 	  *) echo "! $(BINDIR) não está no PATH (adicione ao seu ~/.zshrc ou ~/.bashrc)"; ok=0;; esac; \
 	if [ $$ok = 1 ]; then echo; echo "Tudo certo. Próximo passo: make setup"; \

@@ -103,13 +103,15 @@ func run(dbPath string, seedDemo bool) error {
 	git := gitinfo.Exec{}
 	claudeAdapter := claude.New(st, adapter.Deps{Now: time.Now, Git: git, Publish: hub.Publish})
 	paths := claude.DefaultPaths()
-	claudeAdapter.SetPaths(paths)
-	// O terminal do "Continuar" recebe o PATH do daemon com o diretório do
-	// nobre: a sessão nova chama nobre (skill) e o próprio claude.
-	sessionPATH := os.Getenv("PATH")
+	// PATH das sessões e da busca do claude: o do shell de login do usuário,
+	// consultado na hora (a unidade do systemd só tem o mínimo, de reserva),
+	// sempre com o diretório do nobre (a sessão nova chama nobre pela skill).
+	userPATH := &launch.UserPATH{Shell: launch.LoginShell(), Fallback: os.Getenv("PATH")}
 	if paths.NobreBin != "" {
-		sessionPATH = launch.PathWithDir(sessionPATH, filepath.Dir(paths.NobreBin))
+		userPATH.NobreDir = filepath.Dir(paths.NobreBin)
 	}
+	paths.SearchPATH = func() string { return userPATH.Get(time.Minute) }
+	claudeAdapter.SetPaths(paths)
 	// As leituras de transcript em segundo plano terminam antes de st.Close
 	// (defers rodam em ordem inversa).
 	defer claudeAdapter.Wait()
@@ -122,15 +124,15 @@ func run(dbPath string, seedDemo bool) error {
 	terms := pty.NewManager(pty.Options{})
 	defer terms.Close()
 	handler := api.New(st, api.Deps{
-		Now:         time.Now,
-		ProcRoot:    "/proc",
-		Git:         git,
-		Launcher:    launch.Exec{},
-		Hub:         hub,
-		Adapters:    map[string]adapter.Adapter{"claude": claudeAdapter},
-		SessionPATH: sessionPATH,
-		Resources:   monitor,
-		Terminals:   terms,
+		Now:       time.Now,
+		ProcRoot:  "/proc",
+		Git:       git,
+		Launcher:  launch.Exec{},
+		Hub:       hub,
+		Adapters:  map[string]adapter.Adapter{"claude": claudeAdapter},
+		UserPATH:  userPATH,
+		Resources: monitor,
+		Terminals: terms,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.

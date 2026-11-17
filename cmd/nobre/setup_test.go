@@ -92,7 +92,7 @@ func TestSetupInstallsEverythingAndRegistersProject(t *testing.T) {
 	// nobred) sobrevivem a restart/stop do serviço.
 	if !strings.Contains(string(unit), "ExecStart=/opt/x/bin/nobred\n") || !strings.Contains(string(unit), "Restart=on-failure") ||
 		!strings.Contains(string(unit), "\nKillMode=process\n") ||
-		!strings.Contains(string(unit), "\nEnvironment=\"PATH=/opt/x/bin:/usr/bin:/home/u/.local/bin\"\n") {
+		!strings.Contains(string(unit), "\nEnvironment=\"PATH=/opt/x/bin:/usr/local/bin:/usr/bin:/bin\"\n") {
 		t.Fatalf("unit: %s", unit)
 	}
 	if len(e.ran) != 3 ||
@@ -427,5 +427,22 @@ func TestSetupGivesUpWaitingForDaemon(t *testing.T) {
 	r := e.run(t, "127.0.0.1:1", "s\n", e.repo)
 	if r.code == 0 || !strings.Contains(r.stdout, "nobre project add") || time.Since(start) > 3*time.Second {
 		t.Fatalf("%+v (%v)", r, time.Since(start))
+	}
+}
+
+// A unidade guarda só o mínimo de reserva: o diretório do nobre, o do claude
+// (onde o setup o achou) e os do sistema. venv, nvm e mise ficam de fora: o
+// daemon pergunta o PATH ao shell de login na hora de usar.
+func TestUnitPATHKeepsOnlyNobreClaudeAndSystem(t *testing.T) {
+	claudeDir := t.TempDir()
+	os.WriteFile(filepath.Join(claudeDir, "claude"), []byte("#!/bin/sh\n"), 0o755)
+	term := "/home/u/.venv/bin:/home/u/.local/share/mise/installs/node/24/bin:" + claudeDir + ":/usr/bin"
+	got := unitPATH(term, "/opt/x/bin")
+	want := "/opt/x/bin:" + claudeDir + ":/usr/local/bin:/usr/bin:/bin"
+	if got != want {
+		t.Fatalf("unitPATH = %q, quer %q", got, want)
+	}
+	if got := unitPATH("/usr/bin", "/usr/bin"); got != "/usr/bin:/usr/local/bin:/bin" {
+		t.Fatalf("sem repetir: %q", got)
 	}
 }

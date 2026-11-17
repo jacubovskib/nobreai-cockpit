@@ -23,9 +23,10 @@ Antes de começar: use um repositório Git descartável ou de baixo risco, com a
    `nobred.service`).
 4. No mesmo terminal, aplique: `~/.local/bin/nobre setup`. Ele grava um backup
    `settings.json.bak-<data>` ao lado do `settings.json`, instala os hooks e a
-   skill, e liga o `nobred` como serviço de usuário. A unidade grava o PATH
-   deste terminal (mais o diretório do `nobre`): é com ele que o daemon acha o
-   `claude` e abre o terminal do "Continuar".
+   skill, e liga o `nobred` como serviço de usuário. A unidade guarda só um
+   PATH de reserva (diretórios do `nobre`, do `claude` e do sistema); o daemon
+   pergunta o PATH ao shell de login na hora de achar o `claude` e de abrir o
+   terminal do "Continuar".
    Observação: o setup reescreve o `settings.json` com as chaves em ordem
    alfabética e indentação de 2 espaços. Comparado ao backup, a diferença de
    formatação é só cosmética; o conteúdo seu é preservado.

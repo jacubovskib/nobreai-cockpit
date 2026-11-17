@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/launch"
 )
 
 // Paths são os caminhos que o adaptador lê e escreve. Tudo é injetável: os
@@ -19,6 +20,9 @@ type Paths struct {
 	SkillsDir    string // ~/.claude/skills
 	NobreBin     string // caminho absoluto do binário nobre, gravado nos hooks
 	ClaudeBin    string // CLI do Claude Code; vazio = procurar no PATH
+	// SearchPATH devolve o PATH onde procurar o CLI (o do shell de login do
+	// usuário, launch.UserPATH); nil = o PATH do processo.
+	SearchPATH func() string
 	// Version devolve a versão do CLI; nil = não informar.
 	Version func(bin string) string
 }
@@ -71,8 +75,8 @@ func cliVersion(bin string) string {
 func (a *Adapter) SetPaths(p Paths) { a.paths = p }
 
 // cliPath acha o CLI do Claude Code: Paths.ClaudeBin, se definido, vale
-// sozinho; senão o PATH do processo e, por fim, ~/.local/bin/claude (onde o
-// instalador do Claude Code o põe, fora do PATH do systemd).
+// sozinho; senão o PATH do usuário (SearchPATH, ou o do processo) e, por fim,
+// ~/.local/bin/claude (onde o instalador do Claude Code o põe).
 func (a *Adapter) cliPath() string {
 	if a.paths.ClaudeBin != "" {
 		if _, err := os.Stat(a.paths.ClaudeBin); err == nil {
@@ -81,7 +85,17 @@ func (a *Adapter) cliPath() string {
 		return ""
 	}
 	home, _ := os.UserHomeDir()
-	return resolveCommand("claude", exec.LookPath, home)
+	lookPath := exec.LookPath
+	if a.paths.SearchPATH != nil {
+		path := a.paths.SearchPATH()
+		lookPath = func(name string) (string, error) {
+			if p := launch.LookPathIn(name, path); p != "" {
+				return p, nil
+			}
+			return "", exec.ErrNotFound
+		}
+	}
+	return resolveCommand("claude", lookPath, home)
 }
 
 // resolveCommand devolve o caminho absoluto de name no PATH (lookPath) ou em

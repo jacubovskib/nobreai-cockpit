@@ -59,7 +59,6 @@ Siga `docs/piloto-checklist.md` (instala `nobre`/`nobred` em `~/.local/bin` e ro
 
 ### Pendências pequenas
 - A prévia de prompt mostra o pacote; o "Continuar" o envia vazio.
-- A unit guarda o PATH do terminal onde o setup rodou (inclusive venv/nvm).
 - Outros menores estão no ledger local.
 
 ## Depois do piloto (2026-11-07)
