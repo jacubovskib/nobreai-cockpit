@@ -23,6 +23,11 @@ agente que estoure o limite de custo. Tudo roda na sua máquina: um daemon que
 escuta só em `127.0.0.1`, um banco SQLite e uma interface web embutida no
 binário.
 
+![Board do NobreAI Cockpit com os cards deste próprio repositório](docs/screenshots/board.png)
+
+<sub>O board com os cards do próprio desenvolvimento do Cockpit, que é gerenciado
+por ele mesmo.</sub>
+
 > Estado atual: piloto funcional com o **Claude Code**, em **Linux com
 > systemd**. Os adaptadores para Codex e Kiro, o modo tmux, os limites mensais
 > e o servidor MCP ainda não existem.
@@ -120,6 +125,13 @@ Abra com `nobre ui` (ou em `http://127.0.0.1:7420`):
 | Prompts | Prompts salvos com variáveis |
 | Analytics | Tokens e custo por sessão, card, agente e dia |
 | Configuração | Agentes detectados, projetos, preços, moeda, limites e regras de handoff |
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/card.png" alt="Card NAC-15 como documento de handoff: onde parei, objetivo, decisões, arquivos essenciais e sessões"><br><sub><b>Card como documento de handoff:</b> onde parou, decisões com o porquê, arquivos essenciais, sessões e custo.</sub></td>
+    <td width="50%"><img src="docs/screenshots/analytics.png" alt="Analytics com custo por dia, por agente e cards mais caros"><br><sub><b>Analytics:</b> tokens e custo por dia, agente, card e sessão.</sub><br><br><img src="docs/screenshots/cards.png" alt="Lista de cards com projeto, coluna, último agente e custo"><br><sub><b>Cards:</b> todos os cards com coluna, último agente e custo.</sub></td>
+  </tr>
+</table>
 
 ### Design
 
