@@ -50,7 +50,7 @@ install: build ## instala nobre e nobred em BINDIR (não reinicia o daemon)
 	install -d "$(BINDIR)"
 	install -m755 nobre nobred "$(BINDIR)/"
 	@echo "Instalado em $(BINDIR)."
-	@if systemctl --user is-active --quiet nobred 2>/dev/null; then \
+	@if [ "$(filter update,$(MAKECMDGOALS))" = "" ] && systemctl --user is-active --quiet nobred 2>/dev/null; then \
 	  echo "O nobred está rodando com a versão anterior. Rode 'make restart' para trocar."; fi
 
 setup: install ## instala e configura: hooks, skill e status line do Claude Code e o serviço nobred
