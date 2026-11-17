@@ -23,7 +23,7 @@ func (s *Store) CreateProject(name, path string) (domain.Project, error) {
 
 // ListProjects lista os projetos por id.
 func (s *Store) ListProjects() ([]domain.Project, error) {
-	rows, err := s.DB.Query(`SELECT id, name, path, capture, base_branch FROM projects ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id FROM projects ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func (s *Store) ListProjects() ([]domain.Project, error) {
 	var out []domain.Project
 	for rows.Next() {
 		var p domain.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -76,6 +76,9 @@ func (s *Store) ProjectForPath(cwd string) (*domain.Project, error) {
 	var best *domain.Project
 	for i := range ps {
 		p := ps[i]
+		if p.Path == "" { // grupo: não tem pasta
+			continue
+		}
 		root := strings.TrimRight(p.Path, "/")
 		if cwd != root && !strings.HasPrefix(cwd, root+"/") {
 			continue

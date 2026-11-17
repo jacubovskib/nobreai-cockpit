@@ -13,6 +13,8 @@ type Project struct {
 	Capture bool   `json:"capture"`
 	// BaseBranch é o branch base do projeto ("" = detectar pelo git).
 	BaseBranch string `json:"base_branch"`
+	// ParentID é o projeto-pai (nil = projeto de topo). Path "" = grupo, sem pasta.
+	ParentID *int64 `json:"parent_id"`
 }
 
 type Card struct {
