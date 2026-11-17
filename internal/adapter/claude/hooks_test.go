@@ -1230,9 +1230,6 @@ func TestPromptAndStopFollowExternalBranchSwitch(t *testing.T) {
 			if s, _ := e.st.GetSession(sessID); s.Branch != "feat/fora" || s.Cwd != "/w/api" {
 				t.Fatalf("sessão = %+v", s)
 			}
-			if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/fora" {
-				t.Fatalf("branch do card = %q", got.Branch)
-			}
 		})
 	}
 }
@@ -1246,5 +1243,44 @@ func TestSubagentPromptDoesNotFollowBranch(t *testing.T) {
 	e.call(t, "stop", with("agent_id", "sub-1"))
 	if s, _ := e.st.GetSession(sessID); s.Branch != before.Branch {
 		t.Fatalf("subagente mudou o branch: %q", s.Branch)
+	}
+}
+
+// Troca vista no prompt/fim de turno pode ser do usuário (revisando outro
+// branch na IDE): a sessão acompanha, o card não.
+func TestExternalBranchSwitchUpdatesSessionNotCard(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado, Branch: "feat/a"})
+	if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := e.st.GetCardByID(c.ID)
+	e.a.deps.Git = fakeGit{branch: "feat/revisao"}
+	e.call(t, "stop")
+	if s, _ := e.st.GetSession(sessID); s.Branch != "feat/revisao" {
+		t.Fatalf("sessão = %q", s.Branch)
+	}
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != before.Branch {
+		t.Fatalf("o card não deveria seguir troca de fora: %q", got.Branch)
+	}
+	// Um Bash do agente no branch novo: aí o card acompanha.
+	e.call(t, "post_tool_use_bash")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/revisao" {
+		t.Fatalf("depois do Bash do agente: %q", got.Branch)
+	}
+}
+
+// claude --resume depois de trocar de branch no terminal: o SessionStart da
+// sessão reaberta já usa o branch atual (cards pausados do branch certo).
+func TestResumedSessionStartRereadsBranch(t *testing.T) {
+	e := newEnv(t)
+	e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	if err := e.st.EndSession(sessID, "fim", t0); err != nil {
+		t.Fatal(err)
+	}
+	e.a.deps.Git = fakeGit{branch: "feat/b"}
+	e.call(t, "session_start", withPID(9999))
+	if s, _ := e.st.GetSession(sessID); s.Branch != "feat/b" {
+		t.Fatalf("sessão reaberta = %q", s.Branch)
 	}
 }

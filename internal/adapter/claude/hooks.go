@@ -135,7 +135,19 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 			return sess, err
 		}
 		a.publish("sessions", "cards")
-		return a.st.GetSession(id)
+		sess, err := a.st.GetSession(id)
+		if err != nil {
+			return sess, err
+		}
+		// claude --resume depois de um git switch no terminal: o SessionStart
+		// (cards pausados do branch) já precisa do branch atual.
+		if p.AgentID == "" {
+			if p.Cwd != "" && p.Cwd != sess.Cwd {
+				return a.moveSession(sess, p.Cwd)
+			}
+			return a.followBranch(sess, false), nil
+		}
+		return sess, nil
 	}
 	if err := a.st.TouchSession(id, now); err != nil {
 		return sess, err
@@ -148,8 +160,10 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 	}
 	// Mesmo diretório: o branch pode ter sido trocado fora do agente (no
 	// terminal do usuário, na IDE), sem nenhum Bash que o PostToolUse visse.
+	// Só a sessão acompanha: o usuário pode estar só revisando outro branch, e
+	// o card segue o que o próprio agente faz (Bash, nobre branch/start/resume).
 	if mainOnlyEvents[event] && p.AgentID == "" {
-		return a.followBranch(sess), nil
+		return a.followBranch(sess, false), nil
 	}
 	return sess, nil
 }
@@ -307,31 +321,49 @@ func (a *Adapter) postToolUse(sess domain.Session, p payload, now time.Time) err
 			data["exit_code"] = code
 		}
 		a.event(sess.ID, domain.EvCommand, data, now)
-		a.followBranch(sess)
+		a.followBranch(sess, true)
 	}
 	return nil
 }
 
 // followBranch percebe troca de branch no mesmo diretório (git switch num
-// comando Bash, ou fora do agente): grava o branch atual na sessão, o card
-// acompanha, e devolve a sessão atualizada. Custa um git rev-parse por
-// comando, prompt e fim de turno; falhas só vão para o log.
-func (a *Adapter) followBranch(sess domain.Session) domain.Session {
+// comando Bash, ou fora do agente): grava o branch atual na sessão e devolve
+// a sessão atualizada; com syncCard, o card acompanha. Custa um git
+// rev-parse por comando, prompt e fim de turno; falhas só vão para o log.
+func (a *Adapter) followBranch(sess domain.Session, syncCard bool) domain.Session {
 	if a.deps.Git == nil || sess.Cwd == "" {
 		return sess
 	}
 	b := a.deps.Git.Branch(sess.Cwd)
-	if b == "" || b == sess.Branch {
+	if b == "" {
+		return sess
+	}
+	if b == sess.Branch {
+		// A sessão já acompanhou (uma troca vista no prompt ou no fim de
+		// turno, que não move o card): agora que o próprio agente trabalha
+		// nesse branch, o card vem junto.
+		if syncCard && sess.CardID != nil {
+			if c, err := a.st.GetCardByID(*sess.CardID); err == nil && c.Branch != b {
+				a.syncCardBranch(sess)
+			}
+		}
 		return sess
 	}
 	l := a.locate(sess.Cwd)
+	// Vale uma leitura só: se a do locate discordar (falhou ou o branch mudou
+	// no meio), nada é gravado; o próximo evento tenta de novo.
+	if l.Branch != b {
+		return sess
+	}
 	if err := a.st.UpdateSessionLocation(sess.ID, l); err != nil {
 		log.Printf("hook claude: branch da sessão %s: %v", sess.ID, err)
 		return sess
 	}
 	a.publish("sessions")
 	sess.Branch, sess.GitHead, sess.Worktree, sess.WorktreeLinked = l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
-	a.syncCardBranch(sess)
+	if syncCard {
+		a.syncCardBranch(sess)
+	}
 	return sess
 }
 
