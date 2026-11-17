@@ -64,6 +64,7 @@ update: install ## reinstala os binários e reinicia o daemon (fecha os terminai
 
 restart: ## reinicia o nobred (os terminais abertos na plataforma são encerrados)
 	systemctl --user restart nobred
+	@for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS -o /dev/null "http://$(NOBRE_ADDR)/api/health" 2>/dev/null && break; sleep 0.5; done
 	@$(MAKE) --no-print-directory status
 
 status: ## mostra o serviço e se a API responde
