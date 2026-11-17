@@ -98,8 +98,8 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
         {previewOpen && (
           <div id={`cont-prev-${cardKey}`} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {preview.error ? <ErrorLine error={preview.error} /> : (
-              <div role="status" aria-live="polite" aria-label="Texto que será enviado" style={{ whiteSpace: 'pre-wrap', fontSize: 13, padding: '10px 12px', borderRadius: 8, background: '#14171D', border: '1px solid #2A2F3A', maxHeight: 260, overflow: 'auto' }}>
-                {preview.data ? preview.data.text : <span style={muted}>Montando…</span>}
+              <div aria-label="Texto que será enviado" style={{ whiteSpace: 'pre-wrap', fontSize: 13, padding: '10px 12px', borderRadius: 8, background: '#14171D', border: '1px solid #2A2F3A', maxHeight: 260, overflow: 'auto' }}>
+                {preview.data ? preview.data.text : <span role="status" style={muted}>Montando…</span>}
               </div>
             )}
             <span style={{ ...muted, fontSize: 12 }}>O pacote de retomada não vai neste texto: ele chega no contexto da sessão nova (veja em “Ver o pacote de retomada”).</span>

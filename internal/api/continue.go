@@ -183,10 +183,6 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if strings.ContainsRune(initial, 0) {
-		writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
-		return
-	}
 	// Branch do card aberto num worktree ligado: o agente abre lá, sem
 	// checkout no principal (o git recusaria o branch já aberto).
 	dir, inWorktree := s.cardWorktreeDir(c, p.Path)

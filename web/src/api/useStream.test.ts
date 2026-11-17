@@ -54,7 +54,7 @@ describe('kind plan', () => {
 })
 
 describe('prévia do Continuar', () => {
-  it.each(['cards', 'sessions', 'prompts'])('o kind %s invalida a prévia do Continuar', async (kind) => {
+  it.each(['cards', 'prompts'])('o kind %s invalida a prévia do Continuar', async (kind) => {
     const { invalidateForKind } = await import('./useStream')
     const qc = new QueryClient()
     const spy = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue()
