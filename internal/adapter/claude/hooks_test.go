@@ -1284,3 +1284,32 @@ func TestResumedSessionStartRereadsBranch(t *testing.T) {
 		t.Fatalf("sessão reaberta = %q", s.Branch)
 	}
 }
+
+// nobre branch dado de propósito (card num worktree, sessão no checkout
+// principal noutro branch) não é desfeito pelos Bash seguintes.
+func TestBashDoesNotUndoDeliberateCardBranch(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	e.a.deps.Git = fakeGit{branch: "fix/outro"}
+	e.call(t, "post_tool_use_bash") // sessão e card vão para fix/outro
+	if _, err := e.st.SetCardBranch(c.ID, "feat/x"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		e.call(t, "post_tool_use_bash")
+	}
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/x" {
+		t.Fatalf("o Bash desfez o nobre branch: %q", got.Branch)
+	}
+	// Uma troca de fora depois disso também não leva o card (ele não estava
+	// no branch da sessão).
+	e.a.deps.Git = fakeGit{branch: "feat/revisao"}
+	e.call(t, "stop")
+	e.call(t, "post_tool_use_bash")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/x" {
+		t.Fatalf("troca de fora levou o card: %q", got.Branch)
+	}
+}

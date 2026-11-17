@@ -141,7 +141,7 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 		}
 		// claude --resume depois de um git switch no terminal: o SessionStart
 		// (cards pausados do branch) já precisa do branch atual.
-		if p.AgentID == "" {
+		if p.AgentID == "" && mainOnlyEvents[event] {
 			if p.Cwd != "" && p.Cwd != sess.Cwd {
 				return a.moveSession(sess, p.Cwd)
 			}
@@ -342,8 +342,11 @@ func (a *Adapter) followBranch(sess domain.Session, syncCard bool) domain.Sessio
 		// A sessão já acompanhou (uma troca vista no prompt ou no fim de
 		// turno, que não move o card): agora que o próprio agente trabalha
 		// nesse branch, o card vem junto.
-		if syncCard && sess.CardID != nil {
-			if c, err := a.st.GetCardByID(*sess.CardID); err == nil && c.Branch != b {
+		// Só quando o card estava no branch de antes da troca (seguia a
+		// sessão); um nobre branch dado de propósito fica.
+		if prev, ok := a.outsideSwitch.Load(sess.ID); ok && syncCard && sess.CardID != nil {
+			a.outsideSwitch.Delete(sess.ID)
+			if c, err := a.st.GetCardByID(*sess.CardID); err == nil && c.Branch == prev.(string) {
 				a.syncCardBranch(sess)
 			}
 		}
@@ -360,9 +363,14 @@ func (a *Adapter) followBranch(sess domain.Session, syncCard bool) domain.Sessio
 		return sess
 	}
 	a.publish("sessions")
+	prev := sess.Branch
 	sess.Branch, sess.GitHead, sess.Worktree, sess.WorktreeLinked = l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
 	if syncCard {
+		a.outsideSwitch.Delete(sess.ID)
 		a.syncCardBranch(sess)
+	} else {
+		// Guarda o branch de antes da primeira troca de fora (A→B→C: vale A).
+		a.outsideSwitch.LoadOrStore(sess.ID, prev)
 	}
 	return sess
 }
