@@ -20,6 +20,7 @@ const (
 	msgSubmodules        = "o worktree tem submódulos; confirme para excluir mesmo assim"
 	msgNotAWorktree      = "o git não reconhece mais esta pasta como worktree; confira e apague à mão se for o caso"
 	msgNeedsConfirm      = "o worktree tem alterações não commitadas ou processos rodando; confirme para excluir mesmo assim"
+	msgLiveSession       = "há uma sessão viva neste worktree; encerre-a antes de excluir"
 )
 
 type removeRequest struct {
@@ -53,10 +54,17 @@ type needsConfirm struct {
 	ProcessesUnknown bool `json:"processes_unknown"`
 	// GitUnknown: o status do git não pôde ser lido (ou não é confiável).
 	GitUnknown bool `json:"git_unknown"`
+	// Commits que só o HEAD do worktree alcança (até 20) e o total deles.
+	Commits      []gitinfo.Commit `json:"commits"`
+	TotalCommits int              `json:"total_commits"`
+	Rebase       bool             `json:"rebase_in_progress"`
+	// RepoSessions conta sessões vivas em outro lugar do mesmo repositório:
+	// um subagente delas pode estar neste worktree sem aparecer no registro.
+	RepoSessions int `json:"repo_sessions"`
 }
 
 func newNeedsConfirm(msg string) needsConfirm {
-	return needsConfirm{Error: msg, NeedsConfirm: true, Files: []gitinfo.FileChange{}, Processes: []removeProc{}}
+	return needsConfirm{Error: msg, NeedsConfirm: true, Files: []gitinfo.FileChange{}, Processes: []removeProc{}, Commits: []gitinfo.Commit{}}
 }
 
 // under diz se path é dir ou está dentro dele.
@@ -153,19 +161,14 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Sessão viva de qualquer época e de qualquer projeto: estar viva é uma
-	// propriedade do worktree.
-	all, err := s.st.LiveSessions()
+	repoSessions, inThis, err := s.liveSessionsFor(pw.Worktrees, idx, v.Path)
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
 	}
-	for _, x := range all {
-		// Também vale o cwd: um clone independente dentro do alvo grava outra raiz.
-		if x.Live() && (worktreeOf(pw.Worktrees, x) == idx || under(x.Cwd, v.Path)) {
-			writeError(w, http.StatusConflict, "há uma sessão viva neste worktree; encerre-a antes de excluir")
-			return
-		}
+	if inThis {
+		writeError(w, http.StatusConflict, msgLiveSession)
+		return
 	}
 
 	// Prunable só é "pasta sumiu" se a pasta sumiu mesmo. Com ela lá (sem
@@ -196,7 +199,15 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 				nc.Processes = append(nc.Processes, removeProc{PID: pr.PID, Name: pr.Comm})
 			}
 		}
-		known := nc.TotalFiles > 0 || len(nc.Processes) > 0
+		if orph, ok := s.deps.Git.(gitinfo.OrphanReader); ok && !strayFolder {
+			if c, total, rebase, err := orph.OrphanCommits(v.Path); err == nil {
+				nc.Commits, nc.TotalCommits, nc.Rebase = c, total, rebase
+			} else {
+				nc.GitUnknown = true
+			}
+		}
+		nc.RepoSessions = repoSessions
+		known := nc.TotalFiles > 0 || len(nc.Processes) > 0 || nc.TotalCommits > 0 || nc.Rebase || nc.RepoSessions > 0
 		if known || nc.GitUnknown || nc.ProcessesUnknown {
 			switch {
 			case known:
@@ -208,6 +219,16 @@ func (s *server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, nc)
 			return
 		}
+	}
+
+	// De novo logo antes de apagar: o status acima pode ter demorado, e uma
+	// sessão que começou nesse meio-tempo não pode perder a pasta.
+	if _, inThis, err := s.liveSessionsFor(pw.Worktrees, idx, v.Path); err != nil {
+		writeStoreError(w, err, "")
+		return
+	} else if inThis {
+		writeError(w, http.StatusConflict, msgLiveSession)
+		return
 	}
 
 	if missing {
@@ -276,4 +297,28 @@ func deleteIntegratedBranch(remover gitinfo.WorktreeRemover, br gitinfo.BranchRe
 		return false, "não consegui apagar o branch: " + err.Error()
 	}
 	return true, ""
+}
+
+// liveSessionsFor olha as sessões vivas de qualquer época e de qualquer
+// projeto (estar viva é uma propriedade do worktree). inThis: alguma está no
+// worktree idx (ou com o cwd dentro dele: um clone independente dentro do
+// alvo grava outra raiz). others conta as que estão em outro worktree do
+// mesmo repositório.
+func (s *server) liveSessionsFor(wts []WorktreeView, idx int, path string) (others int, inThis bool, err error) {
+	all, err := s.st.LiveSessions()
+	if err != nil {
+		return 0, false, err
+	}
+	for _, x := range all {
+		if !x.Live() {
+			continue
+		}
+		switch i := worktreeOf(wts, x); {
+		case i == idx || under(x.Cwd, path):
+			return 0, true, nil
+		case i >= 0:
+			others++
+		}
+	}
+	return others, false, nil
 }

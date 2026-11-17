@@ -146,3 +146,13 @@ it('após excluir volta para a lista')
 - [ ] **Step 3: Implementar.**
 - [ ] **Step 4: Rodar e ver passar** — `pnpm -C web test --run && (cd web && npx tsc --noEmit) && make build`.
 - [ ] **Step 5: Commit** — `feat: botão para excluir worktree que não está em uso`
+
+## Correções da re-revisão (2026-11-17)
+
+- **Commits soltos:** commits que só o HEAD do worktree alcança (HEAD destacado, rebase parado no meio) somem com a pasta, junto com o reflog dela. `OrphanCommits` (`rev-list HEAD --not --branches --tags --remotes`) os lista no `needs_confirm` (até 20, mais o total), e um rebase em andamento também pede confirmação.
+- **Sessão viva no mesmo repositório:** o registro da sessão só guarda onde o agente principal está. Um subagente com worktree próprio, ou um agente que entrou no worktree no meio do turno, não aparece. Por isso, sessão viva em outro worktree do mesmo repositório pede confirmação (`repo_sessions`). Sessão registrada no próprio worktree continua sendo recusada.
+- **Checagem de sessão repetida logo antes de apagar**, para não perder uma sessão que começou enquanto o status rodava.
+- **Branch apagado limpa `[branch "x"]` da config**, como o `git branch -d` faria.
+- **Ficam como limitação conhecida:**
+  - um repositório aninhado dentro de pasta ignorada pelo git é apagado junto (o aviso sobre arquivos ignorados cobre o caso);
+  - o `prune` de reserva para git antigo limpa todos os registros com pasta sumida.

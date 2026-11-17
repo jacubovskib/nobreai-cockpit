@@ -248,6 +248,21 @@ describe('WorktreeDetailPage', () => {
       expect(screen.queryByText(/só será apagado se já estiver integrado/)).not.toBeInTheDocument()
     })
 
+    it('needs_confirm mostra commits soltos, rebase e sessões do repositório', async () => {
+      mockDelete(free, [{ status: 409, body: { error: 'confirme', needs_confirm: true, files: [], total_files: 0, processes: [],
+        commits: [{ hash: 'abcdef1234567890', subject: 'trabalho solto' }], total_commits: 3, rebase_in_progress: true, repo_sessions: 2 } }])
+      wrap()
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluir worktree' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Sim, excluir' }))
+      expect(await screen.findByText('Commits que só existem neste worktree (3) e se perdem com ele:')).toBeInTheDocument()
+      expect(screen.getByText('abcdef1 trabalho solto')).toBeInTheDocument()
+      expect(screen.getByText('+2')).toBeInTheDocument()
+      expect(screen.getByText('Há um rebase em andamento neste worktree.')).toBeInTheDocument()
+      expect(screen.getByText(/2 sessões vivas em outro lugar deste repositório/)).toBeInTheDocument()
+      expect(screen.queryByText('confirme')).not.toBeInTheDocument()
+      expect(screen.queryByText('O worktree tem alterações não commitadas ou processos rodando:')).not.toBeInTheDocument()
+    })
+
     it.each([
       ['processes_unknown', 'não consegui verificar os processos agora; confirme para excluir mesmo assim'],
       ['git_unknown', 'não consegui ler o estado do git agora; confirme para excluir mesmo assim'],

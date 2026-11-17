@@ -96,5 +96,11 @@ func (Exec) DeleteBranchAt(repo, branch, tip string) error {
 	if err != nil && strings.Contains(out, "but expected") {
 		return errors.New("o branch mudou depois da verificação")
 	}
+	if err == nil {
+		// O update-ref não limpa [branch "x"] como o branch -d: sem isso, um
+		// branch novo com o mesmo nome herdaria o rastreamento antigo. A
+		// seção pode não existir; o erro é ignorado.
+		gitWrite(repo, "config", "--remove-section", "branch."+branch)
+	}
 	return err
 }

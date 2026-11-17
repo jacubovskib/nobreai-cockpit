@@ -66,6 +66,11 @@ export function RemoveWorktree({ d }: { d: WorktreeDetail }) {
   const files = confirm?.files ?? []
   const procs = confirm?.processes ?? []
   const extra = confirm ? Math.max(confirm.total_files, files.length) - Math.min(files.length, MAX_FILES) : 0
+  const commits = confirm?.commits ?? []
+  const totalCommits = Math.max(confirm?.total_commits ?? 0, commits.length)
+  const rebase = !!confirm?.rebase_in_progress
+  const repoSessions = confirm?.repo_sessions ?? 0
+  const anyDetail = files.length > 0 || procs.length > 0 || totalCommits > 0 || rebase || repoSessions > 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
@@ -90,9 +95,10 @@ export function RemoveWorktree({ d }: { d: WorktreeDetail }) {
           )}
           {confirm && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
-              <span style={{ color: 'var(--warn)' }}>
-                {files.length === 0 && procs.length === 0 ? confirm.error : 'O worktree tem alterações não commitadas ou processos rodando:'}
-              </span>
+              {!anyDetail && <span style={{ color: 'var(--warn)' }}>{confirm.error}</span>}
+              {(files.length > 0 || procs.length > 0) && (
+                <span style={{ color: 'var(--warn)' }}>O worktree tem alterações não commitadas ou processos rodando:</span>
+              )}
               {files.length > 0 && (
                 <ul aria-label="Arquivos com alterações" style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {files.slice(0, MAX_FILES).map((f) => <li key={f.path} style={{ ...mono, fontSize: 12.5, overflowWrap: 'anywhere' }}>{f.code.trim() || f.code} {f.path}</li>)}
@@ -103,6 +109,21 @@ export function RemoveWorktree({ d }: { d: WorktreeDetail }) {
                 <ul aria-label="Processos rodando" style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {procs.map((p) => <li key={p.pid} style={{ ...mono, fontSize: 12.5 }}>{p.name} (pid {p.pid})</li>)}
                 </ul>
+              )}
+              {totalCommits > 0 && (
+                <>
+                  <span style={{ color: 'var(--warn)' }}>Commits que só existem neste worktree ({totalCommits}) e se perdem com ele:</span>
+                  <ul aria-label="Commits que se perdem" style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {commits.slice(0, MAX_FILES).map((c) => <li key={c.hash} style={{ ...mono, fontSize: 12.5, overflowWrap: 'anywhere' }}>{c.hash.slice(0, 7)} {c.subject}</li>)}
+                    {totalCommits > Math.min(commits.length, MAX_FILES) && <li style={muted}>+{totalCommits - Math.min(commits.length, MAX_FILES)}</li>}
+                  </ul>
+                </>
+              )}
+              {rebase && <span style={{ color: 'var(--warn)' }}>Há um rebase em andamento neste worktree.</span>}
+              {repoSessions > 0 && (
+                <span style={{ color: 'var(--warn)' }}>
+                  {plural(repoSessions, 'sessão viva', 'sessões vivas')} em outro lugar deste repositório: um subagente pode estar usando este worktree.
+                </span>
               )}
             </div>
           )}

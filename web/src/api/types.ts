@@ -341,4 +341,10 @@ export interface RemoveNeedsConfirm {
   processes: { pid: number; name: string }[]
   processes_unknown?: boolean
   git_unknown?: boolean
+  // Commits que só o HEAD do worktree alcança (até 20) e o total.
+  commits?: { hash: string; subject: string }[]
+  total_commits?: number
+  rebase_in_progress?: boolean
+  // Sessões vivas em outro worktree do mesmo repositório.
+  repo_sessions?: number
 }
