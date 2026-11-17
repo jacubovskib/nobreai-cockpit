@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type setupEnv struct {
@@ -31,6 +33,7 @@ func newSetupEnv(t *testing.T) *setupEnv {
 		UnitDir:      filepath.Join(root, "systemd", "user"),
 		NobreBin:     "/opt/x/bin/nobre",
 		NobredBin:    "/opt/x/bin/nobred",
+		DaemonWait:   3 * time.Second,
 		Run: func(name string, args ...string) error {
 			e.ran = append(e.ran, append([]string{name}, args...))
 			return e.runErr
@@ -378,4 +381,51 @@ func jsonEqual(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+
+// O enable --now volta antes de o nobred ouvir: o cadastro do projeto espera
+// o daemon subir em vez de falhar com "connection refused".
+func TestSetupWaitsForDaemonBeforeRegisteringProject(t *testing.T) {
+	e := newSetupEnv(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close() // a porta fica livre: o daemon "ainda não subiu"
+	var posted bool
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/projects":
+			w.Write([]byte(`[]`))
+		case r.Method == "POST" && r.URL.Path == "/api/projects":
+			posted = true
+			w.WriteHeader(201)
+			w.Write([]byte(`{"id":1,"name":"repo","path":"/r"}`))
+		}
+	})}
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Errorf("listen: %v", err)
+			return
+		}
+		srv.Serve(l)
+	}()
+	t.Cleanup(func() { srv.Close() })
+	r := e.run(t, addr, "s\n", e.repo)
+	if r.code != 0 || !posted || !strings.Contains(r.stdout, "Projeto repo cadastrado") {
+		t.Fatalf("%+v posted=%v", r, posted)
+	}
+}
+
+func TestSetupGivesUpWaitingForDaemon(t *testing.T) {
+	e := newSetupEnv(t)
+	e.d.DaemonWait = 300 * time.Millisecond
+	start := time.Now()
+	r := e.run(t, "127.0.0.1:1", "s\n", e.repo)
+	if r.code == 0 || !strings.Contains(r.stdout, "nobre project add") || time.Since(start) > 3*time.Second {
+		t.Fatalf("%+v (%v)", r, time.Since(start))
+	}
 }

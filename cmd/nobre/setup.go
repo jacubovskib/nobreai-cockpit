@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
@@ -19,11 +20,12 @@ import (
 // setupDeps são os caminhos e comandos do `nobre setup`. Os testes injetam
 // diretórios temporários e um executor falso; nada aqui toca o sistema real.
 type setupDeps struct {
-	SettingsPath string // ~/.claude/settings.json
-	SkillsDir    string // ~/.claude/skills
-	UnitDir      string // ~/.config/systemd/user
-	NobreBin     string // caminho absoluto do nobre (vai nos hooks)
-	NobredBin    string // caminho absoluto do nobred; vazio = não encontrado
+	SettingsPath string        // ~/.claude/settings.json
+	SkillsDir    string        // ~/.claude/skills
+	UnitDir      string        // ~/.config/systemd/user
+	NobreBin     string        // caminho absoluto do nobre (vai nos hooks)
+	NobredBin    string        // caminho absoluto do nobred; vazio = não encontrado
+	DaemonWait   time.Duration // quanto esperar o nobred responder antes de cadastrar o projeto
 	Run          func(name string, args ...string) error
 }
 
@@ -44,6 +46,7 @@ func defaultSetupDeps() (*setupDeps, error) {
 		SkillsDir:    filepath.Join(home, ".claude", "skills"),
 		UnitDir:      filepath.Join(home, ".config", "systemd", "user"),
 		NobreBin:     exe,
+		DaemonWait:   10 * time.Second,
 		Run: func(name string, args ...string) error {
 			out, err := exec.Command(name, args...).CombinedOutput()
 			if err != nil {
@@ -179,7 +182,7 @@ func (c *cli) setup(args []string) error {
 	c.setupService(d, *dry, l)
 
 	// 4. Projeto atual.
-	c.setupProject(*dry, l)
+	c.setupProject(d, *dry, l)
 
 	if l.warn {
 		return errors.New("Setup terminou com pendências (itens com !).")
@@ -352,7 +355,7 @@ func gitRoot(dir string) (string, bool) {
 	}
 }
 
-func (c *cli) setupProject(dry bool, l *checklist) {
+func (c *cli) setupProject(d *setupDeps, dry bool, l *checklist) {
 	wd, err := c.cwd()
 	if err != nil {
 		return
@@ -373,12 +376,20 @@ func (c *cli) setupProject(dry bool, l *checklist) {
 		return
 	}
 	cl := c.client()
-	if ps, err := cl.Projects(ctx()); err == nil {
-		for _, p := range ps {
-			if p.Path == root {
-				l.ok("Projeto %s já cadastrado", p.Name)
-				return
-			}
+	// O enable --now volta antes de o nobred ouvir: espera ele responder.
+	ps, err := cl.Projects(ctx())
+	for deadline := time.Now().Add(d.DaemonWait); err != nil && time.Now().Before(deadline); {
+		time.Sleep(200 * time.Millisecond)
+		ps, err = cl.Projects(ctx())
+	}
+	if err != nil {
+		l.bad("Cadastro do projeto: %v (com o daemon no ar, rode nobre project add)", err)
+		return
+	}
+	for _, p := range ps {
+		if p.Path == root {
+			l.ok("Projeto %s já cadastrado", p.Name)
+			return
 		}
 	}
 	p, err := cl.AddProject(ctx(), "", root)
