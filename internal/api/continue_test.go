@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -437,5 +438,60 @@ func TestContinueUsesFreshUserPATH(t *testing.T) {
 	}
 	if len(up.ages) == 0 || up.ages[0] != 0 {
 		t.Fatalf("consultas = %v (a primeira precisa ser fresca)", up.ages)
+	}
+}
+
+// A prévia do Continuar devolve exatamente o texto que o Continuar envia:
+// sem o pacote (que chega pelo SessionStart) e sem abrir nada.
+func TestContinuePreviewMatchesWhatIsSent(t *testing.T) {
+	g := &fakeGit{branch: "feat/x", clean: true}
+	a, l := continueAPI(t, g)
+	c, _ := a.st.GetCard("NAC-1")
+	if _, err := a.st.AddDecision(domain.Decision{CardID: c.ID, What: "Usar PKCE", Why: "app público"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.st.CreatePrompt(domain.Prompt{Name: "pac", Slug: "pac", Body: "Card {{card.id}}.[{{card.pacote}}]\n\n"}); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"pac":    "Card NAC-1.[]",
+		"nenhum": "Continue o card NAC-1.",
+	}
+	for slug, want := range cases {
+		rec := a.do(t, "POST", "/api/cards/NAC-1/continue/preview", map[string]any{"prompt_slug": slug}, 0)
+		var got struct {
+			Text string `json:"text"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &got)
+		if rec.Code != http.StatusOK || got.Text != want {
+			t.Fatalf("%s: %d %q, quer %q", slug, rec.Code, got.Text, want)
+		}
+	}
+	// O padrão ("") usa o prompt de handoff padrão, como o Continuar.
+	rec := a.do(t, "POST", "/api/cards/NAC-1/continue/preview", map[string]any{"prompt_slug": ""}, 0)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "continuando o card NAC-1") || strings.Contains(rec.Body.String(), "Usar PKCE") {
+		t.Fatalf("padrão: %d %s", rec.Code, rec.Body)
+	}
+	if len(g.checkouts) != 0 || len(l.calls) != 0 {
+		t.Fatalf("a prévia não pode abrir nada: checkouts %v, lançamentos %d", g.checkouts, len(l.calls))
+	}
+	p, _ := a.st.GetPrompt("pac")
+	if p.Uses != 0 {
+		t.Fatalf("a prévia não conta uso: %d", p.Uses)
+	}
+	// O enviado é o mesmo texto.
+	if rec := a.do(t, "POST", "/api/cards/NAC-1/continue", map[string]any{"prompt_slug": "pac"}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("continue: %d %s", rec.Code, rec.Body)
+	}
+	if last := l.calls[0][len(l.calls[0])-1]; !strings.Contains(last, "Card NAC-1.[]") {
+		t.Fatalf("enviado: %q", last)
+	}
+	for slug, code := range map[string]int{"nao-existe": 404} {
+		if rec := a.do(t, "POST", "/api/cards/NAC-1/continue/preview", map[string]any{"prompt_slug": slug}, 0); rec.Code != code {
+			t.Fatalf("%s: %d", slug, rec.Code)
+		}
+	}
+	if rec := a.do(t, "POST", "/api/cards/NAC-99/continue/preview", map[string]any{"prompt_slug": ""}, 0); rec.Code != 404 {
+		t.Fatalf("card inexistente: %d", rec.Code)
 	}
 }

@@ -210,6 +210,13 @@ describe('Prompts', () => {
     expect(screen.getByText(/nobre prompt use retomar --card NAC-1/)).toBeInTheDocument()
   })
 
+  it('prévia com {{card.pacote}} avisa que o Continuar não envia o pacote no texto', async () => {
+    mock({ ...routes, '/api/prompts': [{ ...prompt, body: 'Oi {{card.id}}\n{{card.pacote}}' }], 'POST /api/prompts/render': { text: 'Oi NAC-1\n# pacote' } })
+    wrap(<Prompts />)
+    fireEvent.click(await screen.findByRole('button', { name: /Retomar/ }))
+    expect(await screen.findByText(/No Continuar, \{\{card\.pacote\}\} fica vazio/)).toBeInTheDocument()
+  })
+
   it('"Salvar como prompt" abre o editor com o texto capturado e cria', async () => {
     const fn = mock(routes)
     wrap(<Prompts />)

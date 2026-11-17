@@ -29,6 +29,64 @@ const (
 	msgNoAgentBin   = "não encontrei o comando claude; rode nobre setup de um terminal onde `claude` funciona"
 )
 
+// continuePrompt monta o texto inicial que o Continuar envia ao agente: o
+// prompt escolhido (slug), o padrão de handoff ("") ou nenhum ("nenhum").
+// É o mesmo para o envio e para a prévia. Em erro já respondeu.
+func (s *server) continuePrompt(w http.ResponseWriter, c domain.Card, slug string) (initial, usedSlug string, ok bool) {
+	initial = "Continue o card " + c.Key + "."
+	if slug == slugNone {
+		return initial, "", true
+	}
+	var pr domain.Prompt
+	var err error
+	if slug == "" {
+		pr, err = s.st.DefaultHandoffPrompt()
+		if errors.Is(err, store.ErrNotFound) {
+			pr, err = domain.Prompt{}, nil
+		}
+	} else {
+		pr, err = s.st.GetPrompt(slug)
+	}
+	if err != nil {
+		writeStoreError(w, err, msgPromptNotFound)
+		return "", "", false
+	}
+	if pr.Slug == "" {
+		return initial, "", true
+	}
+	// O pacote de retomada chega pelo SessionStart (NOBRE_RESUME); repeti-lo
+	// no prompt só duplicaria o contexto: {{card.pacote}} fica vazio.
+	text, ok := s.renderCardBody(w, pr.Body, c.Key, false)
+	if !ok {
+		return "", "", false
+	}
+	if text = strings.TrimRight(text, " \t\r\n"); text != "" {
+		initial = text
+	}
+	return initial, pr.Slug, true
+}
+
+// continuePreview: POST /api/cards/{key}/continue/preview {prompt_slug}
+// devolve o texto que o Continuar enviaria, sem abrir nada nem contar uso.
+func (s *server) continuePreview(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		PromptSlug string `json:"prompt_slug"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	c, err := s.st.GetCard(r.PathValue("key"))
+	if err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	text, slug, ok := s.continuePrompt(w, c, in.PromptSlug)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"text": text, "prompt_slug": slug})
+}
+
 // continueCard: POST /api/cards/{key}/continue {agent, mode, prompt_slug, force}
 // abre o agente no diretório do projeto, no branch do card, numa nova janela
 // do terminal. Se o branch do card está aberto num worktree ligado, abre lá.
@@ -116,34 +174,9 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	initial := "Continue o card " + c.Key + "."
-	usedSlug := ""
-	if in.PromptSlug != slugNone {
-		var pr domain.Prompt
-		if in.PromptSlug == "" {
-			pr, err = s.st.DefaultHandoffPrompt()
-			if errors.Is(err, store.ErrNotFound) {
-				pr, err = domain.Prompt{}, nil
-			}
-		} else {
-			pr, err = s.st.GetPrompt(in.PromptSlug)
-		}
-		if err != nil {
-			writeStoreError(w, err, msgPromptNotFound)
-			return
-		}
-		if pr.Slug != "" {
-			// O pacote de retomada chega pelo SessionStart (NOBRE_RESUME);
-			// repeti-lo no prompt só duplicaria o contexto.
-			text, ok := s.renderCardBody(w, pr.Body, c.Key, false)
-			if !ok {
-				return
-			}
-			if text != "" {
-				initial = text
-			}
-			usedSlug = pr.Slug
-		}
+	initial, usedSlug, ok := s.continuePrompt(w, c, in.PromptSlug)
+	if !ok {
+		return
 	}
 	if strings.ContainsRune(initial, 0) {
 		writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)

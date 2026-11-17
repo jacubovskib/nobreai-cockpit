@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, post } from '../../api/client'
 import { usePrompts, useSettings } from '../../api/queries'
 import { agentInfo } from '../../ui/agents'
@@ -14,6 +14,7 @@ const PLATFORM_MODE = 'platform'
 const BACKGROUND_MODE = 'background'
 
 const NO_PROMPT = 'nenhum'
+const linkBtn: React.CSSProperties = { alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, color: 'var(--text)', textDecoration: 'underline', font: 'inherit', fontSize: 13, cursor: 'pointer', minHeight: 24 }
 
 // Nomes dos modos como aparecem na Configuração.
 const LAUNCH_MODE_NAMES: Record<string, string> = {
@@ -36,6 +37,15 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
   const list = prompts.data ?? []
   const effectiveSlug = slug ?? list.find((p) => p.is_default_handoff)?.slug ?? ''
   const name = agentInfo(agent).name
+  const [previewOpen, setPreviewOpen] = useState(false)
+  // A mesma montagem do envio (POST .../continue/preview): o que aparece aqui
+  // é o texto que o agente recebe.
+  const preview = useQuery({
+    queryKey: ['continue-preview', cardKey, effectiveSlug],
+    enabled: previewOpen && prompts.isSuccess,
+    retry: false,
+    queryFn: () => post<{ text: string }>(`/api/cards/${cardKey}/continue/preview`, { prompt_slug: effectiveSlug }),
+  })
   const start = useMutation({
     mutationFn: (force: boolean) =>
       post<{ terminal_id?: string }>(`/api/cards/${cardKey}/continue`, { agent, mode, prompt_slug: effectiveSlug, ...(force ? { force: true } : {}) }),
@@ -78,6 +88,21 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
           <option value={NO_PROMPT}>Nenhum: só o pacote de retomada</option>
         </select>
       </label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <button type="button" style={{ ...linkBtn }} aria-expanded={previewOpen} onClick={() => setPreviewOpen((v) => !v)}>
+          {previewOpen ? 'Ocultar o que será enviado' : 'Ver o que será enviado'}
+        </button>
+        {previewOpen && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {preview.error ? <ErrorLine error={preview.error} /> : (
+              <div aria-label="Texto que será enviado" style={{ whiteSpace: 'pre-wrap', fontSize: 13, padding: '10px 12px', borderRadius: 8, background: '#14171D', border: '1px solid #2A2F3A', maxHeight: 260, overflow: 'auto' }}>
+                {preview.data ? preview.data.text : <span style={muted}>Montando…</span>}
+              </div>
+            )}
+            <span style={{ ...muted, fontSize: 12 }}>O pacote de retomada não vai neste texto: ele chega no contexto da sessão nova (veja em “Ver o pacote de retomada”).</span>
+          </div>
+        )}
+      </div>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...muted }}>
         Abrir em
         <select style={input} value={mode} onChange={(e) => setMode(e.target.value)}>

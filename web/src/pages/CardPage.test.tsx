@@ -153,6 +153,21 @@ describe('CardPage', () => {
 })
 
 describe('ContinuePanel', () => {
+  it('mostra a prévia do texto que o Continuar envia, para o prompt escolhido', async () => {
+    const fn = mock({ ...base, 'POST /api/cards/NAC-42/continue/preview': { text: 'Você está continuando o card NAC-42.', prompt_slug: 'retomar' } })
+    wrap(<ContinuePanel cardKey="NAC-42" enabled />)
+    await screen.findByRole('option', { name: 'Retomar card (padrão)' })
+    expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue/preview')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Ver o que será enviado' }))
+    expect(await screen.findByText('Você está continuando o card NAC-42.')).toBeInTheDocument()
+    expect(screen.getByText(/O pacote de retomada não vai neste texto/)).toBeInTheDocument()
+    expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue/preview')).toEqual([{ prompt_slug: 'retomar' }])
+    fireEvent.change(screen.getByRole('combobox', { name: 'Prompt inicial' }), { target: { value: 'nenhum' } })
+    await waitFor(() => expect(bodies(fn, 'POST', '/api/cards/NAC-42/continue/preview')).toContainEqual({ prompt_slug: 'nenhum' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ocultar o que será enviado' }))
+    expect(screen.queryByText('Você está continuando o card NAC-42.')).not.toBeInTheDocument()
+  })
+
   it('envia continue com prompt padrão e mostra o 409 em linha', async () => {
     const fn = mock({ ...base, 'POST /api/cards/NAC-42/continue': { status: 409, body: { error: 'NAC-42 já tem uma sessão viva.' } } })
     wrap(<ContinuePanel cardKey="NAC-42" enabled />)
