@@ -246,7 +246,8 @@ func (c *cli) removeAll(d *setupDeps, dry bool, l *checklist) error {
 	c.removeService(d, dry, l)
 
 	if dir := filepath.Dir(d.NobreBin); !dry {
-		fmt.Fprintf(c.out, "\nOs binários em %s e o banco em %s ficam. Para apagar os binários: make uninstall (ou rm %s/nobre %s/nobred).\n", dir, filepath.Dir(store.DefaultPath()), dir, dir)
+		fmt.Fprintf(c.out, "\nOs binários em %s e o banco em %s não foram tocados (o make uninstall também apaga os binários).\n"+
+			"Reinicie as sessões do Claude Code abertas: elas guardam os hooks de quando começaram.\n", dir, filepath.Dir(store.DefaultPath()))
 	}
 	if l.warn {
 		return errors.New("Remoção terminou com pendências (itens com !).")

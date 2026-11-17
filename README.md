@@ -265,7 +265,7 @@ abre em "Somente assistir" até você clicar em **Interagir**.
 Em **Configuração → Limites de custo**, defina para cada agente um limite diário e um
 limite por card, em US$. O aviso aparece no percentual configurado (padrão
 80%). Em 100%, com a ação "bloquear", o hook nega as
-ferramentas do agente (uma chamada simples do `nobre` continua liberada, para ele registrar
+ferramentas do agente (só os comandos de handoff do `nobre`, como `note`, `status` e `done`, sem nada encadeado, continuam liberados, para ele registrar
 o handoff) e move o card para Pausado com o motivo "limite de custo".
 
 ## Referência do comando `nobre`
@@ -372,6 +372,8 @@ O `make uninstall` roda `nobre setup --remover` e depois apaga os binários de
 3. para o `nobred` e apaga a unidade do systemd.
 
 O banco em `~/.local/share/nobreai-cockpit/` fica, caso você queira guardá-lo.
+Depois, reinicie as sessões do Claude Code que estiverem abertas: cada sessão
+guarda os hooks de quando começou e continuaria chamando o `nobre` apagado.
 
 ## Desenvolvimento
 

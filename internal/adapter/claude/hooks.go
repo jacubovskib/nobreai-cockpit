@@ -369,9 +369,9 @@ func exitCode(raw json.RawMessage) (int, bool) {
 }
 
 // preToolUse nega a ferramenta quando o limite (diário do agente ou do card)
-// foi atingido com ação "pause". Uma chamada simples do nobre sempre passa (o
-// agente precisa conseguir registrar o handoff); encadeada com outro comando,
-// não (plainNobreCommand).
+// foi atingido com ação "pause". Uma chamada simples de um subcomando de
+// handoff do nobre sempre passa (o agente precisa conseguir registrar o
+// handoff); nobre run, setup ou algo encadeado, não (plainNobreCommand).
 func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
 	if !sess.FullCapture {
 		return adapter.HookReply{}, nil
