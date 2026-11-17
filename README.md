@@ -265,7 +265,7 @@ abre em "Somente assistir" até você clicar em **Interagir**.
 Em **Configuração → Limites de custo**, defina para cada agente um limite diário e um
 limite por card, em US$. O aviso aparece no percentual configurado (padrão
 80%). Em 100%, com a ação "bloquear", o hook nega as
-ferramentas do agente (comandos `nobre` continuam liberados, para ele registrar
+ferramentas do agente (uma chamada simples do `nobre` continua liberada, para ele registrar
 o handoff) e move o card para Pausado com o motivo "limite de custo".
 
 ## Referência do comando `nobre`
@@ -301,6 +301,7 @@ Comandos de administração:
 | `nobre ui` | Abre a interface no navegador |
 | `nobre setup [--dry-run] [--sem-statusline]` | Instala hooks, skill e status line e ativa o daemon |
 | `nobre setup --remover-statusline` | Desfaz só a integração da status line |
+| `nobre setup --remover [--dry-run]` | Desfaz o setup: hooks, status line, skill e serviço (binários e banco ficam) |
 
 `nobre help` e `nobre <comando> --help` mostram a ajuda completa. O daemon é
 procurado em `NOBRE_ADDR` (padrão `127.0.0.1:7420`).
@@ -320,6 +321,8 @@ procurado em `NOBRE_ADDR` (padrão `127.0.0.1:7420`).
 | `make status` | Mostra o serviço e se a API responde |
 | `make logs` | Acompanha o log do daemon (`journalctl`) |
 | `make demo` | Sobe um daemon de demonstração em `127.0.0.1:7421` |
+| `make uninstall` | Desfaz o setup e apaga os binários (o banco fica) |
+| `make uninstall-dry-run` | Mostra o que o `make uninstall` removeria |
 | `make test` | `go vet`, testes Go e testes da interface |
 | `make clean` | Apaga os binários e o build da interface |
 
@@ -354,21 +357,21 @@ Para fazer backup dos seus dados, copie o `cockpit.db` com o daemon parado.
 
 ## Desinstalar
 
-Ainda não há um comando de desinstalação. Faça na ordem:
-
 ```bash
-nobre setup --remover-statusline                 # devolve a status line original
-systemctl --user disable --now nobred
-rm ~/.config/systemd/user/nobred.service
-systemctl --user daemon-reload
-rm -r ~/.claude/skills/nobre-cockpit
+make uninstall-dry-run   # mostra o que seria removido
+make uninstall
 ```
 
-Depois, tire do `~/.claude/settings.json` as entradas de hook que chamam
-`nobre hook claude …` (ou restaure um dos backups `settings.json.bak-<data>`).
-Só então apague `~/.local/bin/nobre` e `~/.local/bin/nobred`: sem isso, os
-hooks ficam apontando para um binário que não existe. O banco em
-`~/.local/share/nobreai-cockpit/` fica, caso você queira guardá-lo.
+O `make uninstall` roda `nobre setup --remover` e depois apaga os binários de
+`~/.local/bin`. O `--remover` desfaz o setup na ordem certa:
+
+1. tira os hooks do Cockpit do `~/.claude/settings.json` e devolve a status
+   line original, mantendo os hooks e as configurações de outras ferramentas
+   (com backup `settings.json.bak-<data>` antes de gravar);
+2. apaga a skill `~/.claude/skills/nobre-cockpit`;
+3. para o `nobred` e apaga a unidade do systemd.
+
+O banco em `~/.local/share/nobreai-cockpit/` fica, caso você queira guardá-lo.
 
 ## Desenvolvimento
 

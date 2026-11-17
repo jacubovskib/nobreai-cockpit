@@ -7,7 +7,7 @@ NOBRE_ADDR ?= 127.0.0.1:7420
 DEMO_ADDR  ?= 127.0.0.1:7421
 
 .DEFAULT_GOAL := help
-.PHONY: help check web build install setup setup-dry-run update restart status logs demo dev test clean
+.PHONY: help check web build install setup setup-dry-run update restart status logs demo dev test clean uninstall uninstall-dry-run
 
 help: ## mostra esta ajuda
 	@echo "NobreAI Cockpit"
@@ -15,7 +15,7 @@ help: ## mostra esta ajuda
 	@echo "Primeira instalação:  make check && make setup"
 	@echo "Atualizar:            git pull && make update"
 	@echo
-	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-15s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-18s %s\n", $$1, $$2}'
 	@echo
 	@echo "Variáveis: PREFIX=$(PREFIX)  BINDIR=$(BINDIR)  NOBRE_ADDR=$(NOBRE_ADDR)"
 
@@ -72,6 +72,17 @@ status: ## mostra o serviço e se a API responde
 	@if curl -fsS "http://$(NOBRE_ADDR)/api/health" 2>/dev/null; then \
 	  echo; echo "Interface: http://$(NOBRE_ADDR)"; \
 	else echo "! a API não respondeu em http://$(NOBRE_ADDR)"; fi
+
+uninstall: ## desfaz o setup (hooks, status line, skill, serviço) e apaga os binários; o banco fica
+	@test -x "$(BINDIR)/nobre" || { echo "! $(BINDIR)/nobre não encontrado"; exit 1; }
+	"$(BINDIR)/nobre" setup --remover
+	rm -f "$(BINDIR)/nobre" "$(BINDIR)/nobred"
+	@echo "Binários apagados de $(BINDIR)."
+
+uninstall-dry-run: ## mostra o que o make uninstall removeria
+	@test -x "$(BINDIR)/nobre" || { echo "! $(BINDIR)/nobre não encontrado"; exit 1; }
+	"$(BINDIR)/nobre" setup --remover --dry-run
+	@echo "[dry-run] Apagaria $(BINDIR)/nobre e $(BINDIR)/nobred"
 
 logs: ## acompanha o log do nobred
 	journalctl --user -u nobred -f
