@@ -1313,3 +1313,25 @@ func TestBashDoesNotUndoDeliberateCardBranch(t *testing.T) {
 		t.Fatalf("troca de fora levou o card: %q", got.Branch)
 	}
 }
+
+// Card nascido na base (sem branch): depois de um git switch -c no terminal,
+// o Bash seguinte do agente leva o card para o branch novo.
+func TestCardWithoutBranchFollowsOutsideSwitchOnBash(t *testing.T) {
+	e := newEnv(t)
+	c := e.cardWithSession(t, domain.Card{Title: "x", Column: domain.Pausado})
+	if err := e.st.SetProjectBase(c.ProjectID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.SetCardBranch(c.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.a.deps.Git = fakeGit{branch: "feat/y"}
+	e.call(t, "stop")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "" {
+		t.Fatalf("o stop não move o card: %q", got.Branch)
+	}
+	e.call(t, "post_tool_use_bash")
+	if got, _ := e.st.GetCardByID(c.ID); got.Branch != "feat/y" {
+		t.Fatalf("card vazio deveria ir para feat/y: %q", got.Branch)
+	}
+}

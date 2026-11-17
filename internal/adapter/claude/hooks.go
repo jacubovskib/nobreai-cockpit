@@ -105,6 +105,7 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 		a.ingestAsync(sess.ID, transcriptPath(p, sess))
 		return reply, err
 	case "SessionEnd":
+		a.outsideSwitch.Delete(sess.ID)
 		return a.sessionEnd(sess, p, now)
 	}
 	return adapter.HookReply{}, nil
@@ -171,6 +172,7 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 // moveSession grava o novo diretório da sessão (o agente entrou num worktree,
 // por exemplo) com branch, HEAD e worktree de lá. O projeto ligado não muda.
 func (a *Adapter) moveSession(sess domain.Session, cwd string) (domain.Session, error) {
+	a.outsideSwitch.Delete(sess.ID) // o card acompanha a mudança de diretório
 	l := a.locate(cwd)
 	if err := a.st.UpdateSessionLocation(sess.ID, l); err != nil {
 		return sess, err
@@ -342,11 +344,12 @@ func (a *Adapter) followBranch(sess domain.Session, syncCard bool) domain.Sessio
 		// A sessão já acompanhou (uma troca vista no prompt ou no fim de
 		// turno, que não move o card): agora que o próprio agente trabalha
 		// nesse branch, o card vem junto.
-		// Só quando o card estava no branch de antes da troca (seguia a
-		// sessão); um nobre branch dado de propósito fica.
+		// Só quando o card seguia a sessão: estava no branch de antes da
+		// troca, ou sem branch (o card nunca guarda a base). Um nobre branch
+		// dado de propósito fica.
 		if prev, ok := a.outsideSwitch.Load(sess.ID); ok && syncCard && sess.CardID != nil {
 			a.outsideSwitch.Delete(sess.ID)
-			if c, err := a.st.GetCardByID(*sess.CardID); err == nil && c.Branch == prev.(string) {
+			if c, err := a.st.GetCardByID(*sess.CardID); err == nil && (c.Branch == prev.(string) || c.Branch == "") {
 				a.syncCardBranch(sess)
 			}
 		}
