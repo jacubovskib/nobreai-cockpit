@@ -82,7 +82,16 @@ func (s *server) usageTotals(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "projeto inválido")
 			return
 		}
-		f.ProjectID = &id
+		// Um pai soma os filhos; um filho só a si. Id desconhecido não filtra nada.
+		ids, ferr := s.st.FamilyIDs(id)
+		if ferr != nil {
+			writeStoreError(w, ferr, "")
+			return
+		}
+		if len(ids) == 0 {
+			ids = []int64{id}
+		}
+		f.ProjectIDs = ids
 	}
 	if f.From, err = parseDay(q.Get("from")); err != nil {
 		writeError(w, http.StatusBadRequest, "data inicial inválida")

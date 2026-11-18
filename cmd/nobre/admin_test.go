@@ -299,3 +299,64 @@ func TestProjectAddListsAtMostFiveSuggestions(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestCLIProjectPaiWarnsCapture(t *testing.T) {
+	var patched string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":1,"name":"loja","path":"/r/loja","capture":true},{"id":2,"name":"web","path":"/r/loja/web","capture":false}]`))
+		case r.Method == "PATCH" && r.URL.Path == "/api/projects/2":
+			b, _ := io.ReadAll(r.Body)
+			patched = string(b)
+			w.Write([]byte(`{"id":2,"moved":{"sessions":3,"cards":1}}`))
+		default:
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+	})
+	r := runProjectCLI(t, addr, "/r", testRepos, "project", "pai", "2", "1")
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	if patched != `{"parent_id":1}` {
+		t.Fatalf("corpo = %s", patched)
+	}
+	for _, want := range []string{
+		"3 sessões e 1 cards passaram para loja › web.",
+		"A captura de web passa a seguir a de loja (ligada).",
+	} {
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("faltou %q em %q", want, r.stdout)
+		}
+	}
+	if r := runProjectCLI(t, addr, "/r", testRepos, "project", "pai", "2", "--nenhum"); r.code != 0 || patched != `{"parent_id":null}` {
+		t.Fatalf("--nenhum: %+v corpo=%s", r, patched)
+	}
+}
+
+func TestCLIProjectGrupoAndAddPai(t *testing.T) {
+	var bodies []string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/projects":
+			bodies = append(bodies, string(b))
+			w.WriteHeader(201)
+			w.Write([]byte(`{"id":7,"name":"loja","path":"","moved":{"sessions":2,"cards":0}}`))
+		case r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":7,"name":"loja","path":"","capture":true}]`))
+		default:
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+	})
+	if r := runProjectCLI(t, addr, "/r", testRepos, "project", "grupo", "loja"); r.code != 0 || !strings.Contains(r.stdout, "Grupo loja cadastrado (id 7)") {
+		t.Fatalf("grupo: %+v", r)
+	}
+	r := runProjectCLI(t, addr, "/w/api", testRepos, "project", "add", "--pai", "loja")
+	if r.code != 0 || !strings.Contains(r.stdout, "2 sessões e 0 cards passaram para") {
+		t.Fatalf("add --pai: %+v", r)
+	}
+	if len(bodies) != 2 || bodies[0] != `{"name":"loja"}` || !strings.Contains(bodies[1], `"parent_id":7`) {
+		t.Fatalf("corpos = %v", bodies)
+	}
+}

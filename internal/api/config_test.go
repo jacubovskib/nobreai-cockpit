@@ -296,3 +296,69 @@ func TestScanGroupRefused(t *testing.T) {
 		t.Fatalf("erro = %q", got)
 	}
 }
+
+func TestCreateGroupViaAPI(t *testing.T) {
+	a := newTestAPI(t)
+	rec := a.do(t, "POST", "/api/projects", map[string]any{"name": "loja"}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("grupo = %d %s", rec.Code, rec.Body)
+	}
+	out := decode[map[string]any](t, rec)
+	if out["path"] != "" || out["name"] != "loja" || out["parent_id"] != nil {
+		t.Fatalf("resposta = %v", out)
+	}
+	if rec := a.do(t, "POST", "/api/projects", map[string]any{}, 0); rec.Code != http.StatusBadRequest {
+		t.Fatalf("sem nome = %d", rec.Code)
+	}
+}
+
+func TestCreateChildViaAPIReportsMoved(t *testing.T) {
+	a := newTestAPI(t)
+	pai := decode[domain.Project](t, a.do(t, "POST", "/api/projects", map[string]any{"name": "loja", "path": "/r/loja", "base_branch": "main"}, 0))
+	now := testNow
+	if err := a.st.StartSession(domain.Session{ID: "claude:w", Agent: "claude", ProviderSessionID: "w", PID: 7, Cwd: "/r/loja/web", ProjectID: &pai.ID, FullCapture: true, StartedAt: now, LastEventAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/projects", map[string]any{"name": "web", "path": "/r/loja/web", "parent_id": pai.ID}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("filho = %d %s", rec.Code, rec.Body)
+	}
+	out := decode[map[string]any](t, rec)
+	moved, _ := out["moved"].(map[string]any)
+	if moved["sessions"] != float64(1) || moved["cards"] != float64(0) || out["parent_id"] != float64(pai.ID) {
+		t.Fatalf("resposta = %v", out)
+	}
+	if out["base_branch"] != "" {
+		t.Fatalf("app não tem base própria: %v", out["base_branch"])
+	}
+	if rec := a.do(t, "POST", "/api/projects", map[string]any{"name": "x", "path": "/fora/x", "parent_id": pai.ID}, 0); rec.Code != http.StatusBadRequest {
+		t.Fatalf("pasta fora do pai = %d", rec.Code)
+	}
+}
+
+func TestPatchParentErrorsAre400(t *testing.T) {
+	a := newTestAPI(t)
+	pai, _ := a.st.CreateProject("loja", "/r/loja")
+	fora, _ := a.st.CreateProject("fora", "/outro/fora")
+	rec := a.do(t, "PATCH", "/api/projects/"+strconv.FormatInt(fora.ID, 10), map[string]any{"parent_id": pai.ID}, 0)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("pasta fora do pai = %d %s", rec.Code, rec.Body)
+	}
+	if msg := decode[map[string]string](t, rec)["error"]; strings.Contains(msg, "regra de sub-projeto") || msg == "" {
+		t.Fatalf("mensagem = %q", msg)
+	}
+	filho, _, _ := a.st.CreateChild("web", "/r/loja/web", pai.ID)
+	// Liga, move e desliga pelo PATCH; ausente não mexe no pai.
+	if rec := a.do(t, "PATCH", "/api/projects/"+strconv.FormatInt(filho.ID, 10), map[string]any{"name": "web2"}, 0); rec.Code != 200 ||
+		decode[map[string]any](t, rec)["parent_id"] != float64(pai.ID) {
+		t.Fatalf("renomear mexeu no pai: %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "PATCH", "/api/projects/"+strconv.FormatInt(filho.ID, 10), map[string]any{"parent_id": nil}, 0)
+	if rec.Code != 200 || decode[map[string]any](t, rec)["parent_id"] != nil {
+		t.Fatalf("desligar = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "PATCH", "/api/projects/"+strconv.FormatInt(filho.ID, 10), map[string]any{"parent_id": pai.ID}, 0)
+	if rec.Code != 200 || decode[map[string]any](t, rec)["parent_id"] != float64(pai.ID) {
+		t.Fatalf("religar = %d %s", rec.Code, rec.Body)
+	}
+}

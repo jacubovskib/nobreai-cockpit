@@ -180,6 +180,8 @@ func writeStoreError(w http.ResponseWriter, err error, notFound string) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, notFound)
+	case errors.Is(err, store.ErrFamily):
+		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), store.ErrFamily.Error()+": "))
 	default:
 		writeError(w, http.StatusInternalServerError, "erro interno: "+err.Error())
 	}

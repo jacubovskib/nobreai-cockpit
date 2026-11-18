@@ -222,6 +222,35 @@ func (c *Client) AddProject(ctx context.Context, name, path string) (AddedProjec
 	return p, err
 }
 
+// Moved é o histórico que passou do pai para o filho ao ligar os dois.
+type Moved struct {
+	Sessions int `json:"sessions"`
+	Cards    int `json:"cards"`
+}
+
+// AddChildProject cadastra um sub-projeto de parentID.
+func (c *Client) AddChildProject(ctx context.Context, name, path string, parentID int64) (AddedProject, error) {
+	var p AddedProject
+	err := c.Do(ctx, "POST", "/api/projects", map[string]any{"name": name, "path": path, "parent_id": parentID}, &p)
+	return p, err
+}
+
+// AddGroup cadastra um grupo: projeto principal sem pasta.
+func (c *Client) AddGroup(ctx context.Context, name string) (AddedProject, error) {
+	var p AddedProject
+	err := c.Do(ctx, "POST", "/api/projects", map[string]string{"name": name}, &p)
+	return p, err
+}
+
+// SetProjectParent liga o projeto id ao pai (nil desliga).
+func (c *Client) SetProjectParent(ctx context.Context, id int64, parentID *int64) (Moved, error) {
+	var out struct {
+		Moved Moved `json:"moved"`
+	}
+	err := c.Do(ctx, "PATCH", "/api/projects/"+strconv.FormatInt(id, 10), map[string]any{"parent_id": parentID}, &out)
+	return out.Moved, err
+}
+
 // Projects lista os projetos.
 func (c *Client) Projects(ctx context.Context) ([]domain.Project, error) {
 	var ps []domain.Project
@@ -316,5 +345,6 @@ func (c *Client) SavePrompt(ctx context.Context, p domain.Prompt) (domain.Prompt
 type AddedProject struct {
 	domain.Project
 	Reassigned  int                     `json:"reassigned"`
+	Moved       Moved                   `json:"moved"`
 	Suggestions []workspaces.Suggestion `json:"suggestions"`
 }
