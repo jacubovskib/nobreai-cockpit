@@ -75,6 +75,38 @@ describe('página Projetos', () => {
   })
 })
 
+describe('família em Projetos', () => {
+  const fam = {
+    ...routes,
+    '/api/projects': [
+      { id: 1, name: 'loja', path: '/w/loja', capture: true, parent_id: null },
+      { id: 2, name: 'web', path: '/w/loja/web', capture: true, parent_id: 1 },
+      { id: 3, name: 'api', path: '/w/loja/api', capture: true, parent_id: 1 },
+    ],
+    '/api/usage/totals': [{ key: '1', cost_usd: 26, unpriced: false }, { key: '2', cost_usd: 95.1, unpriced: false }, { key: '3', cost_usd: 61.05, unpriced: false }],
+  }
+  it('expands apps', async () => {
+    mock(fam)
+    wrap('/projetos')
+    const btn = await screen.findByRole('button', { name: /apps/ })
+    expect(btn).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('geral')).toBeNull()
+    fireEvent.click(btn)
+    expect(btn).toHaveAttribute('aria-expanded', 'true')
+    for (const n of ['web', 'api', 'geral']) expect(screen.getByText(n)).toBeInTheDocument()
+  })
+  it('página do pai tem o quadro Por app, a do filho o link', async () => {
+    mock(fam)
+    const { unmount } = wrap('/projetos/1')
+    expect(await screen.findByRole('heading', { name: 'Por app' })).toBeInTheDocument()
+    expect(screen.getByText('total')).toBeInTheDocument()
+    unmount()
+    wrap('/projetos/2')
+    expect(await screen.findByText('parte de')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'loja' })).toHaveAttribute('href', '/projetos/1')
+  })
+})
+
 describe('página do projeto', () => {
   it('lista as entregas por grupo com sinal e link', async () => {
     mock(routes)

@@ -1,7 +1,7 @@
-import { projectColor, projectForPath, withProject } from './project'
+import { displayName, familyIds, projectColor, projectForPath, withProject } from './project'
 import type { Project } from '../api/types'
 
-const P = (id: number, path = '/p' + id): Project => ({ id, name: 'p' + id, path, capture: true, base_branch: '' })
+const P = (id: number, path = '/p' + id): Project => ({ id, name: 'p' + id, path, capture: true, base_branch: '', parent_id: null })
 
 describe('withProject', () => {
   it('acrescenta o parâmetro respeitando ? existente', () => {
@@ -28,5 +28,23 @@ describe('projectForPath', () => {
     expect(projectForPath(ps, '/a/b/c')?.path).toBe('/a/b')
     expect(projectForPath(ps, '/ab')).toBeNull()
     expect(projectForPath(ps, '/a')?.path).toBe('/a')
+  })
+})
+
+describe('família', () => {
+  const loja: Project = { ...P(1, '/loja'), name: 'loja' }
+  const web: Project = { ...P(2, '/loja/web'), name: 'web', parent_id: 1 }
+  const api: Project = { ...P(3, '/loja/api'), name: 'api', parent_id: 1 }
+  const outro = P(4)
+  const all = [loja, web, api, outro]
+  it('familyIds of parent includes children', () => {
+    expect(familyIds(all, 1)).toEqual([1, 2, 3])
+  })
+  it('familyIds of child is only itself', () => {
+    expect(familyIds(all, 2)).toEqual([2])
+  })
+  it('displayName of child is "loja › web"', () => {
+    expect(displayName(web, all)).toBe('loja › web')
+    expect(displayName(loja, all)).toBe('loja')
   })
 })

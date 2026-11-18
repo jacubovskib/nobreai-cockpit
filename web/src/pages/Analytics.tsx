@@ -45,7 +45,7 @@ export function Analytics() {
   const money = (usd: number) => formatMoney(usd, cur)
   const amount = (usd: number) => formatAmount(usd, cur)
   const symbol = moneySymbol(cur)
-  const { projectId } = useProjectFilter()
+  const { projectId, ids } = useProjectFilter()
   const dayAgent = useTotals('day_agent', from, to, projectId)
   const byAgent = useTotals('agent', from, to, projectId)
   const byCard = useTotals('card', from, to, projectId)
@@ -72,7 +72,7 @@ export function Analytics() {
   const titleOf = (key: string) => cards?.find((c) => c.key === key)?.title ?? ''
   const cardKeyOf = (id: number | null) => cards?.find((c) => c.id === id)?.key ?? ''
   const periodSessions = (sessions.data ?? [])
-    .filter((s) => projectId === null || s.project_id === projectId)
+    .filter((s) => ids === null || (s.project_id !== null && ids.includes(s.project_id)))
     .filter((s) => ymd(new Date(s.started_at)) >= from && ymd(new Date(s.started_at)) < to)
     .slice(0, 20)
   const long = PERIODS.find((p) => p.id === period)!.long

@@ -121,7 +121,7 @@ function ProjectSection({ p }: { p: ProjectWorktrees }) {
 
 export function Worktrees() {
   const { data, isPending, isError } = useWorktrees()
-  const { projectId } = useProjectFilter()
+  const { ids } = useProjectFilter()
   const location = useLocation()
   const navigate = useNavigate()
   // O aviso (branch mantido) vem no estado do histórico: guarda e limpa o
@@ -133,7 +133,7 @@ export function Worktrees() {
   }, [stateNotice, location.pathname, location.search, navigate])
   if (isError) return <p role="alert" style={{ color: 'var(--err)' }}>Não foi possível carregar os worktrees.</p>
   if (isPending || !data) return <p className="placeholder">Carregando…</p>
-  const shown = data.filter((p) => projectId === null || p.project.id === projectId)
+  const shown = data.filter((p) => ids === null || ids.includes(p.project.id))
   return (
     <div style={{ maxWidth: 1180, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 28 }}>
       <header style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

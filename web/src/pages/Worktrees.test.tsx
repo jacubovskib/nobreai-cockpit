@@ -20,7 +20,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 const data: ProjectWorktrees[] = [
   {
-    project: { id: 1, name: 'api', path: '/w/api', capture: true, base_branch: '' },
+    project: { id: 1, name: 'api', path: '/w/api', capture: true, base_branch: '', parent_id: null },
     error: '',
     worktrees: [
       { ...wt, path: '/w/api', branch: 'main', main: true, cards: [],
@@ -35,7 +35,7 @@ const data: ProjectWorktrees[] = [
     ],
     orphans: [session({ id: 'claude:orfa', worktree: '/w/api-sumiu', worktree_linked: true, pid_dead_at: ago(5), live: false })],
   },
-  { project: { id: 2, name: 'solto', path: '/w/solto', capture: true, base_branch: '' }, error: 'não consegui listar os worktrees de /w/solto: não é um repositório git?', worktrees: [], orphans: [] },
+  { project: { id: 2, name: 'solto', path: '/w/solto', capture: true, base_branch: '', parent_id: null }, error: 'não consegui listar os worktrees de /w/solto: não é um repositório git?', worktrees: [], orphans: [] },
 ]
 
 describe('Worktrees · projeto', () => {

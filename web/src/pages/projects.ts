@@ -8,6 +8,10 @@ export interface ProjectRow {
   stale: { count: number; oldest: string | null }
   awaiting: { count: number; oldest: string | null }
   lastActivity: string | null
+  // Só em um pai: as linhas dos apps e o que caiu no próprio pai ("geral").
+  // costUsd do pai já é o total da família.
+  children: ProjectRow[]
+  general: ProjectRow | null
 }
 
 const ms = (iso: string | null) => {
@@ -43,15 +47,40 @@ function row(project: Project | null, cards: CardSummary[], total: Total | undef
     stale: signalSummary(cards, 'parado'),
     awaiting: signalSummary(cards, 'aguardando_revisao'),
     lastActivity: last,
+    children: [],
+    general: null,
   }
 }
 
-// buildRows: uma linha por projeto (ordem de id); "Sem projeto" só com custo > 0.
+// Soma em micro-dólares inteiros: a soma das linhas bate exatamente com o total.
+const sumUsd = (xs: number[]) => xs.reduce((s, x) => s + Math.round(x * 1e6), 0) / 1e6
+
+function familyRow(parent: Project, kids: Project[], cards: CardSummary[], byKey: Map<string, Total>): ProjectRow {
+  const general = row(parent, cards.filter((c) => c.project_id === parent.id), byKey.get(String(parent.id)))
+  const children = kids.map((k) => row(k, cards.filter((c) => c.project_id === k.id), byKey.get(String(k.id))))
+  const family = new Set([parent.id, ...kids.map((k) => k.id)])
+  const all = row(parent, cards.filter((c) => c.project_id !== null && family.has(c.project_id)), undefined)
+  const parts = [general, ...children]
+  return {
+    ...all,
+    costUsd: sumUsd(parts.map((r) => r.costUsd)),
+    unpriced: parts.some((r) => r.unpriced),
+    children,
+    general,
+  }
+}
+
+// buildRows: uma linha por projeto raiz (ordem de id), com os apps dentro do pai; "Sem projeto" só com custo > 0.
 export function buildRows(projects: Project[], cards: CardSummary[], totals: Total[]): ProjectRow[] {
   const byKey = new Map(totals.map((t) => [t.key, t]))
-  const rows = [...projects]
+  const ids = new Set(projects.map((p) => p.id))
+  const rows = projects
+    .filter((p) => p.parent_id == null || !ids.has(p.parent_id))
     .sort((a, b) => a.id - b.id)
-    .map((p) => row(p, cards.filter((c) => c.project_id === p.id), byKey.get(String(p.id))))
+    .map((p) => {
+      const kids = projects.filter((k) => k.parent_id === p.id).sort((a, b) => a.name.localeCompare(b.name))
+      return kids.length === 0 ? row(p, cards.filter((c) => c.project_id === p.id), byKey.get(String(p.id))) : familyRow(p, kids, cards, byKey)
+    })
   const none = byKey.get('')
   if (none && none.cost_usd > 0) rows.push(row(null, [], none))
   return rows

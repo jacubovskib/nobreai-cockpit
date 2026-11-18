@@ -7,7 +7,7 @@ const card = (o: Partial<CardSummary>) => ({
   id: 1, key: 'NAC-1', title: 'x', column: 'backlog', project_id: 1, created_at: iso(500), updated_at: iso(500),
   last_activity_at: null, signal: '', signal_since: null, ...o,
 }) as CardSummary
-const proj = (id: number, capture = true): Project => ({ id, name: `p${id}`, path: `/w/${id}`, capture, base_branch: "" })
+const proj = (id: number, capture = true): Project => ({ id, name: `p${id}`, path: `/w/${id}`, capture, base_branch: "", parent_id: null })
 const tot = (key: string, cost: number) => ({ key, cost_usd: cost, unpriced: false }) as Total
 
 describe('buildRows', () => {
@@ -61,5 +61,22 @@ describe('timeline', () => {
       'paradas:PD', 'paradas:PS',
       'backlog:BL',
     ])
+  })
+})
+
+describe('buildRows com família', () => {
+  const loja = { ...proj(1), name: 'loja' }
+  const web = { ...proj(2), name: 'web', parent_id: 1 }
+  const api = { ...proj(3), name: 'api', parent_id: 1 }
+  it('family total equals children plus general', () => {
+    const cards = [card({ id: 1, key: 'A', project_id: 2, column: 'em_andamento', updated_at: iso(1) }), card({ id: 2, key: 'B', project_id: 1 })]
+    const rows = buildRows([loja, web, api], cards, [tot('1', 26.0), tot('2', 95.1), tot('3', 61.05)])
+    expect(rows).toHaveLength(1)
+    const [r] = rows
+    expect(r.costUsd).toBe(182.15)
+    expect(r.children.map((c) => c.project?.name)).toEqual(['api', 'web'])
+    expect(r.general?.costUsd).toBe(26)
+    expect(r.children.reduce((s, c) => s + c.costUsd, 0) + (r.general?.costUsd ?? 0)).toBeCloseTo(r.costUsd, 10)
+    expect(r.current?.key).toBe('A')
   })
 })
