@@ -26,7 +26,6 @@ const (
 	removalWindow = 10 * time.Minute // validade da marca de remoção deliberada
 
 	unreadableText = "O ~/.claude/settings.json não pôde ser lido (JSON inválido?). O Cockpit não vai mexer nele; corrija o arquivo."
-	noSettingsText = "O ~/.claude/settings.json não existe; a status line do Cockpit saiu junto."
 )
 
 // Store é o que o monitor precisa do banco.
@@ -289,10 +288,8 @@ func problemText(c adapter.Check, p Problem) string {
 	const deadPrefix = "aponta para um binário que não existe: "
 	bin := strings.TrimPrefix(c.Detail, deadPrefix)
 	switch {
-	case c.Code == "unreadable":
+	case c.Code == "unreadable" || c.Code == "no_settings":
 		return unreadableText
-	case c.Code == "no_settings":
-		return noSettingsText
 	case p.Action == ActionMakeInstall:
 		return "O nobre não foi encontrado; rode make install."
 	case p.Action == ActionRestart:

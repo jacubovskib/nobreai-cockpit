@@ -292,7 +292,7 @@ func TestHooksMissingWithoutNobreAsksMakeInstall(t *testing.T) {
 func TestStatuslineWithoutReadableSettings(t *testing.T) {
 	for code, text := range map[string]string{
 		"unreadable":  unreadableText,
-		"no_settings": "O ~/.claude/settings.json não existe; a status line do Cockpit saiu junto.",
+		"no_settings": unreadableText,
 	} {
 		e := newEnv(t)
 		m := e.monitor()
