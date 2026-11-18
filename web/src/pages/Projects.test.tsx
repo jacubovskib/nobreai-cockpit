@@ -83,6 +83,10 @@ describe('família em Projetos', () => {
       { id: 2, name: 'web', path: '/w/loja/web', capture: true, parent_id: 1 },
       { id: 3, name: 'api', path: '/w/loja/api', capture: true, parent_id: 1 },
     ],
+    '/api/sessions': [
+      { id: 's1', project_id: 2, ended_at: null, pid_dead_at: null }, { id: 's2', project_id: 2, ended_at: null, pid_dead_at: null },
+      { id: 's3', project_id: 1, ended_at: null, pid_dead_at: null }, { id: 's4', project_id: 3, ended_at: '2026-01-01T00:00:00Z', pid_dead_at: null },
+    ],
     '/api/usage/totals': [{ key: '1', cost_usd: 26, unpriced: false }, { key: '2', cost_usd: 95.1, unpriced: false }, { key: '3', cost_usd: 61.05, unpriced: false }],
   }
   it('expands apps', async () => {
@@ -100,6 +104,13 @@ describe('família em Projetos', () => {
     const { unmount } = wrap('/projetos/1')
     expect(await screen.findByRole('heading', { name: 'Por app' })).toBeInTheDocument()
     expect(screen.getByText('total')).toBeInTheDocument()
+    const rowOf = (n: string) => screen.getAllByText(n, { selector: 'td' })[0].closest('tr')!
+    const last = (n: string) => [...rowOf(n).querySelectorAll('td')].pop()!.textContent
+    expect(last('web')).toBe('2')
+    expect(last('api')).toBe('0')
+    expect(last('geral')).toBe('1')
+    expect(last('total')).toBe('3')
+    expect(screen.getByRole('columnheader', { name: /7 dias/ })).toBeInTheDocument()
     unmount()
     wrap('/projetos/2')
     expect(await screen.findByText('parte de')).toBeInTheDocument()

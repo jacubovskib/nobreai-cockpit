@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { useMemo } from 'react'
-import { useCards, useProjects, useTotals } from '../api/queries'
-import type { CardSummary, Project } from '../api/types'
+import { useCards, useProjects, useSessions, useTotals } from '../api/queries'
+import type { CardSummary, Project, SessionWithUsage } from '../api/types'
 import { familyIds, useWithProject, withProject } from '../app/project'
 import { Money } from '../ui/Money'
 import { range } from './analytics/data'
@@ -16,8 +16,9 @@ export function ProjectPage() {
   const { id } = useParams()
   const projects = useProjects()
   const cards = useCards()
-  const { from, to } = useMemo(() => range(30), [])
+  const { from, to } = useMemo(() => range(7), [])
   const totals = useTotals('project', from, to)
+  const sessions = useSessions(200)
   if (projects.isError || cards.isError) return <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar o projeto.</p>
   if (projects.isPending || cards.isPending) return <p className="placeholder">Carregando…</p>
   const list = projects.data ?? []
@@ -39,7 +40,7 @@ export function ProjectPage() {
         </div>
         <Link to={withProject('/board', project.id)} style={btn}>Ver no board</Link>
       </header>
-      {isParent && <ByApp project={project} list={list} cards={cards.data ?? []} totals={totals} />}
+      {isParent && <ByApp project={project} list={list} cards={cards.data ?? []} totals={totals} sessions={sessions} />}
       {GROUPS.map((g) => {
         const group = items.filter((i) => i.group === g.id)
         return (
@@ -75,15 +76,18 @@ const COLS: { id: CardSummary['column']; label: string }[] = [
 ]
 
 // Quadro "Por app" de um pai: cada app, o "geral" (o que caiu no pai) e o total, que é a soma das linhas.
-function ByApp({ project, list, cards, totals }: { project: Project; list: Project[]; cards: CardSummary[]; totals: ReturnType<typeof useTotals> }) {
+function ByApp({ project, list, cards, totals, sessions }: { project: Project; list: Project[]; cards: CardSummary[]; totals: ReturnType<typeof useTotals>; sessions: ReturnType<typeof useSessions> }) {
+  if (totals.isError || sessions.isError) return <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar o quadro por app.</p>
+  if (totals.isPending || sessions.isPending) return <p className="placeholder">Carregando…</p>
   const row = buildRows(list, cards, totals.data ?? []).find((r) => r.project?.id === project.id)
   if (!row || !row.general) return null
   const folder = (p: Project) => (project.path && p.path.startsWith(project.path.replace(/\/+$/, '') + '/') ? p.path.slice(project.path.replace(/\/+$/, '').length + 1) : p.path)
-  const lines: { key: string; name: string; path: string; cost: number; unpriced: boolean; cards: CardSummary[] }[] = [
-    ...row.children.map((c) => ({ key: String(c.project!.id), name: c.project!.name, path: folder(c.project!), cost: c.costUsd, unpriced: c.unpriced, cards: cards.filter((x) => x.project_id === c.project!.id) })),
-    { key: 'geral', name: 'geral', path: project.path, cost: row.general.costUsd, unpriced: row.general.unpriced, cards: cards.filter((x) => x.project_id === project.id) },
+  const lines: { id: number; key: string; name: string; path: string; cost: number; unpriced: boolean; cards: CardSummary[] }[] = [
+    ...row.children.map((c) => ({ id: c.project!.id, key: String(c.project!.id), name: c.project!.name, path: folder(c.project!), cost: c.costUsd, unpriced: c.unpriced, cards: cards.filter((x) => x.project_id === c.project!.id) })),
+    { id: project.id, key: 'geral', name: 'geral', path: project.path, cost: row.general.costUsd, unpriced: row.general.unpriced, cards: cards.filter((x) => x.project_id === project.id) },
   ]
-  const live = (cs: CardSummary[]) => cs.filter((c) => c.live).length
+  // Sessão viva: não encerrada e com o processo existindo. As do pai caem em "geral".
+  const liveOf = (id: number) => (sessions.data ?? []).filter((s: SessionWithUsage) => s.project_id === id && !s.ended_at && !s.pid_dead_at).length
   return (
     <section style={{ ...panel, overflowX: 'auto' }}>
       <h2 style={h2}>Por app</h2>
@@ -92,7 +96,7 @@ function ByApp({ project, list, cards, totals }: { project: Project; list: Proje
           <tr style={{ textAlign: 'left', color: 'var(--text-2)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             <th style={cell}>app</th>
             <th style={cell}>pasta</th>
-            <th style={cell}>custo no período (30 dias)</th>
+            <th style={cell}>custo no período (7 dias)</th>
             {COLS.map((c) => <th key={c.id} style={cell}>{c.label}</th>)}
             <th style={cell}>sessões vivas</th>
           </tr>
@@ -104,7 +108,7 @@ function ByApp({ project, list, cards, totals }: { project: Project; list: Proje
               <td style={{ ...cell, ...muted }}>{l.path || '—'}</td>
               <td style={cell}><Money usd={l.cost} unpriced={l.unpriced && l.cost === 0} /></td>
               {COLS.map((c) => <td key={c.id} style={cell}>{l.cards.filter((x) => x.column === c.id).length}</td>)}
-              <td style={cell}>{live(l.cards)}</td>
+              <td style={cell}>{liveOf(l.id)}</td>
             </tr>
           ))}
           <tr style={{ borderTop: '1px solid var(--border)', fontWeight: 600 }}>
@@ -112,7 +116,7 @@ function ByApp({ project, list, cards, totals }: { project: Project; list: Proje
             <td style={cell} />
             <td style={cell}><Money usd={row.costUsd} unpriced={row.unpriced && row.costUsd === 0} /></td>
             {COLS.map((c) => <td key={c.id} style={cell}>{lines.reduce((n, l) => n + l.cards.filter((x) => x.column === c.id).length, 0)}</td>)}
-            <td style={cell}>{lines.reduce((n, l) => n + live(l.cards), 0)}</td>
+            <td style={cell}>{lines.reduce((n, l) => n + liveOf(l.id), 0)}</td>
           </tr>
         </tbody>
       </table>

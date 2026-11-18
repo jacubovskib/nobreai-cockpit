@@ -103,3 +103,17 @@ describe('Worktrees', () => {
     expect(await screen.findByText(/Nenhum projeto cadastrado/)).toBeInTheDocument()
   })
 })
+
+describe('Worktrees · família', () => {
+  const grupo: ProjectWorktrees = { project: { id: 10, name: 'loja', path: '', capture: true, base_branch: '', parent_id: null }, error: '', worktrees: [], orphans: [] }
+  const filho: ProjectWorktrees = { project: { id: 11, name: 'web', path: '/w/web', capture: true, base_branch: '', parent_id: 10 }, error: '', worktrees: [], orphans: [] }
+  it('grupo vira cabeçalho com os repositórios dos filhos abaixo', async () => {
+    mockApi({ '/api/worktrees': [grupo, filho], '/api/projects': [grupo.project, filho.project] })
+    wrap('/worktrees')
+    const head = await screen.findByRole('heading', { name: 'loja' })
+    const child = screen.getByRole('heading', { name: 'loja › web' })
+    expect(head.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByText('grupo')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
