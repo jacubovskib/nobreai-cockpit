@@ -97,3 +97,50 @@ describe('Config opções reais', () => {
     expect(await screen.findByRole('option', { name: 'Marcar o card como “handoff incompleto” e avisar na Sala de controle' })).toBeInTheDocument()
   })
 })
+
+describe('Config sub-projetos', () => {
+  const loja = { id: 1, name: 'loja', path: '/w/loja', capture: true, base_branch: 'main', parent_id: null }
+  const web = { id: 2, name: 'web', path: '/w/loja/web', capture: false, base_branch: 'main', parent_id: null }
+  const api = { id: 3, name: 'api', path: '/w/loja/api', capture: true, base_branch: 'main', parent_id: 1 }
+
+  it('move to parent warns about capture', async () => {
+    const fn = mock({ ...routes(), '/api/projects': [loja, web], '/api/projects/1/suggestions': [], 'PATCH /api/projects/2': { ...web, parent_id: 1, moved: { sessions: 2, cards: 1 } } })
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Projetos' })
+    fireEvent.change(await within(sec).findByLabelText('Mover web para…'), { target: { value: '1' } })
+    expect(within(sec).getByText('A captura de web passa a seguir a de loja (ligada).')).toBeInTheDocument()
+    fireEvent.click(within(sec).getByRole('button', { name: 'Mover para loja' }))
+    expect(await within(sec).findByText('2 sessões e 1 cards passaram para web.')).toBeInTheDocument()
+    expect(calls(fn, 'PATCH', '/api/projects/2')).toEqual([{ parent_id: 1 }])
+  })
+
+  it('adds selected suggestions as children', async () => {
+    const sug = [{ path: '/w/loja/a', rel: 'a', name: 'a', source: 'pnpm' }, { path: '/w/loja/b', rel: 'b', name: 'b', source: 'pnpm' }, { path: '/w/loja/c', rel: 'c', name: 'c', source: 'pnpm' }]
+    const fn = mock({ ...routes(), '/api/projects': [loja], '/api/projects/1/suggestions': sug, 'POST /api/projects': loja })
+    wrap(<Config />)
+    expect(await screen.findByText('3 sub-projetos sugeridos')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText(/^c /))
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar selecionados' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/projects')).toHaveLength(2))
+    expect(calls(fn, 'POST', '/api/projects')).toEqual([
+      { name: 'a', path: '/w/loja/a', parent_id: 1 }, { name: 'b', path: '/w/loja/b', parent_id: 1 },
+    ])
+  })
+
+  it('dismiss suggestions calls dismiss route', async () => {
+    const sug = [{ path: '/w/loja/a', rel: 'a', name: 'a', source: 'pnpm' }]
+    const fn = mock({ ...routes(), '/api/projects': [loja], '/api/projects/1/suggestions': sug, 'POST /api/projects/1/suggestions/dismiss': {} })
+    wrap(<Config />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Não sugerir estes' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/projects/1/suggestions/dismiss')).toEqual([{ rels: ['a'] }]))
+  })
+
+  it('capture toggle hidden on child', async () => {
+    mock({ ...routes(), '/api/projects': [loja, api], '/api/projects/1/suggestions': [] })
+    wrap(<Config />)
+    await screen.findByText('api')
+    expect(screen.getByLabelText('Capturar sessões de loja')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Capturar sessões de api')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Desligar do projeto principal' })).toBeInTheDocument()
+  })
+})

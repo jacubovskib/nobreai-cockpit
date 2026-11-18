@@ -1,6 +1,6 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { del, patch, post, put } from '../api/client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { del, get, patch, post, put } from '../api/client'
 import { useAgents, useCards, useLimits, usePrices, useProjects, useSettings, useTotals } from '../api/queries'
 import type { AgentDetection, InstallReport, Limit, Price, Project, Settings } from '../api/types'
 import { agentInfo } from '../ui/agents'
@@ -345,25 +345,145 @@ function Handoff({ settings }: { settings: Settings }) {
 }
 
 // ---- Projetos ----
+interface Suggestion { path: string; rel: string; name: string; source: string }
+interface Moved { moved?: { sessions: number; cards: number } }
+
+// Pais válidos de um projeto solto: grupos e monorepos cuja pasta contém a dele.
+function validParents(p: Project, projects: Project[]): Project[] {
+  return projects.filter((q) => {
+    if (q.id === p.id || q.parent_id != null) return false
+    if (q.path === '') return true
+    return p.path.startsWith(q.path.replace(/\/+$/, '') + '/')
+  })
+}
+
+function Suggestions({ project }: { project: Project }) {
+  const qc = useQueryClient()
+  const list = useQuery({ queryKey: ['suggestions', project.id], queryFn: () => get<Suggestion[]>(`/api/projects/${project.id}/suggestions`) })
+  const [off, setOff] = useState<string[]>([])
+  const items = list.data ?? []
+  const chosen = items.filter((s) => !off.includes(s.rel))
+  const done = () => Promise.all([qc.invalidateQueries({ queryKey: ['projects'] }), qc.invalidateQueries({ queryKey: ['suggestions', project.id] })])
+  const addAll = useMutation({
+    mutationFn: async () => { for (const s of chosen) await post('/api/projects', { name: s.name, path: s.path, parent_id: project.id }) },
+    onSuccess: done,
+  })
+  const dismiss = useMutation({
+    mutationFn: () => post(`/api/projects/${project.id}/suggestions/dismiss`, { rels: chosen.map((s) => s.rel) }),
+    onSuccess: done,
+  })
+  if (items.length === 0) return null
+  return (
+    <div style={{ flexBasis: '100%', display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)' }}>
+      <strong>{items.length} {items.length === 1 ? 'sub-projeto sugerido' : 'sub-projetos sugeridos'}</strong>
+      {items.map((s) => (
+        <label key={s.rel} style={{ ...check, minHeight: 32, alignItems: 'center' }}>
+          <input type="checkbox" checked={!off.includes(s.rel)} onChange={(e) => setOff((o) => (e.target.checked ? o.filter((r) => r !== s.rel) : [...o, s.rel]))} />
+          <span>{s.name} <span className="mono" style={{ ...muted, fontSize: 12 }}>{s.rel}</span></span>
+        </label>
+      ))}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" style={btnPrimary} disabled={chosen.length === 0 || addAll.isPending} onClick={() => addAll.mutate()}>Adicionar selecionados</button>
+        <button type="button" style={btn} disabled={chosen.length === 0 || dismiss.isPending} onClick={() => dismiss.mutate()}>Não sugerir estes</button>
+      </div>
+      <ErrorLine error={addAll.error ?? dismiss.error} />
+    </div>
+  )
+}
+
+function ProjectRow({ p, projects, nCards, child }: { p: Project; projects: Project[]; nCards: number; child: boolean }) {
+  const qc = useQueryClient()
+  const parent = p.parent_id == null ? undefined : projects.find((x) => x.id === p.parent_id)
+  const hasKids = projects.some((x) => x.parent_id === p.id)
+  const loose = !child && !hasKids && p.path !== ''
+  const options = loose ? validParents(p, projects) : []
+  const [target, setTarget] = useState<number | null>(null)
+  const [report, setReport] = useState('')
+  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['projects'] }), qc.invalidateQueries({ queryKey: ['cards'] })])
+  const toggle = useMutation({ mutationFn: () => patch(`/api/projects/${p.id}`, { capture: !p.capture }), onSuccess: refresh })
+  const move = useMutation({
+    mutationFn: (parentId: number | null) => patch<Moved>(`/api/projects/${p.id}`, { parent_id: parentId }),
+    onSuccess: async (r) => {
+      setTarget(null)
+      setReport(r.moved ? `${r.moved.sessions} sessões e ${r.moved.cards} cards passaram para ${p.name}.` : '')
+      await refresh()
+    },
+  })
+  const dest = target == null ? undefined : projects.find((x) => x.id === target)
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, padding: '10px 0', paddingLeft: child ? 28 : 0, borderTop: '1px solid var(--border)' }}>
+      <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column' }}>
+        <strong>{p.name}{p.path === '' && <span className="badge" style={{ marginLeft: 8 }}>grupo</span>}</strong>
+        {p.path !== '' && <span className="mono" style={{ ...muted, fontSize: 12 }}>{p.path}</span>}
+      </div>
+      <span style={muted}>{child ? (parent?.capture ? `${nCards} ${nCards === 1 ? 'card' : 'cards'}` : 'captura desligada') : p.capture ? `${nCards} ${nCards === 1 ? 'card' : 'cards'}` : 'captura desligada'}</span>
+      {!child && (
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 40 }}>
+          <input type="checkbox" checked={p.capture} disabled={toggle.isPending} onChange={() => toggle.mutate()} aria-label={`Capturar sessões de ${p.name}`} />
+          Capturar sessões
+        </label>
+      )}
+      {loose && options.length > 0 && target == null && (
+        <select style={{ ...input, minHeight: 36 }} aria-label={`Mover ${p.name} para…`} value="" onChange={(e) => { setReport(''); setTarget(Number(e.target.value)) }}>
+          <option value="" disabled>Mover para…</option>
+          {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+      )}
+      {child && <button type="button" style={btn} disabled={move.isPending} onClick={() => { setReport(''); move.mutate(null) }}>Desligar do projeto principal</button>}
+      {dest && (
+        <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          {dest.capture !== p.capture && <span style={muted}>A captura de {p.name} passa a seguir a de {dest.name} ({dest.capture ? 'ligada' : 'desligada'}).</span>}
+          <button type="button" style={btnPrimary} disabled={move.isPending} onClick={() => move.mutate(dest.id)}>Mover para {dest.name}</button>
+          <button type="button" style={btn} onClick={() => setTarget(null)}>Cancelar</button>
+        </div>
+      )}
+      {report && <span role="status" style={{ ...muted, flexBasis: '100%', color: 'var(--ok)' }}>{report}</span>}
+      <div style={{ flexBasis: '100%' }}><ErrorLine error={toggle.error ?? move.error} /></div>
+      {!child && p.path !== '' && <Suggestions project={p} />}
+    </div>
+  )
+}
+
 function Projects({ projects }: { projects: Project[] }) {
   const qc = useQueryClient()
   const cards = useCards().data ?? []
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [adding, setAdding] = useState(false)
+  const [groupOpen, setGroupOpen] = useState(false)
+  const [group, setGroup] = useState('')
   const refresh = () => qc.invalidateQueries({ queryKey: ['projects'] })
-  const toggle = useMutation({ mutationFn: (p: Project) => patch(`/api/projects/${p.id}`, { capture: !p.capture }), onSuccess: refresh })
   const add = useMutation({
     mutationFn: () => post('/api/projects', { name: name.trim(), path: path.trim() }),
     onSuccess: async () => { await refresh(); setName(''); setPath(''); setAdding(false) },
   })
+  const addGroup = useMutation({
+    mutationFn: () => post('/api/projects', { name: group.trim() }),
+    onSuccess: async () => { await refresh(); setGroup(''); setGroupOpen(false) },
+  })
+  const roots = projects.filter((p) => p.parent_id == null)
   return (
     <Section
       id="projetos"
       title="Projetos"
-      hint="Só sessões dentro destes repositórios viram cards."
-      action={!adding && <button type="button" style={btn} onClick={() => { add.reset(); setAdding(true) }}>Adicionar repositório</button>}
+      hint="Só sessões dentro destes repositórios viram cards. Um monorepo pode ter sub-projetos; a captura segue a do projeto principal."
+      action={!adding && !groupOpen && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button type="button" style={btn} onClick={() => { addGroup.reset(); setGroupOpen(true) }}>Novo grupo</button>
+          <button type="button" style={btn} onClick={() => { add.reset(); setAdding(true) }}>Adicionar repositório</button>
+        </div>
+      )}
     >
+      {groupOpen && (
+        <form onSubmit={(e) => { e.preventDefault(); addGroup.mutate() }} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+          <label style={field}>Nome do grupo
+            <input style={input} value={group} onChange={(e) => setGroup(e.target.value)} />
+          </label>
+          <button type="submit" style={btnPrimary} disabled={addGroup.isPending || group.trim() === ''}>Criar grupo</button>
+          <button type="button" style={btn} onClick={() => setGroupOpen(false)}>Cancelar</button>
+          <div style={{ flexBasis: '100%' }}><ErrorLine error={addGroup.error} /></div>
+        </form>
+      )}
       {adding && (
         <form
           onSubmit={(e) => { e.preventDefault(); add.mutate() }}
@@ -381,23 +501,14 @@ function Projects({ projects }: { projects: Project[] }) {
         </form>
       )}
       {projects.length === 0 && <p style={muted}>Nenhum repositório cadastrado.</p>}
-      {projects.map((p) => {
-        const n = cards.filter((c) => c.project_id === p.id).length
-        return (
-          <div key={p.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: '1px solid var(--border)' }}>
-            <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column' }}>
-              <strong>{p.name}</strong>
-              <span className="mono" style={{ ...muted, fontSize: 12 }}>{p.path}</span>
-            </div>
-            <span style={muted}>{p.capture ? `${n} ${n === 1 ? 'card' : 'cards'}` : 'captura desligada'}</span>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 40 }}>
-              <input type="checkbox" checked={p.capture} disabled={toggle.isPending} onChange={() => toggle.mutate(p)} aria-label={`Capturar sessões de ${p.name}`} />
-              Capturar sessões
-            </label>
-          </div>
-        )
-      })}
-      <ErrorLine error={toggle.error} />
+      {roots.map((p) => (
+        <div key={p.id}>
+          <ProjectRow p={p} projects={projects} nCards={cards.filter((c) => c.project_id === p.id).length} child={false} />
+          {projects.filter((k) => k.parent_id === p.id).map((k) => (
+            <ProjectRow key={k.id} p={k} projects={projects} nCards={cards.filter((c) => c.project_id === k.id).length} child />
+          ))}
+        </div>
+      ))}
     </Section>
   )
 }

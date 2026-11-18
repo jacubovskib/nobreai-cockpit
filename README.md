@@ -39,6 +39,7 @@ por ele mesmo.</sub>
 - [Instalação](#instalação)
 - [Primeiros passos](#primeiros-passos)
 - [Usando no dia a dia](#usando-no-dia-a-dia)
+- [Monorepo e sub-projetos](#monorepo-e-sub-projetos)
 - [Referência do comando `nobre`](#referência-do-comando-nobre)
 - [Atualizar](#atualizar)
 - [Onde ficam os arquivos](#onde-ficam-os-arquivos)
@@ -284,6 +285,24 @@ limite por card, em US$. O aviso aparece no percentual configurado (padrão
 ferramentas do agente (só os comandos de handoff do `nobre`, como `note`, `status` e `done`, sem nada encadeado, continuam liberados, para ele registrar
 o handoff) e move o card para Pausado com o motivo "limite de custo".
 
+## Monorepo e sub-projetos
+
+Um monorepo pode ter um sub-projeto por app. Cadastre a raiz e ligue cada app a ela:
+
+```sh
+nobre project add ~/workspace/loja
+nobre project add ~/workspace/loja/apps/web --pai loja   # ou --pai <id>
+nobre project pai <projeto> <pai>                        # liga um projeto que já existe
+nobre project pai <projeto> --nenhum                     # desliga
+nobre project grupo "Clientes"                           # grupo de repositórios, sem pasta
+nobre project scan                                       # sugere os apps (--nao-sugerir <pasta> recusa)
+```
+
+- A sessão cai no app cuja pasta contém o `cwd`; na raiz, cai no projeto principal.
+- O agente põe o card no app certo com `nobre app <nome>` (`nobre app --geral` devolve ao principal). Na página do card, o campo Projeto também troca o app.
+- A captura é do projeto principal e vale para os apps. Os filtros e as somas de um monorepo ou grupo juntam os filhos.
+- Na Configuração, Projetos: "Novo grupo", "Mover para…", "Desligar do projeto principal" e as sugestões ("Adicionar selecionados", "Não sugerir estes").
+
 ## Referência do comando `nobre`
 
 Comandos para o agente (dentro de uma sessão):
@@ -308,7 +327,10 @@ Comandos de administração:
 
 | Comando | O que faz |
 |---|---|
-| `nobre project add [caminho] [--name <nome>]` | Cadastra um repositório |
+| `nobre project add [caminho] [--name <nome>] [--pai <id\|pasta>]` | Cadastra um repositório (ou um app de monorepo, com `--pai`) |
+| `nobre project pai <projeto> <pai\|--nenhum>` | Liga ou desliga um projeto de um pai |
+| `nobre project grupo "<nome>"` | Cria um grupo de repositórios |
+| `nobre app <nome>` / `nobre app --geral` | Põe o card no app do monorepo, ou no principal |
 | `nobre project scan [caminho]` | Levanta branches, planos, sessões e cards (só leitura) |
 | `nobre project base <branch> [caminho]` | Define o branch base do projeto |
 | `nobre project list` | Lista os projetos |

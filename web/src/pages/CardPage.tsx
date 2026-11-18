@@ -24,8 +24,8 @@ import { ResumePreview } from './card/ResumePreview'
 import { Sessions } from './card/Sessions'
 import { Todos } from './card/Todos'
 import { WhereStopped } from './card/WhereStopped'
-import { ErrorLine, btnPrimary, muted } from './card/shared'
-import { useWithProject } from '../app/project'
+import { ErrorLine, btnPrimary, input, muted } from './card/shared'
+import { displayName, familyIds, useWithProject } from '../app/project'
 
 export function CardPage() {
   const withP = useWithProject()
@@ -40,6 +40,11 @@ export function CardPage() {
   const approve = useMutation({
     mutationFn: () => patch(`/api/cards/${key}`, { column: 'concluido' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['card', key] }),
+  })
+
+  const move = useMutation({
+    mutationFn: (projectId: number) => patch(`/api/cards/${key}`, { project_id: projectId }),
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: ['card', key] }), qc.invalidateQueries({ queryKey: ['cards'] })]),
   })
 
   if (card.isLoading) return <p className="placeholder">Carregando…</p>
@@ -57,6 +62,7 @@ export function CardPage() {
   const currency = settings.data?.currency
   const rate = settings.data?.brl_rate
   const project = projects.data?.find((p) => p.id === c.project_id)
+  const family = project ? familyIds(projects.data ?? [], project.parent_id ?? project.id) : []
   const agents = new Set(c.sessions.map((s) => s.agent)).size
   const t = c.totals
   const tokens = t.input + t.output + t.cache_write + t.cache_read
@@ -81,7 +87,16 @@ export function CardPage() {
         </div>
         <h1 style={{ fontSize: 26 }}>{c.title}</h1>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', ...muted }}>
-          {project && <span>Repositório <span className="mono">{project.name}</span></span>}
+          {project && family.length > 1 ? (
+            <label>Projeto{' '}
+              <select style={{ ...input, minHeight: 32 }} value={project.id} disabled={move.isPending} onChange={(e) => move.mutate(Number(e.target.value))}>
+                {family.map((id) => {
+                  const p = projects.data?.find((x) => x.id === id)
+                  return p && <option key={id} value={id}>{displayName(p, projects.data ?? [])}</option>
+                })}
+              </select>
+            </label>
+          ) : project && <span>Repositório <span className="mono">{project.name}</span></span>}
           {c.branch && <span>Branch <span className="mono">{c.branch}</span></span>}
           {where && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>Worktree <WorktreeTag path={where.worktree} linked={where.worktree_linked} /></span>}
           <span>{plural(c.sessions.length, 'sessão', 'sessões')} · {plural(agents, 'agente', 'agentes')}</span>
@@ -97,6 +112,7 @@ export function CardPage() {
             <ErrorLine error={approve.error} />
           </div>
         )}
+        <ErrorLine error={move.error} />
       </header>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <div style={{ flex: '2 1 480px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>

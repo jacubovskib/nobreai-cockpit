@@ -112,6 +112,17 @@ Mostrados no board e na lista de cards da página do projeto (a lista de projeto
 - Moeda nos textos gerados pelo daemon (SessionStart, avisos): saem sempre em US$; a moeda escolhida vale só na interface.
 - Continuar com outro agente automaticamente ao pausar por limite.
 
+## Sub-projetos (NAC-23, 2026-11-17)
+
+Branch `feat/sub-projetos` (spec `docs/superpowers/specs/2026-11-17-sub-projetos-design.md`). Um monorepo vira um projeto principal com um sub-projeto por app, e um grupo reúne repositórios sem pasta comum.
+
+- **Modelo:** `projects.parent_id` (um nível só) e `path` opcional (sem pasta = grupo). Excluir um projeto com filhos é recusado. Desligar um filho o devolve a projeto solto.
+- **Sessão e card:** a sessão cai no filho cuja pasta contém o `cwd` (também em worktree ligado). O agente move o card com `nobre app <nome>` ou `nobre app --geral`; a página do card troca o projeto dentro da família (`PATCH /api/cards/{key}` com `project_id`, 400 fora dela).
+- **Captura:** é do projeto principal e vale para a família. Mover um projeto para um pai com captura diferente pede confirmação ("A captura de <filho> passa a seguir a de <pai> (ligada|desligada).") e informa quantas sessões e cards passaram para o filho.
+- **Sugestões:** `GET /api/projects/{id}/suggestions` e `POST .../suggestions/dismiss` (recusa lembrada em `subproject_dismissed`). A Configuração mostra "N sub-projetos sugeridos" com "Adicionar selecionados" e "Não sugerir estes".
+- **CLI:** `nobre project add --pai`, `nobre project pai`, `nobre project grupo`, `nobre project scan [--nao-sugerir]`, `nobre app`.
+- **Soma e filtro:** escolher um principal filtra e soma pela família; a página de Worktrees mostra o grupo como cabeçalho.
+
 ## Plano 2 (fora do piloto)
 Adaptadores Codex e Kiro, modos tmux e segundo plano, "bloquear novas sessões", limites mensais, linha do tempo das sessões e último prompt no pacote, indicador "Retomadas sem perguntas", MCP, times.
 
