@@ -46,6 +46,9 @@ func SyncCardBranch(st *store.Store, git gitinfo.BranchReader, cardID int64, bra
 		if p.ID != c.ProjectID {
 			continue
 		}
+		if p.IsGroup() {
+			return false, nil // grupo não tem branch
+		}
 		base, err := RepoBase(st, git, p)
 		if err != nil {
 			return false, err

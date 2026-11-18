@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -96,10 +97,12 @@ func (s *server) batchProjects(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// A adoção roda depois do commit (resolve o dono de cada sessão pela regra do
+	// hook, o que não cabe na transação). Se falhar, o cadastro já valeu: registra
+	// e devolve a família criada, com o que foi adotado até ali.
 	n, err := s.adoptRootSessions(p)
 	if err != nil {
-		writeStoreError(w, err, "")
-		return
+		log.Printf("lote: adoção de sessões de %s parou: %v", p.Path, err)
 	}
 	moved.Sessions += n
 	s.publish("config", "sessions", "cards")

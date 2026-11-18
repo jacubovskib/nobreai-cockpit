@@ -42,6 +42,9 @@ func validColumn(c domain.Column) bool {
 	return false
 }
 
+// msgGroupNoBranch recusa branch num card de grupo.
+const msgGroupNoBranch = "grupo não tem branch"
+
 // msgGroupNoCards recusa um grupo sem pasta como destino de card.
 const msgGroupNoCards = "um grupo não recebe cards; escolha um dos repositórios"
 
@@ -139,6 +142,10 @@ func (s *server) createCard(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.IsGroup() && p.Path == "" {
 		writeError(w, http.StatusBadRequest, msgGroupNoCards)
+		return
+	}
+	if p.IsGroup() && strings.TrimSpace(in.Branch) != "" {
+		writeError(w, http.StatusBadRequest, msgGroupNoBranch)
 		return
 	}
 	c, err := s.st.CreateCard(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,

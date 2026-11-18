@@ -209,6 +209,12 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		return
 	}
 	branch := strings.TrimSpace(in.Branch)
+	if gp, err := s.projectByID(projectID); err != nil {
+		writeStoreError(w, err, "")
+		return
+	} else if gp != nil && gp.IsGroup() {
+		branch = "" // card de grupo nunca guarda branch
+	}
 	if branch != "" {
 		base, err := s.projectBase(projectID)
 		if err != nil {
@@ -351,7 +357,7 @@ func (s *server) meBranch(w http.ResponseWriter, r *http.Request, sess domain.Se
 		writeStoreError(w, err, "")
 		return
 	} else if cur != nil && cur.IsGroup() {
-		writeError(w, http.StatusBadRequest, "grupo não tem branch")
+		writeError(w, http.StatusBadRequest, msgGroupNoBranch)
 		return
 	}
 	// A sessão fica com o branch atual: senão o PostToolUse deste mesmo comando

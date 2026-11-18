@@ -185,9 +185,10 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 	}
 	// Branch do card aberto num worktree ligado: o agente abre lá, sem
 	// checkout no principal (o git recusaria o branch já aberto).
-	// Grupo com pasta: o agente abre na pasta, sem branch nem worktree.
-	dir, inWorktree := p.Path, p.IsGroup()
-	if !p.IsGroup() {
+	// Grupo com pasta: o agente abre na pasta, sem branch, worktree nem checkout
+	// (o git nunca roda na pasta de um grupo).
+	dir, inWorktree, skipCheckout := p.Path, false, p.IsGroup()
+	if !skipCheckout {
 		dir, inWorktree = s.cardWorktreeDir(c, p.Path)
 	}
 	cmd := ad.LaunchCommand(bin, initial)
@@ -205,7 +206,7 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !inWorktree {
+	if !inWorktree && !skipCheckout {
 		if err := s.checkoutCardBranch(c, p.Path); err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return

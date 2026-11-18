@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -245,5 +247,66 @@ func TestBranchRefusedOnGroupCard(t *testing.T) {
 	rec := a.do(t, "POST", "/api/me/branch", map[string]string{"branch": "feat/x"}, 4242)
 	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "grupo não tem branch" {
 		t.Fatalf("branch = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// noGit falha o teste se o daemon tocar no git: nunca roda na pasta de um grupo.
+type noGit struct{ t *testing.T }
+
+func (g noGit) Branch(d string) string      { g.t.Errorf("Branch(%s)", d); return "" }
+func (g noGit) Head(d string) string        { g.t.Errorf("Head(%s)", d); return "" }
+func (g noGit) DiffStat(d, _ string) string { g.t.Errorf("DiffStat(%s)", d); return "" }
+func (g noGit) Clean(d string) bool         { g.t.Errorf("Clean(%s)", d); return true }
+func (g noGit) Checkout(d, b string) error  { g.t.Errorf("Checkout(%s, %s)", d, b); return nil }
+func (g noGit) Locate(d string) gitinfo.Location {
+	g.t.Errorf("Locate(%s)", d)
+	return gitinfo.Location{}
+}
+func (g noGit) Worktrees(d string) ([]gitinfo.Worktree, error) {
+	g.t.Errorf("Worktrees(%s)", d)
+	return nil, nil
+}
+
+func TestContinueGroupCardOpensInFolderWithoutGit(t *testing.T) {
+	a, l := continueAPI(t, noGit{t})
+	dir := repoDirs(t, "a")
+	g, err := a.st.CreateGroupAt("turing", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := a.st.CreateCard(domain.Card{Title: "geral", ProjectID: g.ID, Branch: "feat/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/cards/"+c.Key+"/continue", map[string]any{"agent": "claude", "prompt_slug": "nenhum"}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("continue = %d %s", rec.Code, rec.Body)
+	}
+	if len(l.calls) != 1 || !strings.Contains(l.calls[0][len(l.calls[0])-1], dir) {
+		t.Fatalf("lançamentos = %q", l.calls)
+	}
+}
+
+func TestSyncCardBranchSkipsGroupCard(t *testing.T) {
+	a := newTestAPI(t)
+	g := groupWithFolder(t, a)
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: g.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := board.SyncCardBranch(a.st, nil, c.ID, "feat/x"); err != nil || changed {
+		t.Fatalf("changed = %v err = %v", changed, err)
+	}
+	if got, _ := a.st.GetCardByID(c.ID); got.Branch != "" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+}
+
+func TestGroupCardRefusesBranch(t *testing.T) {
+	a := newTestAPI(t)
+	g := groupWithFolder(t, a)
+	rec := a.do(t, "POST", "/api/cards", map[string]any{"title": "x", "project_id": g.ID, "branch": "feat/x"}, 0)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "grupo não tem branch" {
+		t.Fatalf("card = %d %s", rec.Code, rec.Body)
 	}
 }
