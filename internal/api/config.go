@@ -376,7 +376,11 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 	p.ID = id
 	p.ParentID = oldParent // o pai muda só por "parent_id", abaixo
 	if isApp {
-		p.BaseBranch = oldBase // a base de um app é a do repositório do pai
+		if p.BaseBranch != oldBase {
+			writeError(w, http.StatusBadRequest, "a base de um app é a do projeto principal "+repo.Name)
+			return
+		}
+		p.BaseBranch = oldBase // omitida ou igual: segue a do repositório do pai
 	}
 	if strings.TrimSpace(p.Name) == "" {
 		writeError(w, http.StatusBadRequest, "nome obrigatório")

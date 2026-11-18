@@ -360,3 +360,35 @@ func TestCLIProjectGrupoAndAddPai(t *testing.T) {
 		t.Fatalf("corpos = %v", bodies)
 	}
 }
+
+func TestCLIProjectBaseOnAppPrintsServerRefusal(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":1,"name":"loja","path":"/r/loja","capture":true},{"id":2,"name":"web","path":"/r/loja/web","capture":true,"parent_id":1}]`))
+		case r.Method == "PATCH" && r.URL.Path == "/api/projects/2":
+			w.WriteHeader(400)
+			w.Write([]byte(`{"error":"a base de um app é a do projeto principal loja"}`))
+		default:
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+	})
+	r := runProjectCLI(t, addr, "/r/loja/web", testRepos, "project", "base", "develop")
+	if r.code == 0 || !strings.Contains(r.err, "a base de um app é a do projeto principal loja") || strings.Contains(r.stdout, "Base do projeto") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCLIProjectPaiUnknownNumericIDIsNotAPath(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/projects" {
+			w.Write([]byte(`[{"id":1,"name":"loja","path":"/r/loja","capture":true}]`))
+			return
+		}
+		t.Errorf("%s %s", r.Method, r.URL.Path)
+	})
+	r := runProjectCLI(t, addr, "/r", testRepos, "project", "pai", "99", "1")
+	if r.code == 0 || !strings.Contains(r.err, "projeto 99 não encontrado") {
+		t.Fatalf("%+v", r)
+	}
+}

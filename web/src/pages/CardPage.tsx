@@ -92,7 +92,7 @@ export function CardPage() {
               <select style={{ ...input, minHeight: 32 }} value={project.id} disabled={move.isPending} onChange={(e) => move.mutate(Number(e.target.value))}>
                 {family.map((id) => {
                   const p = projects.data?.find((x) => x.id === id)
-                  return p && <option key={id} value={id}>{displayName(p, projects.data ?? [])}</option>
+                  return p && p.path !== '' && <option key={id} value={id}>{displayName(p, projects.data ?? [])}</option>
                 })}
               </select>
             </label>

@@ -114,6 +114,19 @@ describe('Config sub-projetos', () => {
     expect(calls(fn, 'PATCH', '/api/projects/2')).toEqual([{ parent_id: 1 }])
   })
 
+  it('move report survives the refetch that remounts the row', async () => {
+    const routesMap: Record<string, unknown> = { ...routes(), '/api/projects': [loja, web], '/api/projects/1/suggestions': [], 'PATCH /api/projects/2': { ...web, parent_id: 1, moved: { sessions: 2, cards: 1 } } }
+    mock(routesMap)
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Projetos' })
+    fireEvent.change(await within(sec).findByLabelText('Mover web para…'), { target: { value: '1' } })
+    routesMap['/api/projects'] = [loja, { ...web, parent_id: 1 }]
+    fireEvent.click(within(sec).getByRole('button', { name: 'Mover para loja' }))
+    // Espera a linha remontar como filha (o botão de desligar só existe nela).
+    await screen.findByRole('button', { name: 'Desligar do projeto principal' })
+    expect(screen.getByText('2 sessões e 1 card passaram para web.')).toBeInTheDocument()
+  })
+
   it('adds selected suggestions as children', async () => {
     const sug = [{ path: '/w/loja/a', rel: 'a', name: 'a', source: 'pnpm' }, { path: '/w/loja/b', rel: 'b', name: 'b', source: 'pnpm' }, { path: '/w/loja/c', rel: 'c', name: 'c', source: 'pnpm' }]
     const fn = mock({ ...routes(), '/api/projects': [loja], '/api/projects/1/suggestions': sug, 'POST /api/projects': loja })

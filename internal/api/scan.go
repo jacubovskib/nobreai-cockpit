@@ -106,10 +106,12 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	for _, c := range cs {
 		cards = append(cards, scanCard{c.Key, c.Title, string(c.Column), c.Branch})
 	}
-	sugg, err := s.openSuggestions(repo)
-	if err != nil {
-		writeStoreError(w, err, "")
-		return
+	sugg := []workspaces.Suggestion{}
+	if p.ParentID == nil { // um nível só: um sub-projeto não recebe sugestões
+		if sugg, err = s.openSuggestions(repo); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, struct {
 		scan.Result

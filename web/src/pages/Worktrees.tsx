@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { useWorktrees } from '../api/queries'
+import { useProjects, useWorktrees } from '../api/queries'
 import { displayName, useProjectFilter, useWithProject } from '../app/project'
 import type { Project, ProjectWorktrees, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
@@ -123,6 +123,7 @@ function ProjectSection({ p, all }: { p: ProjectWorktrees; all: Project[] }) {
 export function Worktrees() {
   const { data, isPending, isError } = useWorktrees()
   const { ids } = useProjectFilter()
+  const projects = useProjects().data
   const location = useLocation()
   const navigate = useNavigate()
   // O aviso (branch mantido) vem no estado do histórico: guarda e limpa o
@@ -134,7 +135,13 @@ export function Worktrees() {
   }, [stateNotice, location.pathname, location.search, navigate])
   if (isError) return <p role="alert" style={{ color: 'var(--err)' }}>Não foi possível carregar os worktrees.</p>
   if (isPending || !data) return <p className="placeholder">Carregando…</p>
-  const shown = data.filter((p) => ids === null || ids.includes(p.project.id))
+  // Um app de monorepo não tem worktree próprio: mostra a seção do pai.
+  const sectionIds = ids === null ? null : ids.map((id) => {
+    const p = projects?.find((x) => x.id === id)
+    const parent = p?.parent_id == null ? undefined : projects?.find((x) => x.id === p.parent_id)
+    return parent && parent.path !== '' ? parent.id : id
+  })
+  const shown = data.filter((p) => sectionIds === null || sectionIds.includes(p.project.id))
   const all = data.map((p) => p.project)
   const shownIds = new Set(shown.map((p) => p.project.id))
   return (

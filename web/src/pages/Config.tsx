@@ -391,21 +391,20 @@ function Suggestions({ project }: { project: Project }) {
   )
 }
 
-function ProjectRow({ p, projects, nCards, child }: { p: Project; projects: Project[]; nCards: number; child: boolean }) {
+function ProjectRow({ p, projects, nCards, child, report, setReport }: { p: Project; projects: Project[]; nCards: number; child: boolean; report: string; setReport: (id: number, text: string) => void }) {
   const qc = useQueryClient()
   const parent = p.parent_id == null ? undefined : projects.find((x) => x.id === p.parent_id)
   const hasKids = projects.some((x) => x.parent_id === p.id)
   const loose = !child && !hasKids && p.path !== ''
   const options = loose ? validParents(p, projects) : []
   const [target, setTarget] = useState<number | null>(null)
-  const [report, setReport] = useState('')
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['projects'] }), qc.invalidateQueries({ queryKey: ['cards'] })])
   const toggle = useMutation({ mutationFn: () => patch(`/api/projects/${p.id}`, { capture: !p.capture }), onSuccess: refresh })
   const move = useMutation({
     mutationFn: (parentId: number | null) => patch<Moved>(`/api/projects/${p.id}`, { parent_id: parentId }),
     onSuccess: async (r) => {
       setTarget(null)
-      setReport(r.moved ? `${r.moved.sessions} ${r.moved.sessions === 1 ? 'sessão' : 'sessões'} e ${r.moved.cards} ${r.moved.cards === 1 ? 'card' : 'cards'} passaram para ${p.name}.` : '')
+      setReport(p.id, r.moved ? `${r.moved.sessions} ${r.moved.sessions === 1 ? 'sessão' : 'sessões'} e ${r.moved.cards} ${r.moved.cards === 1 ? 'card' : 'cards'} passaram para ${p.name}.` : '')
       await refresh()
     },
   })
@@ -424,12 +423,12 @@ function ProjectRow({ p, projects, nCards, child }: { p: Project; projects: Proj
         </label>
       )}
       {loose && options.length > 0 && target == null && (
-        <select style={{ ...input, minHeight: 36 }} aria-label={`Mover ${p.name} para…`} value="" onChange={(e) => { setReport(''); setTarget(Number(e.target.value)) }}>
+        <select style={{ ...input, minHeight: 36 }} aria-label={`Mover ${p.name} para…`} value="" onChange={(e) => { setReport(p.id, ''); setTarget(Number(e.target.value)) }}>
           <option value="" disabled>Mover para…</option>
           {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
         </select>
       )}
-      {child && <button type="button" style={btn} disabled={move.isPending} onClick={() => { setReport(''); move.mutate(null) }}>Desligar do projeto principal</button>}
+      {child && <button type="button" style={btn} disabled={move.isPending} onClick={() => { setReport(p.id, ''); move.mutate(null) }}>Desligar do projeto principal</button>}
       {dest && (
         <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           {dest.capture !== p.capture && <span style={muted}>A captura de {p.name} passa a seguir a de {dest.name} ({dest.capture ? 'ligada' : 'desligada'}).</span>}
@@ -450,6 +449,9 @@ function Projects({ projects }: { projects: Project[] }) {
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [adding, setAdding] = useState(false)
+  // O relatório de "Mover para…" fica aqui: a linha remonta quando muda de pai.
+  const [reports, setReports] = useState<Record<number, string>>({})
+  const setReport = (id: number, text: string) => setReports((r) => ({ ...r, [id]: text }))
   const [groupOpen, setGroupOpen] = useState(false)
   const [group, setGroup] = useState('')
   const refresh = () => qc.invalidateQueries({ queryKey: ['projects'] })
@@ -503,9 +505,9 @@ function Projects({ projects }: { projects: Project[] }) {
       {projects.length === 0 && <p style={muted}>Nenhum repositório cadastrado.</p>}
       {roots.map((p) => (
         <div key={p.id}>
-          <ProjectRow p={p} projects={projects} nCards={cards.filter((c) => c.project_id === p.id).length} child={false} />
+          <ProjectRow p={p} projects={projects} nCards={cards.filter((c) => c.project_id === p.id).length} child={false} report={reports[p.id] ?? ''} setReport={setReport} />
           {projects.filter((k) => k.parent_id === p.id).map((k) => (
-            <ProjectRow key={k.id} p={k} projects={projects} nCards={cards.filter((c) => c.project_id === k.id).length} child />
+            <ProjectRow key={k.id} p={k} projects={projects} nCards={cards.filter((c) => c.project_id === k.id).length} child report={reports[k.id] ?? ''} setReport={setReport} />
           ))}
         </div>
       ))}

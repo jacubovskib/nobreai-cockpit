@@ -460,3 +460,31 @@ func TestPatchCardProjectWithinFamily(t *testing.T) {
 		t.Fatalf("projeto inexistente = %d", rec.Code)
 	}
 }
+
+func TestCardsRefuseAGroupAsProject(t *testing.T) {
+	a := newTestAPI(t)
+	g, err := a.st.CreateGroup("loja")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _, err := a.st.CreateChild("api", "/r/loja/api", g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const msg = "um grupo não recebe cards; escolha um dos repositórios"
+	rec := a.do(t, "POST", "/api/cards", map[string]any{"title": "x", "project_id": g.ID}, 0)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != msg {
+		t.Fatalf("criar no grupo = %d %s", rec.Code, rec.Body)
+	}
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: repo.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = a.do(t, "PATCH", "/api/cards/"+c.Key, map[string]any{"project_id": g.ID}, 0)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != msg {
+		t.Fatalf("mover para o grupo = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.ProjectID != repo.ID {
+		t.Fatalf("card mudou de projeto: %d", got.ProjectID)
+	}
+}

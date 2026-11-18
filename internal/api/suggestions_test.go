@@ -6,7 +6,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
@@ -63,5 +66,71 @@ func TestSuggestionsEmptyIsArrayAndAddReturnsThem(t *testing.T) {
 	rec = a.do(t, "POST", "/api/projects", map[string]string{"name": "loja", "path": root}, 0)
 	if got := decode[struct{ Suggestions []workspaces.Suggestion }](t, rec).Suggestions; rec.Code != http.StatusCreated || len(got) != 3 {
 		t.Fatalf("add = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// gitScanAPI é uma API com git de verdade e um repositório com workspace pnpm
+// (apps/web, apps/api, packages/ui), para exercitar o /scan.
+func gitScanAPI(t *testing.T) (*testAPI, string) {
+	t.Helper()
+	root, _ := gitRepoWithWorktree(t)
+	for _, d := range []string{"apps/web", "apps/api", "packages/ui"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "pnpm-workspace.yaml"), []byte("packages:\n  - 'apps/*'\n  - packages/ui\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+	return &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Git: gitinfo.Exec{}})}, root
+}
+
+func TestSuggestionsSurviveCorruptDismissedValue(t *testing.T) {
+	a, root := gitScanAPI(t)
+	p, err := a.st.CreateProject("loja", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.st.DB.Exec(`INSERT INTO settings(key, value) VALUES (?, ?)`, dismissedKey, "{não é json"); err != nil {
+		t.Fatal(err)
+	}
+	id := strconv.FormatInt(p.ID, 10)
+	rec := a.do(t, "GET", "/api/projects/"+id+"/suggestions", nil, 0)
+	if rec.Code != http.StatusOK || len(decode[[]workspaces.Suggestion](t, rec)) != 3 {
+		t.Fatalf("sugestões = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "GET", "/api/projects/"+id+"/scan", nil, 0)
+	if rec.Code != http.StatusOK || len(decode[struct{ Suggestions []workspaces.Suggestion }](t, rec).Suggestions) != 3 {
+		t.Fatalf("scan = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestScanOfASubprojectHasNoSuggestions(t *testing.T) {
+	a, root := gitScanAPI(t)
+	p, err := a.st.CreateProject("loja", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	web, _, err := a.st.CreateChild("web", filepath.Join(root, "apps/web"), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "GET", "/api/projects/"+strconv.FormatInt(p.ID, 10)+"/scan", nil, 0)
+	if rec.Code != http.StatusOK || len(decode[struct{ Suggestions []workspaces.Suggestion }](t, rec).Suggestions) != 2 {
+		t.Fatalf("scan do pai = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "GET", "/api/projects/"+strconv.FormatInt(web.ID, 10)+"/scan", nil, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("scan do app = %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[struct{ Suggestions []workspaces.Suggestion }](t, rec).Suggestions; got == nil || len(got) != 0 {
+		t.Fatalf("sugestões do app = %s", rec.Body)
 	}
 }

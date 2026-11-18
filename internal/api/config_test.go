@@ -362,3 +362,24 @@ func TestPatchParentErrorsAre400(t *testing.T) {
 		t.Fatalf("religar = %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestPatchAppBaseBranchIsRefusedUnlessUnchanged(t *testing.T) {
+	a := newTestAPI(t)
+	pai := decode[domain.Project](t, a.do(t, "POST", "/api/projects", map[string]any{"name": "loja", "path": "/r/loja", "base_branch": "main"}, 0))
+	app, _, err := a.st.CreateChild("web", "/r/loja/web", pai.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := "/api/projects/" + strconv.FormatInt(app.ID, 10)
+	rec := a.do(t, "PATCH", url, map[string]any{"name": "web", "path": "/r/loja/web", "capture": true, "base_branch": "develop"}, 0)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "a base de um app é a do projeto principal loja" {
+		t.Fatalf("base trocada = %d %s", rec.Code, rec.Body)
+	}
+	// Base omitida (ou igual à atual) segue funcionando.
+	if rec := a.do(t, "PATCH", url, map[string]any{"name": "web2", "path": "/r/loja/web", "capture": true}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("base omitida = %d %s", rec.Code, rec.Body)
+	}
+	if rec := a.do(t, "PATCH", url, map[string]any{"name": "web2", "path": "/r/loja/web", "capture": true, "base_branch": app.BaseBranch}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("base igual = %d %s", rec.Code, rec.Body)
+	}
+}

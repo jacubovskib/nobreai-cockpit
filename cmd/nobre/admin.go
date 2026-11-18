@@ -285,6 +285,7 @@ func (c *cli) findProjectRef(arg string) (*domain.Project, error) {
 				return &ps[i], nil
 			}
 		}
+		return nil, fmt.Errorf("projeto %d não encontrado", id)
 	}
 	for i := range ps {
 		if ps[i].ParentID == nil && ps[i].Path == "" && strings.EqualFold(ps[i].Name, arg) {

@@ -1,6 +1,9 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -61,7 +64,14 @@ func (s *server) openSuggestions(repo domain.Project) ([]workspaces.Suggestion, 
 	}
 	dismissed := map[string][]string{}
 	if _, err := s.st.GetKV(dismissedKey, &dismissed); err != nil {
-		return nil, err
+		var syn *json.SyntaxError
+		var typ *json.UnmarshalTypeError
+		if !errors.As(err, &syn) && !errors.As(err, &typ) {
+			return nil, err
+		}
+		// Valor corrompido: as recusas se perdem, o resto segue funcionando.
+		log.Printf("sugestões: %s ilegível, ignorando as recusas: %v", dismissedKey, err)
+		dismissed = map[string][]string{}
 	}
 	hidden := map[string]bool{}
 	for _, rel := range dismissed[strconv.FormatInt(repo.ID, 10)] {

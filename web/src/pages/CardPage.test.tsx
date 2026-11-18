@@ -249,4 +249,15 @@ describe('ContinuePanel', () => {
     fireEvent.change(sel, { target: { value: '3' } })
     await waitFor(() => expect(bodies(fn, 'PATCH', '/api/cards/NAC-42')).toEqual([{ project_id: 3 }]))
   })
+
+  it('card project select leaves out pathless groups', async () => {
+    const mk = (id: number, name: string, path: string, parent_id: number | null) => ({ id, name, path, capture: true, base_branch: 'main', parent_id })
+    mock({
+      ...base, '/api/cards/NAC-42': { ...detail, project_id: 2 },
+      '/api/projects': [mk(1, 'loja', '', null), mk(2, 'web', '/w/web', 1), mk(3, 'api', '/w/api', 1)],
+    })
+    wrap(<CardPage />)
+    const sel = await screen.findByLabelText('Projeto')
+    expect(Array.from((sel as HTMLSelectElement).options).map((o) => o.text)).toEqual(['loja › web', 'loja › api'])
+  })
 })

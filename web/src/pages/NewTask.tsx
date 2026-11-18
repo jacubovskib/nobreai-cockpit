@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useProjects } from '../api/queries'
 import { post } from '../api/client'
-import { useProjectFilter } from '../app/project'
+import { displayName, useProjectFilter } from '../app/project'
 
 const field: React.CSSProperties = { minHeight: 40, padding: '0 10px', borderRadius: 8, border: '1px solid #2E333E', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' }
 const btn: React.CSSProperties = { minHeight: 40, padding: '0 14px', borderRadius: 8, border: '1px solid #3A3F4B', background: 'transparent', color: 'var(--text)', font: 'inherit', cursor: 'pointer' }
@@ -18,7 +18,8 @@ export function NewTask() {
   const qc = useQueryClient()
   const projects = useProjects().data
   const { projectId } = useProjectFilter()
-  const chosen = project || String(projectId ?? projects?.[0]?.id ?? '')
+  const repos = (projects ?? []).filter((p) => p.path !== '')
+  const chosen = project || String(repos.find((p) => p.id === projectId)?.id ?? repos[0]?.id ?? '')
   const create = useMutation({
     mutationFn: () =>
       post('/api/cards', { title: title.trim(), goal: goal.trim(), project_id: Number(chosen) }),
@@ -60,7 +61,7 @@ export function NewTask() {
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-2)' }}>
         Projeto
         <select value={chosen} onChange={(e) => setProject(e.target.value)} style={field}>
-          {(projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {(projects ?? []).filter((p) => p.path !== '').map((p) => <option key={p.id} value={p.id}>{displayName(p, projects ?? [])}</option>)}
         </select>
       </label>
       <button type="submit" style={{ ...btn, background: '#2A2F3A', color: '#fff' }} disabled={create.isPending || !title.trim()}>Criar tarefa</button>

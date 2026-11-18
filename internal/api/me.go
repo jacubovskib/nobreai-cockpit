@@ -403,6 +403,10 @@ func (s *server) meApp(w http.ResponseWriter, r *http.Request, sess domain.Sessi
 		writeError(w, http.StatusBadRequest, "informe o app ou geral, não os dois")
 		return
 	case in.Geral:
+		if repo.Path == "" {
+			writeError(w, http.StatusBadRequest, msgGroupNoCards)
+			return
+		}
 	case name == "":
 		writeError(w, http.StatusBadRequest, "informe o app ou geral")
 		return
