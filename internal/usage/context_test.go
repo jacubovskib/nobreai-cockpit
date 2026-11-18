@@ -256,6 +256,13 @@ func TestBashKey(t *testing.T) {
 		"timeout 30 pnpm test":                          "pnpm test",
 		"rtk git status":                                "git status",
 		"nohup nice make update":                        "make update",
+		"cd /x\ngo test ./...":                          "go test",
+		"git\nfoo":                                      "git",
+		"sudo -u root systemctl restart x":              "systemctl restart",
+		"timeout -s KILL 30 go test":                    "go test",
+		"env -i A=1 go build":                           "go build",
+		"env -u HOME go build":                          "go build",
+		"-x foo":                                        "outro",
 	}
 	for in, want := range cases {
 		if got := BashKey(in); got != want {

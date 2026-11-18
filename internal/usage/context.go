@@ -389,7 +389,7 @@ func BashKey(command string) string {
 			skipFlags("-u", "-g")
 		case filepath.Base(t) == "env":
 			toks = toks[1:]
-			skipFlags()
+			skipFlags("-u")
 		case filepath.Base(t) == "timeout":
 			toks = toks[1:]
 			skipFlags("-s", "-k")
