@@ -47,6 +47,8 @@ type Deps struct {
 	Terminals *pty.Manager
 	// Integration é o monitor da integração com o agente; nil = rotas 503.
 	Integration IntegrationSource
+	// Home é a raiz do seletor de pastas (vazio = os.UserHomeDir()); existe para os testes.
+	Home string
 }
 
 type server struct {
@@ -86,6 +88,7 @@ func New(st *store.Store, deps Deps) http.Handler {
 	s.worktreeRoutes(mux)
 	s.terminalRoutes(mux)
 	s.planLimitsRoutes(mux)
+	s.fsRoutes(mux)
 	mux.Handle("/", spaHandler(distFS()))
 	return localOnly(mux)
 }
