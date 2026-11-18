@@ -18,6 +18,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/proc"
+	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
 // Timeout é o prazo de cada chamada.
@@ -268,12 +269,19 @@ type Scan struct {
 	Plans    []ScanPlan    `json:"plans"`
 	Sessions []ScanSession `json:"sessions"`
 	Cards    []ScanCard    `json:"cards"`
+
+	Suggestions []workspaces.Suggestion `json:"suggestions"`
 }
 
 // ScanProject pede o levantamento só de leitura do projeto.
 func (c *Client) ScanProject(ctx context.Context, id int64) (Scan, error) {
 	var s Scan
 	return s, c.Do(ctx, "GET", "/api/projects/"+strconv.FormatInt(id, 10)+"/scan", nil, &s)
+}
+
+// DismissSuggestions recusa sugestões de sub-projeto (rels relativos à raiz).
+func (c *Client) DismissSuggestions(ctx context.Context, id int64, rels []string) error {
+	return c.Do(ctx, "POST", "/api/projects/"+strconv.FormatInt(id, 10)+"/suggestions/dismiss", map[string][]string{"rels": rels}, nil)
 }
 
 // AddCard cria um card no projeto da sessão sem ligar a sessão a ele.
@@ -307,5 +315,6 @@ func (c *Client) SavePrompt(ctx context.Context, p domain.Prompt) (domain.Prompt
 // AddedProject é a resposta de AddProject: o projeto e as sessões religadas.
 type AddedProject struct {
 	domain.Project
-	Reassigned int `json:"reassigned"`
+	Reassigned  int                     `json:"reassigned"`
+	Suggestions []workspaces.Suggestion `json:"suggestions"`
 }

@@ -14,7 +14,7 @@ import (
 )
 
 func (c *cli) project(args []string) error {
-	const u = "uso: nobre project add [path] [--name <nome>] | nobre project base <branch> [path] | nobre project scan [path] | nobre project list"
+	const u = "uso: nobre project add [path] [--name <nome>] | nobre project base <branch> [path] | nobre project scan [path] [--nao-sugerir rel,rel] | nobre project list"
 	if len(args) == 0 {
 		return usagef(u)
 	}
@@ -54,6 +54,17 @@ func (c *cli) project(args []string) error {
 			info = append(info, fmt.Sprintf("%d sessões religadas", p.Reassigned))
 		}
 		fmt.Fprintf(c.out, "Projeto %s cadastrado: %s (%s)\n", p.Name, p.Path, strings.Join(info, ", "))
+		if sg := p.Suggestions; len(sg) > 0 {
+			const max = 5
+			fmt.Fprintln(c.out, "Sub-projetos sugeridos (liste ao usuário, não cadastre sem ele pedir):")
+			for i, x := range sg {
+				if i == max {
+					fmt.Fprintf(c.out, "  mais %d na Configuração → Projetos\n", len(sg)-max)
+					break
+				}
+				fmt.Fprintf(c.out, "  %s  (%s)\n", x.Rel, x.Source)
+			}
+		}
 	case "base":
 		pos, err := c.parse(flag.NewFlagSet("project base", flag.ContinueOnError), args[1:])
 		if err != nil {
@@ -176,7 +187,9 @@ func (c *cli) ui() error {
 
 // projectScan imprime o levantamento do projeto que contém path (padrão: cwd).
 func (c *cli) projectScan(u string, args []string) error {
-	pos, err := c.parse(flag.NewFlagSet("project scan", flag.ContinueOnError), args)
+	fs := flag.NewFlagSet("project scan", flag.ContinueOnError)
+	noSuggest := fs.String("nao-sugerir", "", "sub-projetos a não sugerir mais (pastas relativas, separadas por vírgula)")
+	pos, err := c.parse(fs, args)
 	if err != nil {
 		return err
 	}
@@ -190,6 +203,18 @@ func (c *cli) projectScan(u string, args []string) error {
 	found, err := c.findProject(arg)
 	if err != nil {
 		return err
+	}
+	if *noSuggest != "" {
+		var rels []string
+		for _, r := range strings.Split(*noSuggest, ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				rels = append(rels, r)
+			}
+		}
+		if err := c.client().DismissSuggestions(ctx(), found.ID, rels); err != nil {
+			return err
+		}
+		fmt.Fprintf(c.out, "Não vou mais sugerir: %s\n", strings.Join(rels, ", "))
 	}
 	s, err := c.client().ScanProject(ctx(), found.ID)
 	if err != nil {
@@ -227,6 +252,12 @@ func (c *cli) projectScan(u string, args []string) error {
 	fmt.Fprintf(c.out, "\nCards que já existem (%d):\n", len(s.Cards))
 	for _, k := range s.Cards {
 		fmt.Fprintf(c.out, "  %s  [%s]  %s  %s\n", k.Key, k.Column, k.Title, k.Branch)
+	}
+	if len(s.Suggestions) > 0 {
+		fmt.Fprintf(c.out, "\nSub-projetos sugeridos (%d):\n", len(s.Suggestions))
+		for _, x := range s.Suggestions {
+			fmt.Fprintf(c.out, "  %s  (%s)\n", x.Rel, x.Source)
+		}
 	}
 	return nil
 }

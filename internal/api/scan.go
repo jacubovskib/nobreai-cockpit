@@ -10,6 +10,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/scan"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
 const (
@@ -105,9 +106,15 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	for _, c := range cs {
 		cards = append(cards, scanCard{c.Key, c.Title, string(c.Column), c.Branch})
 	}
+	sugg, err := s.openSuggestions(repo)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		scan.Result
-		Sessions []scanSession `json:"sessions"`
-		Cards    []scanCard    `json:"cards"`
-	}{res, sessions, cards})
+		Sessions    []scanSession           `json:"sessions"`
+		Cards       []scanCard              `json:"cards"`
+		Suggestions []workspaces.Suggestion `json:"suggestions"`
+	}{res, sessions, cards, sugg})
 }

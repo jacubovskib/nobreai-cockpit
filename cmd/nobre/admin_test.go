@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -251,5 +252,50 @@ func TestCLIProjectScanAndBaseFindProjectFromSubdirAndWorktree(t *testing.T) {
 		if !slices.Contains(paths, "PATCH /api/projects/3") {
 			t.Fatalf("base em %s não chamou o projeto 3: %v", cwd, paths)
 		}
+	}
+}
+
+func TestProjectScanPrintsSuggestions(t *testing.T) {
+	var dismissed []string
+	var order []string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		order = append(order, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":3,"name":"api","path":"/w/api"}]`))
+		case r.URL.Path == "/api/projects/3/suggestions/dismiss":
+			b, _ := io.ReadAll(r.Body)
+			dismissed = append(dismissed, string(b))
+			w.WriteHeader(204)
+		case r.URL.Path == "/api/projects/3/scan":
+			w.Write([]byte(`{"repo":"/w/api","base":"main","branches":[],"plans":[],"sessions":[],"cards":[],
+			 "suggestions":[{"path":"/w/api/apps/web","rel":"apps/web","name":"web","source":"pnpm-workspace.yaml"}]}`))
+		default:
+			t.Errorf("path = %s", r.URL.Path)
+		}
+	})
+	r := runCLI(t, addr, "", nil, "project", "scan", "/w/api")
+	if r.code != 0 || !strings.Contains(r.stdout, "Sub-projetos sugeridos (1)") || !strings.Contains(r.stdout, "apps/web") || len(dismissed) != 0 {
+		t.Fatalf("%+v", r)
+	}
+	r = runCLI(t, addr, "", nil, "project", "scan", "/w/api", "--nao-sugerir", "apps/web, apps/api")
+	if r.code != 0 || len(dismissed) != 1 || dismissed[0] != `{"rels":["apps/web","apps/api"]}` {
+		t.Fatalf("%+v dismissed=%q", r, dismissed)
+	}
+}
+
+func TestProjectAddListsAtMostFiveSuggestions(t *testing.T) {
+	var sg []string
+	for i := 0; i < 7; i++ {
+		sg = append(sg, fmt.Sprintf(`{"rel":"apps/a%d","name":"a%d","source":"go.work"}`, i, i))
+	}
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":3,"name":"api","path":"/w/api","suggestions":[` + strings.Join(sg, ",") + `]}`))
+	})
+	r := runCLI(t, addr, "", nil, "project", "add")
+	if r.code != 0 || !strings.Contains(r.stdout, "Sub-projetos sugeridos") || !strings.Contains(r.stdout, "apps/a4") ||
+		strings.Contains(r.stdout, "apps/a5") || !strings.Contains(r.stdout, "mais 2 na Configuração → Projetos") {
+		t.Fatalf("%+v", r)
 	}
 }

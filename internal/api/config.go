@@ -9,6 +9,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
 const (
@@ -43,6 +44,8 @@ func (s *server) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/projects/{id}", s.patchProject)
 	mux.HandleFunc("DELETE /api/projects/{id}", s.deleteProject)
 	mux.HandleFunc("GET /api/projects/{id}/scan", s.scanProject)
+	mux.HandleFunc("GET /api/projects/{id}/suggestions", s.suggestions)
+	mux.HandleFunc("POST /api/projects/{id}/suggestions/dismiss", s.dismissSuggestions)
 }
 
 func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
@@ -259,10 +262,16 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.publish("config", "sessions", "cards")
+	// Só informativo: falha ao ler os workspaces não desfaz o cadastro.
+	sugg, err := s.openSuggestions(p)
+	if err != nil {
+		sugg = []workspaces.Suggestion{}
+	}
 	writeJSON(w, http.StatusCreated, struct {
 		domain.Project
-		Reassigned int `json:"reassigned"`
-	}{p, n})
+		Reassigned  int                     `json:"reassigned"`
+		Suggestions []workspaces.Suggestion `json:"suggestions"`
+	}{p, n, sugg})
 }
 
 func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {

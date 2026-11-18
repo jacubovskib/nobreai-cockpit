@@ -123,7 +123,7 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "SessionStart",
 			"additionalContext": unregisteredPhrase + " (" + root + ").\nAntes de seguir com o pedido do usuário, cadastre com nobre project add " + root +
-				" e faça o levantamento com nobre project scan; " + scanCardsStep(set) + " (veja a skill nobre-cockpit). O cadastro liga esta sessão ao board.\n\n" + guidanceFor(set),
+				" e faça o levantamento com nobre project scan; " + scanCardsStep(set) + " (veja a skill nobre-cockpit); se o cadastro listar sub-projetos sugeridos, liste-os ao usuário sem cadastrar. O cadastro liga esta sessão ao board.\n\n" + guidanceFor(set),
 		}})
 	}
 
