@@ -17,8 +17,10 @@ import (
 const (
 	keyBaseline = "integration_baseline"
 	keyIgnored  = "integration_ignored"
+	keyRemoved  = "integration_removed" // key -> hora da remoção deliberada
 
-	againWindow = 10 * time.Minute
+	againWindow   = 10 * time.Minute
+	removalWindow = 10 * time.Minute // validade da marca de remoção deliberada
 
 	unreadableText = "O ~/.claude/settings.json não pôde ser lido (JSON inválido?). O Cockpit não vai mexer nele; corrija o arquivo."
 )
@@ -67,6 +69,7 @@ type Monitor struct {
 	baseline map[string]bool
 	ignored  map[string]string
 	fixedAt  map[string]time.Time
+	removed  map[string]time.Time
 	healthy  map[string]bool // último estado visto nesta execução
 	checks   map[string]adapter.Check
 	problems []Problem
@@ -97,12 +100,19 @@ func (m *Monitor) load() {
 	}
 	m.loaded = true
 	m.baseline, m.ignored = map[string]bool{}, map[string]string{}
+	m.removed = map[string]time.Time{}
 	m.fixedAt, m.healthy, m.checks = map[string]time.Time{}, map[string]bool{}, map[string]adapter.Check{}
 	if _, err := m.Store.GetKV(keyBaseline, &m.baseline); err != nil {
 		m.logf("integração: ler linha de base: %v", err)
 	}
 	if _, err := m.Store.GetKV(keyIgnored, &m.ignored); err != nil {
 		m.logf("integração: ler ignorados: %v", err)
+	}
+	if _, err := m.Store.GetKV(keyRemoved, &m.removed); err != nil {
+		m.logf("integração: ler remoções: %v", err)
+	}
+	if m.removed == nil {
+		m.removed = map[string]time.Time{}
 	}
 	if m.baseline == nil {
 		m.baseline = map[string]bool{}
@@ -145,10 +155,23 @@ func (m *Monitor) checkLocked() []Problem {
 		checks = m.Health()
 	}
 	problems := []Problem{}
-	changed, transition := false, false
+	changed, transition, tombs := false, false, false
 	for _, c := range checks {
 		m.checks[c.Key] = c
 		if c.OK && c.Code == "" {
+			if m.ignored[c.Key] != "" {
+				delete(m.ignored, c.Key)
+				m.put(keyIgnored, m.ignored)
+			}
+			if at, ok := m.removed[c.Key]; ok {
+				if m.now().Sub(at) < removalWindow {
+					// remoção deliberada em andamento: ainda não vale como "já funcionou"
+					m.healthy[c.Key] = true
+					continue
+				}
+				delete(m.removed, c.Key)
+				tombs = true
+			}
 			if !m.baseline[c.Key] {
 				m.baseline[c.Key] = true
 				changed = true
@@ -158,6 +181,10 @@ func (m *Monitor) checkLocked() []Problem {
 			}
 			m.healthy[c.Key] = true
 			continue
+		}
+		if _, ok := m.removed[c.Key]; ok {
+			delete(m.removed, c.Key) // a remoção aconteceu
+			tombs = true
 		}
 		if !m.baseline[c.Key] {
 			m.healthy[c.Key] = false
@@ -175,6 +202,9 @@ func (m *Monitor) checkLocked() []Problem {
 	}
 	if changed {
 		m.put(keyBaseline, m.baseline)
+	}
+	if tombs {
+		m.put(keyRemoved, m.removed)
 	}
 	m.problems = problems
 	if transition {
@@ -277,7 +307,9 @@ func (m *Monitor) Fixed(keys []string, changed []string) {
 	for _, k := range keys {
 		m.fixedAt[k] = m.now()
 		delete(m.ignored, k)
+		delete(m.removed, k)
 	}
+	m.put(keyRemoved, m.removed)
 	m.put(keyIgnored, m.ignored)
 	m.checkLocked()
 	m.publish()
@@ -291,9 +323,11 @@ func (m *Monitor) Removed(keys []string, origin string) {
 	m.load()
 	for _, k := range keys {
 		m.baseline[k] = false
+		m.removed[k] = m.now()
 		delete(m.healthy, k)
 	}
 	m.put(keyBaseline, m.baseline)
+	m.put(keyRemoved, m.removed)
 	m.addLog(domain.LogIntegrationRemoved, map[string]any{"keys": keys, "origin": origin})
 	m.checkLocked()
 	m.publish()

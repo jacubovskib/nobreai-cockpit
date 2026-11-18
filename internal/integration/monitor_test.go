@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,10 +23,10 @@ func (f *fakeStore) GetKV(key string, v any) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	return true, jsonUnmarshal(raw, v)
+	return true, json.Unmarshal([]byte(raw), v)
 }
 func (f *fakeStore) PutKV(key string, v any) error {
-	b, err := jsonMarshal(v)
+	b, err := json.Marshal(v)
 	f.kv[key] = string(b)
 	return err
 }
@@ -167,13 +168,59 @@ func TestRemovedDoesNotAlert(t *testing.T) {
 	m := e.monitor()
 	e.checks = []adapter.Check{ok("statusline")}
 	m.CheckNow()
+	m.Removed([]string{"statusline"}, "config") // a CLI chama antes de gravar o settings.json
+	if p := m.CheckNow(); len(p) != 0 {
+		t.Fatalf("%+v", p)
+	}
 	e.checks = []adapter.Check{bad("statusline", "missing", "não integrada")}
-	m.Removed([]string{"statusline"}, "config")
 	if p := m.CheckNow(); len(p) != 0 {
 		t.Fatalf("%+v", p)
 	}
 	if e.st.count(domain.LogIntegrationRemoved) != 1 {
 		t.Fatal(e.st.logs)
+	}
+}
+
+func TestRemovedSurvivesRestart(t *testing.T) {
+	e := newEnv(t)
+	e.checks = []adapter.Check{ok("statusline")}
+	e.monitor().Removed([]string{"statusline"}, "cli")
+	m2 := e.monitor()
+	m2.CheckNow() // ainda OK
+	e.checks = []adapter.Check{bad("statusline", "missing", "não integrada")}
+	if p := m2.CheckNow(); len(p) != 0 {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestRemovalMarkExpires(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("statusline")}
+	m.CheckNow()
+	m.Removed([]string{"statusline"}, "cli")
+	e.now = e.now.Add(11 * time.Minute)
+	m.CheckNow() // continua OK: a remoção não aconteceu
+	e.checks = []adapter.Check{bad("statusline", "missing", "não integrada")}
+	if p := m.CheckNow(); len(p) != 1 {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestIgnoreClearedWhenOKAgain(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("hooks")}
+	m.CheckNow()
+	broken := []adapter.Check{bad("hooks", "missing", "faltam: Stop")}
+	e.checks = broken
+	m.CheckNow()
+	m.Ignore("hooks")
+	e.checks = []adapter.Check{ok("hooks")}
+	m.CheckNow()
+	e.checks = broken
+	if p := m.CheckNow(); len(p) != 1 {
+		t.Fatalf("%+v", p)
 	}
 }
 
