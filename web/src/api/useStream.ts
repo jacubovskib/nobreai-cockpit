@@ -5,7 +5,9 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 // está na lista. Kinds desconhecidos invalidam tudo.
 const KIND_KEYS: Record<string, string[]> = {
   cards: ['cards', 'card', 'continue-preview', 'overview', 'events', 'worktrees'],
-  sessions: ['sessions', 'card', 'cards', 'overview', 'usage', 'context', 'events', 'worktrees'],
+  // Sem 'context': sessions sai a cada hook, e o contexto medido sempre
+  // publica usage.
+  sessions: ['sessions', 'card', 'cards', 'overview', 'usage', 'events', 'worktrees'],
   config: ['settings', 'limits', 'prices', 'projects', 'overview', 'worktrees'],
   usage: ['usage', 'context', 'overview', 'cards', 'card'],
   prompts: ['prompts', 'continue-preview'],

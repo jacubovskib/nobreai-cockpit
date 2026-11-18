@@ -40,13 +40,18 @@ export function ContextSection({ from, to, projectId, exact }: { from: string; t
   const keys = q.data?.keys ?? []
   const sessions = q.data?.sessions ?? []
   const byProject = q.data?.projects ?? []
-  const rest = Math.max(0, (q.data?.context_total ?? 0) - (q.data?.weight_total ?? 0))
+  const weightTotal = q.data?.weight_total ?? 0
+  // Chaves fora da lista (além do top 30) entram no peso total; sem esta
+  // linha o peso delas não apareceria em lugar nenhum.
+  const others = Math.max(0, weightTotal - keys.reduce((s, k) => s + k.weight, 0))
+  const rest = Math.max(0, (q.data?.context_total ?? 0) - weightTotal)
   const nameOf = (id: number) => projects?.find((p) => p.id === id)?.name ?? `projeto ${id}`
 
   return (
     <section aria-labelledby="ctx-t" style={panel}>
       <h2 id="ctx-t" style={h2}>O que enche o contexto</h2>
       <p style={{ ...muted, margin: 0 }}>Peso = tamanho × turnos em que a saída foi relida até a próxima compactação.</p>
+      <p style={{ ...muted, margin: 0 }}>Estimativa: bytes ÷ 4. O resto inclui prompt de sistema, ferramentas, skills, mensagens e respostas.</p>
       {q.isError && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar o contexto.</p>}
       {q.isPending && <p style={muted}>Carregando…</p>}
       {q.data && keys.length === 0 && <p style={muted}>Nenhuma saída medida no período.</p>}
@@ -75,6 +80,13 @@ export function ContextSection({ from, to, projectId, exact }: { from: string; t
                     <td style={num}>{tokens(k.weight)}</td>
                   </tr>
                 ))}
+                {others > 0 && (
+                  <tr style={{ borderTop: '1px solid var(--border)', color: 'var(--text-2)' }}>
+                    <th scope="row" style={{ ...td, textAlign: 'left', fontWeight: 400 }}>Outras chaves</th>
+                    <td style={num} /><td style={num} /><td style={num} /><td style={num} />
+                    <td style={num}>{tokens(others)}</td>
+                  </tr>
+                )}
                 <tr style={{ borderTop: '1px solid var(--border)', color: 'var(--text-2)' }}>
                   <th scope="row" style={{ ...td, textAlign: 'left', fontWeight: 400 }}>Resto (base e conversa)</th>
                   <td style={num} /><td style={num} /><td style={num} /><td style={num} />
@@ -127,7 +139,8 @@ export function ContextSection({ from, to, projectId, exact }: { from: string; t
                         <span className="mono" style={{ color: 'var(--text-2)', minWidth: 64 }}>{s.card_key || 'sem card'}</span>
                         <span style={{ flex: 1, minWidth: 0 }}>{s.card_title}</span>
                         <span style={muted}>{startFmt.format(new Date(s.started_at))}</span>
-                        <span style={{ fontVariantNumeric: 'tabular-nums' }}>pico {tokens(s.peak_context)}</span>
+                        <span style={{ fontVariantNumeric: 'tabular-nums' }}>peso {tokens(s.weight)}</span>
+                        <span style={{ ...muted, fontVariantNumeric: 'tabular-nums' }}>pico {tokens(s.peak_context)}</span>
                         <span style={muted}>{s.compactions} {s.compactions === 1 ? 'compactação' : 'compactações'}</span>
                       </button>
                       {expanded && <SessionDetail id={s.session_id} />}

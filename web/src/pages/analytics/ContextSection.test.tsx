@@ -51,6 +51,27 @@ describe('ContextSection', () => {
     const rest = screen.getByText('Resto (base e conversa)').closest('tr')!
     expect(rest).toHaveTextContent('105 k')
     expect(screen.getByText(/Peso = tamanho × turnos/)).toBeInTheDocument()
+    expect(screen.getByText(/Estimativa: bytes ÷ 4/)).toBeInTheDocument()
+    // As chaves listadas somam o peso total: sem linha "Outras chaves".
+    expect(screen.queryByText('Outras chaves')).toBeNull()
+  })
+
+  it('linhas + Outras chaves + Resto somam o contexto total', async () => {
+    // weight_total cobre chaves fora do top 30: 95 k listados, 145 k no total.
+    mock({ ...routes, '/api/context/top': { ...top, context_total: 200000, weight_total: 145000 } })
+    show()
+    const others = (await screen.findByText('Outras chaves')).closest('tr')!
+    expect(others).toHaveTextContent('50 k')
+    const rest = screen.getByText('Resto (base e conversa)').closest('tr')!
+    expect(rest).toHaveTextContent('55 k')
+    // A linha Outras chaves fica logo acima do Resto.
+    expect(others.nextElementSibling).toBe(rest)
+    const weights = within(others.closest('tbody')!).getAllByRole('row').map((r) => {
+      const cells = within(r).getAllByRole('cell')
+      return cells[cells.length - 1].textContent
+    })
+    expect(weights).toEqual(['90 k', '5 k', '50 k', '55 k'])
+    expect(90000 + 5000 + 50000 + 55000).toBe(200000)
   })
 
   it('resto nunca fica negativo', async () => {
@@ -77,6 +98,10 @@ describe('ContextSection', () => {
     mock(routes)
     show()
     expect(await screen.findByText('sem card')).toBeInTheDocument()
+    const s1 = screen.getByRole('button', { name: /NAC-7/ })
+    expect(within(s1).getByText('peso 80 k')).toBeInTheDocument()
+    expect(within(s1).getByText('pico 150 k')).toBeInTheDocument()
+    expect(within(s1).getByText('2 compactações')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /NAC-7/ }))
     expect(await screen.findByRole('img', { name: 'Contexto por turno' })).toBeInTheDocument()
     expect(screen.getByText('Saídas mais pesadas')).toBeInTheDocument()
