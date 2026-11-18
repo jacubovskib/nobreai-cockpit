@@ -1,11 +1,13 @@
 package claude
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"log"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/usage"
@@ -42,7 +44,7 @@ func (a *Adapter) ingestAsync(sessionID, path string) {
 // linhas carregam o sessionId do Claude Code: passam a usar o ID da sessão do
 // Cockpit. Transcript que ainda não existe é ignorado.
 func (a *Adapter) readTranscripts(sessionID, mainPath string) error {
-	changed := false
+	changed, ctxChanged := false, false
 	for i, path := range append([]string{mainPath}, usage.SubagentTranscripts(mainPath)...) {
 		off, err := a.st.FileOffset(sessionID, path)
 		if err != nil {
@@ -65,11 +67,86 @@ func (a *Adapter) readTranscripts(sessionID, mainPath string) error {
 			}
 		}
 		changed = changed || len(rows) > 0
+		n, err := a.readContext(sessionID, path)
+		if err != nil {
+			return err
+		}
+		ctxChanged = ctxChanged || n > 0
 	}
-	if changed {
+	if changed || ctxChanged {
 		a.publish("usage")
 	}
 	return nil
+}
+
+// readContext grava saídas e turnos novos do transcript path (medição de
+// contexto), com cursor próprio (tool_offset). Devolve quantos registros leu.
+// Arquivo inexistente é ignorado.
+func (a *Adapter) readContext(sessionID, path string) (int, error) {
+	off, st, err := a.st.ContextCursor(sessionID, path)
+	if err != nil {
+		return 0, err
+	}
+	outs, turns, next, newSt, reset, err := usage.ParseContext(path, off, st)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	n := len(outs) + len(turns)
+	if next == off && !reset && n == 0 {
+		return 0, nil
+	}
+	if err := a.st.SaveContext(sessionID, path, reset, outs, turns, next, newSt); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// StartBackfill roda BackfillContext em segundo plano; Wait espera o fim.
+func (a *Adapter) StartBackfill(ctx context.Context) {
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		a.BackfillContext(ctx)
+	}()
+}
+
+// BackfillContext lê o histórico: todos os transcripts das sessões do Claude
+// ainda sem medição de contexto (e os já medidos, só do ponto onde pararam).
+// Para entre sessões quando ctx termina; um erro ou pânico numa sessão não
+// interrompe as outras.
+func (a *Adapter) BackfillContext(ctx context.Context) {
+	start := time.Now()
+	transcripts, err := a.st.ClaudeTranscripts()
+	if err != nil {
+		log.Printf("medição de contexto: listar sessões: %v", err)
+		return
+	}
+	done := 0
+	for id, path := range transcripts {
+		if ctx.Err() != nil {
+			break
+		}
+		a.backfillSession(id, path)
+		done++
+	}
+	log.Printf("medição de contexto: %d de %d sessões em %s", done, len(transcripts), time.Since(start).Round(time.Millisecond))
+}
+
+func (a *Adapter) backfillSession(sessionID, path string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("medição de contexto: pânico na sessão %s: %v\n%s", sessionID, r, debug.Stack())
+		}
+	}()
+	mu, _ := a.ingest.LoadOrStore(sessionID, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+	if err := a.readTranscripts(sessionID, path); err != nil {
+		log.Printf("medição de contexto: sessão %s: %v", sessionID, err)
+	}
 }
 
 func (a *Adapter) readFile(sessionID, path string, off int64) ([]domain.UsageRow, int64, error) {

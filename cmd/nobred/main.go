@@ -162,6 +162,10 @@ func run(dbPath string, seedDemo bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Histórico: mede o contexto dos transcripts já existentes (para entre
+	// sessões quando o ctx termina; o Wait do adaptador espera).
+	claudeAdapter.StartBackfill(ctx)
+
 	// Reconciliação a cada 30 s: encerra sessões de processos que morreram.
 	recDone := make(chan struct{})
 	go func() {
