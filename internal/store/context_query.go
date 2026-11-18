@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"sort"
 	"time"
 )
 
@@ -63,22 +64,29 @@ type ContextTurnPoint struct {
 	AfterCompact bool   `json:"after_compact"` // segmento maior que o do turno anterior
 }
 
-// ctxOutputsCTE junta cada saída à sua sessão/card e calcula releituras e peso.
-// Releituras = MAX(turn) do mesmo (sessão, path, segmento) menos o turno da
-// saída, mínimo 0 (0 se o segmento não tem turno). O máximo por segmento vem
-// de um CTE agregado uma vez, não de um COUNT correlacionado por saída.
-const ctxOutputsCTE = `WITH seg_max AS (
-	SELECT session_id, path, segment, MAX(turn) AS max_turn FROM context_turns GROUP BY session_id, path, segment
-), outs AS (
-	SELECT o.session_id, o.path, o.tool, o.key, o.tokens, o.in_tokens, o.at, s.transcript_path,
-	       COALESCE(c.project_id, s.project_id) AS project_id,
-	       MAX(0, COALESCE(m.max_turn, o.turn) - o.turn) AS rereads,
-	       (o.tokens + o.in_tokens) * MAX(0, COALESCE(m.max_turn, o.turn) - o.turn) AS weight
+// ctxOutputsCTE junta cada saída (já filtrada em base) à sua sessão/card e
+// calcula releituras e peso. Releituras = MAX(turn) do mesmo (sessão, path,
+// segmento) menos o turno da saída, mínimo 0 (0 se o segmento não tem turno).
+// O máximo por segmento vem de um CTE agregado uma vez (só para as sessões
+// presentes em base), não de um COUNT correlacionado por saída.
+func ctxOutputsCTE(where string) string {
+	return `WITH base AS (
+	SELECT o.session_id, o.path, o.tool, o.key, o.tokens, o.in_tokens, o.at, o.turn, o.segment, s.transcript_path,
+	       COALESCE(c.project_id, s.project_id) AS project_id
 	FROM tool_outputs o
 	JOIN sessions s ON s.id = o.session_id
-	LEFT JOIN cards c ON c.id = s.card_id
-	LEFT JOIN seg_max m ON m.session_id = o.session_id AND m.path = o.path AND m.segment = o.segment
-`
+	LEFT JOIN cards c ON c.id = s.card_id` + where + `
+), seg_max AS (
+	SELECT session_id, path, segment, MAX(turn) AS max_turn FROM context_turns
+	WHERE session_id IN (SELECT session_id FROM base) GROUP BY session_id, path, segment
+), outs AS (
+	SELECT b.session_id, b.path, b.tool, b.key, b.tokens, b.in_tokens, b.at, b.transcript_path, b.project_id,
+	       MAX(0, COALESCE(m.max_turn, b.turn) - b.turn) AS rereads,
+	       (b.tokens + b.in_tokens) * MAX(0, COALESCE(m.max_turn, b.turn) - b.turn) AS weight
+	FROM base b
+	LEFT JOIN seg_max m ON m.session_id = b.session_id AND m.path = b.path AND m.segment = b.segment
+) `
+}
 
 // where monta o filtro sobre a coluna de tempo e o projeto (aliases do CTE).
 func (f ContextFilter) where(timeCol, projectCol string) (string, []any) {
@@ -104,7 +112,7 @@ func (f ContextFilter) where(timeCol, projectCol string) (string, []any) {
 // outsQuery devolve o CTE com o filtro aplicado: "…) SELECT … FROM outs".
 func (f ContextFilter) outsQuery(sel, tail string) (string, []any) {
 	w, args := f.where("o.at", "COALESCE(c.project_id, s.project_id)")
-	return ctxOutputsCTE + w + `) ` + sel + ` FROM outs ` + tail, args
+	return ctxOutputsCTE(w) + sel + ` FROM outs ` + tail, args
 }
 
 func sqlLimit(n int) int {
@@ -167,7 +175,7 @@ func (s *Store) ContextTopSessions(f ContextFilter, limit int) ([]ContextSession
 // um. Sessões sem projeto ficam de fora.
 func (s *Store) ContextByProject(f ContextFilter) ([]ContextProject, error) {
 	q, args := f.outsQuery(`SELECT project_id, key, SUM(weight)`,
-		`WHERE project_id IS NOT NULL GROUP BY project_id, key ORDER BY project_id, SUM(weight) DESC, key`)
+		`WHERE project_id IS NOT NULL GROUP BY project_id, tool, key ORDER BY project_id, SUM(weight) DESC, tool, key`)
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -183,7 +191,7 @@ func (s *Store) ContextByProject(f ContextFilter) ([]ContextProject, error) {
 		}
 		i, ok := idx[pid]
 		if !ok {
-			// A primeira chave do projeto é a de maior peso (ordem da consulta).
+			// A primeira (tool, key) do projeto é a de maior peso (ordem da consulta).
 			idx[pid] = len(out)
 			out = append(out, ContextProject{ProjectID: pid, TopKey: key})
 			i = len(out) - 1
@@ -193,13 +201,13 @@ func (s *Store) ContextByProject(f ContextFilter) ([]ContextProject, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Ordena por peso desc (projeto como desempate, para ser determinístico).
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && (out[j].Weight > out[j-1].Weight ||
-			(out[j].Weight == out[j-1].Weight && out[j].ProjectID < out[j-1].ProjectID)); j-- {
-			out[j], out[j-1] = out[j-1], out[j]
+	// Peso desc; projeto como desempate, para ser determinístico.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Weight != out[j].Weight {
+			return out[i].Weight > out[j].Weight
 		}
-	}
+		return out[i].ProjectID < out[j].ProjectID
+	})
 	return out, nil
 }
 
@@ -249,7 +257,7 @@ func (s *Store) ContextSessionDetail(sessionID string, limit int) (turns []Conte
 		return nil, nil, err
 	}
 
-	orows, err := s.DB.Query(ctxOutputsCTE+` WHERE o.session_id = ?)
+	orows, err := s.DB.Query(ctxOutputsCTE(` WHERE o.session_id = ?`)+`
 		SELECT tool, key, tokens, rereads, weight, at, path <> transcript_path FROM outs
 		ORDER BY weight DESC, tokens DESC, at LIMIT ?`, sessionID, sqlLimit(limit))
 	if err != nil {

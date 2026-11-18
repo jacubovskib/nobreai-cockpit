@@ -71,7 +71,10 @@ func TestContextRereads_AfterCompaction(t *testing.T) {
 	ctxSession(t, s, "s1", nil, nil)
 	save(t, s, "s1", "/main", []usage.ToolOutput{ctxOut("h", "hook", "SessionStart · cockpit", 20, 5, 1, 1)},
 		append(ctxTurns(0, 0, 1), ctxTurns(1, 2, 4)...))
-	_, top, _ := s.ContextSessionDetail("s1", 10)
+	_, top, err := s.ContextSessionDetail("s1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(top) != 1 || top[0].Rereads != 3 || top[0].Weight != 75 {
 		t.Fatalf("top = %+v", top)
 	}
@@ -167,6 +170,22 @@ func TestContextTopSessions(t *testing.T) {
 	}
 	if got, _ = s.ContextTopSessions(ContextFilter{}, 1); len(got) != 1 {
 		t.Fatalf("limit: %+v", got)
+	}
+	if got, _ = s.ContextTopSessions(ContextFilter{}, 0); len(got) != 2 {
+		t.Fatalf("limit 0 deve devolver tudo: %+v", got)
+	}
+	if keys, _ := s.ContextTopKeys(ContextFilter{}, -1); len(keys) != 2 {
+		t.Fatalf("limit -1 deve devolver tudo: %+v", keys)
+	}
+	// Intervalo: as saídas ficam em ctxAt; fora do intervalo nenhuma sessão.
+	if got, _ = s.ContextTopSessions(ContextFilter{From: ctxAt.Add(time.Hour)}, 10); len(got) != 0 {
+		t.Fatalf("From: %+v", got)
+	}
+	if got, _ = s.ContextTopSessions(ContextFilter{To: ctxAt}, 10); len(got) != 0 {
+		t.Fatalf("To exclusivo: %+v", got)
+	}
+	if got, _ = s.ContextTopSessions(ContextFilter{From: ctxAt, To: ctxAt.Add(time.Hour)}, 10); len(got) != 2 {
+		t.Fatalf("intervalo: %+v", got)
 	}
 }
 
