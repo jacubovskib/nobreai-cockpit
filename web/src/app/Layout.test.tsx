@@ -86,4 +86,54 @@ describe('Seletor de projeto', () => {
     expect(screen.getByRole('option', { name: 'Todos os projetos' })).toBeInTheDocument()
     expect(hrefs().some((h) => h!.includes('?projeto='))).toBe(false)
   })
+
+  describe('dois passos', () => {
+    const fam = {
+      ...base,
+      '/api/projects': [
+        { id: 1, name: 'bravonix', path: '/w/b', capture: true, parent_id: null, kind: 'group' },
+        { id: 2, name: 'web', path: '/w/b/web', capture: true, parent_id: 1, kind: 'repo' },
+        { id: 3, name: 'api', path: '/w/b/api', capture: true, parent_id: 1, kind: 'repo' },
+        { id: 4, name: 'site', path: '/w/site', capture: true, parent_id: null, kind: 'repo' },
+      ],
+    }
+    it('second select appears only for a project with children', async () => {
+      mockApi(fam)
+      renderApp('/board')
+      const sel = await screen.findByRole('combobox', { name: 'Projeto' })
+      await screen.findByRole('option', { name: 'site' })
+      expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Todos os projetos', 'bravonix', 'site'])
+      expect(screen.queryByRole('combobox', { name: 'App' })).not.toBeInTheDocument()
+      fireEvent.change(sel, { target: { value: '1' } })
+      const app = await screen.findByRole('combobox', { name: 'App' })
+      expect(Array.from(app.querySelectorAll('option')).map((o) => o.textContent)).toEqual(['Todos', 'geral (raiz)', 'api', 'web'])
+      fireEvent.change(sel, { target: { value: '4' } })
+      await waitFor(() => expect(screen.queryByRole('combobox', { name: 'App' })).not.toBeInTheDocument())
+    })
+    it('choosing an app sets &app= and changing project clears it', async () => {
+      mockApi(fam)
+      renderApp('/board')
+      const sel = await screen.findByRole('combobox', { name: 'Projeto' })
+      await screen.findByRole('option', { name: 'bravonix' })
+      fireEvent.change(sel, { target: { value: '1' } })
+      const app = await screen.findByRole('combobox', { name: 'App' })
+      fireEvent.change(app, { target: { value: '2' } })
+      await waitFor(() => expect(hrefs().every((h) => h!.endsWith('?projeto=1&app=2'))).toBe(true))
+      fireEvent.change(app, { target: { value: 'geral' } })
+      await waitFor(() => expect(hrefs().every((h) => h!.endsWith('?projeto=1&app=geral'))).toBe(true))
+      fireEvent.change(sel, { target: { value: '' } })
+      await waitFor(() => expect(hrefs().some((h) => h!.includes('app='))).toBe(false))
+      fireEvent.change(sel, { target: { value: '1' } })
+      expect(await screen.findByRole('combobox', { name: 'App' })).toHaveValue('')
+    })
+    it('legacy ?projeto=<child> is shown as parent + app', async () => {
+      mockApi(fam)
+      renderApp('/board?projeto=3')
+      const sel = await screen.findByRole('combobox', { name: 'Projeto' })
+      const app = await screen.findByRole('combobox', { name: 'App' })
+      expect(sel).toHaveValue('1')
+      expect(app).toHaveValue('3')
+      expect(hrefs().every((h) => h!.endsWith('?projeto=1&app=3'))).toBe(true)
+    })
+  })
 })
