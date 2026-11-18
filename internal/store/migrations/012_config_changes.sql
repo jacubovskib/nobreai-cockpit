@@ -1,0 +1,10 @@
+ALTER TABLE sessions ADD COLUMN seen_config TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE config_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT NOT NULL DEFAULT 'local',
+  owner_id TEXT NOT NULL DEFAULT 'me',
+  at TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  data TEXT NOT NULL DEFAULT '{}'
+);

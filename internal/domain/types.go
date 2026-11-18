@@ -68,6 +68,34 @@ type Session struct {
 	// PIDDeadAt é quando a reconciliação notou que o PID não existe mais
 	// (início da carência antes de encerrar a sessão); nil = nunca notado.
 	PIDDeadAt *time.Time `json:"pid_dead_at"`
+	// SeenConfig é a configuração que o agente principal da sessão já viu;
+	// nil = ainda não gravada.
+	SeenConfig *SeenConfig `json:"seen_config"`
+}
+
+// SeenConfig é o retrato da configuração visto por uma sessão.
+type SeenConfig struct {
+	AgentCreatesCards bool `json:"agent_creates_cards"`
+	Capture           bool `json:"capture"`
+}
+
+// Tipos de linha do config_log.
+const (
+	LogSettingChanged     = "setting_changed"
+	LogProjectCapture     = "project_capture_changed"
+	LogIntegrationBroken  = "integration_broken"
+	LogIntegrationFixed   = "integration_fixed"
+	LogIntegrationIgnored = "integration_ignored"
+	LogIntegrationRemoved = "integration_removed"
+	LogAgentNotified      = "agent_notified"
+)
+
+// ConfigLogEntry é uma linha do registro de mudanças de configuração.
+type ConfigLogEntry struct {
+	ID   int64           `json:"id"`
+	At   time.Time       `json:"at"`
+	Kind string          `json:"kind"`
+	Data json.RawMessage `json:"data"`
 }
 
 // Live diz se a sessão está viva: não encerrada e com o processo do agente

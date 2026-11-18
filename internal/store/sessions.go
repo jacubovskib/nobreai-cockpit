@@ -17,18 +17,26 @@ var ErrCardBusy = errors.New("card já tem uma sessão viva")
 // existindo (pid_dead_at marca o início da carência após o PID sumir).
 const liveCond = `ended_at IS NULL AND pid_dead_at IS NULL`
 
-const sessionCols = `id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, ended_at, end_reason, pid_dead_at, worktree, worktree_linked`
+const sessionCols = `id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, ended_at, end_reason, pid_dead_at, worktree, worktree_linked, seen_config`
 
 func scanSession(sc interface{ Scan(...any) error }) (domain.Session, error) {
 	var x domain.Session
 	var cardID, projectID sql.NullInt64
 	var started, last string
 	var ended, dead sql.NullString
+	var seen string
 	err := sc.Scan(&x.ID, &x.Agent, &x.ProviderSessionID, &cardID, &projectID, &x.PID, &x.Cwd, &x.Branch,
 		&x.GitHead, &x.Model, &x.TranscriptPath, &x.FullCapture, &started, &last, &ended, &x.EndReason, &dead,
-		&x.Worktree, &x.WorktreeLinked)
+		&x.Worktree, &x.WorktreeLinked, &seen)
 	if err != nil {
 		return x, err
+	}
+	if seen != "" {
+		var sc domain.SeenConfig
+		if err := json.Unmarshal([]byte(seen), &sc); err != nil {
+			return x, err
+		}
+		x.SeenConfig = &sc
 	}
 	if cardID.Valid {
 		x.CardID = &cardID.Int64
@@ -592,4 +600,67 @@ func (s *Store) EventsByKind(kind string, limit int) ([]EventWithContext, error)
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// SwapSeenConfig grava nu como a configuração vista pela sessão, só se a
+// coluna ainda está como old (nil casa a coluna vazia). Devolve false quando
+// outro hook gravou antes.
+func (s *Store) SwapSeenConfig(id string, old *domain.SeenConfig, nu domain.SeenConfig) (bool, error) {
+	nb, err := json.Marshal(nu)
+	if err != nil {
+		return false, err
+	}
+	ob := ""
+	if old != nil {
+		b, err := json.Marshal(*old)
+		if err != nil {
+			return false, err
+		}
+		ob = string(b)
+	}
+	res, err := s.DB.Exec(`UPDATE sessions SET seen_config=? WHERE id=? AND seen_config=?`, string(nb), id, ob)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetProjectSessionsCapture põe full_capture nas sessões vivas da família do
+// projeto e devolve os ids alterados.
+func (s *Store) SetProjectSessionsCapture(projectID int64, on bool) ([]string, error) {
+	ids, err := s.FamilyIDs(projectID)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := []any{on}
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.DB.Query(`UPDATE sessions SET full_capture=? WHERE project_id IN (`+placeholders(len(ids))+`) AND `+liveCond+` RETURNING id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// AdoptSession liga a sessão ao projeto e liga a captura completa.
+func (s *Store) AdoptSession(id string, projectID int64) error {
+	res, err := s.DB.Exec(`UPDATE sessions SET project_id=?, full_capture=1 WHERE id=?`, projectID, id)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
 }
