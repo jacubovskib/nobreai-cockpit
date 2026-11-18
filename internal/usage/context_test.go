@@ -69,7 +69,7 @@ func TestParseContext_Basic(t *testing.T) {
 	}
 	o := outs[0]
 	if o.ItemID != "t1" || o.Tool != "Bash" || o.Key != "git status" || o.Bytes != 400 || o.Tokens != 100 ||
-		o.InTokens != EstimateTokens(int64(len(input)), 0) || o.Turn != 0 || o.Segment != 0 || o.IsError || o.At.IsZero() {
+		o.InTokens != EstimateTokens(int64(len(input)), 0) || o.Turn != 0 || o.Segment != 0 || o.IsError || !o.Result || o.At.IsZero() {
 		t.Fatalf("out %+v", o)
 	}
 	if len(turns) != 2 || turns[0].Turn != 0 || turns[0].MessageID != "m1" || turns[0].Tokens != 115 ||
@@ -186,7 +186,7 @@ func TestParseContext_Keys(t *testing.T) {
 		userResult("zzz", `"x"`, false),
 	)
 	outs, _, _, _, _, _ := ParseContext(p, 0, zero)
-	want := []string{"Read .go", "Read sem extensão", "Agent Explore", "Agent geral", "Skill napkin", "Grep", "?"}
+	want := []string{"Read .go", "Read sem extensão", "Agent Explore", "Agent geral", "Skill napkin", "Grep", ""}
 	if len(outs) != len(want) {
 		t.Fatalf("outs %+v", outs)
 	}
@@ -195,8 +195,8 @@ func TestParseContext_Keys(t *testing.T) {
 			t.Errorf("%d: %q != %q", i, outs[i].Key, w)
 		}
 	}
-	if outs[6].Tool != "?" {
-		t.Errorf("tool %q", outs[6].Tool)
+	if outs[6].Tool != "" || !outs[6].Result || outs[6].InTokens != 0 {
+		t.Errorf("desconhecido %+v", outs[6])
 	}
 }
 
@@ -244,5 +244,32 @@ func TestBashKey(t *testing.T) {
 		if got := BashKey(in); got != want {
 			t.Errorf("BashKey(%q) = %q, quer %q", in, got, want)
 		}
+	}
+}
+
+func TestParseContext_UseAndResultAcrossReads(t *testing.T) {
+	input := `{"command":"git status -s"}`
+	l1 := asst("m1", 1, 1, 1, toolUse("t1", "Bash", input))
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	os.WriteFile(p, []byte(l1+"\n"), 0o644)
+	outs, _, next, st, _, _ := ParseContext(p, 0, zero)
+	if len(outs) != 1 || outs[0].Result || outs[0].Tool != "Bash" || outs[0].Key != "git status" ||
+		outs[0].InTokens == 0 || outs[0].Bytes != 0 || outs[0].Turn != 0 {
+		t.Fatalf("outs %+v", outs)
+	}
+	f, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(userResult("t1", quote("abcdefgh"), false) + "\n")
+	f.Close()
+	outs, _, _, _, _, _ = ParseContext(p, next, st)
+	if len(outs) != 1 || outs[0].ItemID != "t1" || outs[0].Tool != "" || !outs[0].Result || outs[0].Bytes != 8 || outs[0].Turn != 0 {
+		t.Fatalf("outs %+v", outs)
+	}
+}
+
+func TestParseContext_UseWithoutResult(t *testing.T) {
+	p := writeLines(t, asst("m1", 1, 1, 1, toolUse("t1", "Write", `{"file_path":"/a","content":"xxxxxxxx"}`)))
+	outs, _, _, _, _, _ := ParseContext(p, 0, zero)
+	if len(outs) != 1 || outs[0].Result || outs[0].InTokens == 0 || outs[0].Tokens != 0 || outs[0].Key != "Write" {
+		t.Fatalf("outs %+v", outs)
 	}
 }

@@ -26,6 +26,13 @@ type ToolOutput struct {
 	Segment  int   // compactações vistas antes da saída
 	At       time.Time
 	IsError  bool
+	// Result é true quando o registro traz Bytes/Tokens/IsError do tool_result
+	// (hooks sempre true). Registro de tool_use sem resultado nesta leitura sai
+	// com Result false e Bytes/Tokens 0. Tool e Key vazios num registro com
+	// Result true significam "desconhecido aqui": o armazenamento mantém o que
+	// já tem, ou grava "?" se for novo. Registros do mesmo ItemID se completam
+	// por upsert entre leituras.
+	Result bool
 }
 
 // ContextTurn é o contexto de um turno (message.id distinto de assistant).
@@ -84,17 +91,13 @@ type ctxLine struct {
 	} `json:"message"`
 }
 
-type toolInfo struct {
-	name, key string
-	inTokens  int64
-}
-
 // ParseContext lê de offset até a última linha completa (em fluxo, linhas de
 // qualquer tamanho). Offset maior que o arquivo devolve reset=true e lê do
 // começo com estado zerado ({LastTurn:-1}). Turnos devolvidos podem repetir
 // o último turno do estado (mesmo message.id): o chamador faz upsert.
-// O mapa tool_use_id -> (nome, chave) vale só dentro de uma leitura: um
-// tool_result cujo tool_use ficou numa leitura anterior sai como "?".
+// O tool_use emite um registro (Result false) que o tool_result completa na
+// mesma leitura; se o tool_use ficou numa leitura anterior, o registro sai com
+// Tool/Key vazios e Result true, e o armazenamento faz o upsert por ItemID.
 func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput, turns []ContextTurn, next int64, newState ContextState, reset bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -112,8 +115,8 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 		return nil, nil, offset, st, reset, err
 	}
 	next = offset
-	tools := map[string]toolInfo{}
-	turnIdx := map[int]int{} // índice do turno -> posição em turns
+	outIdx := map[string]int{} // tool_use_id -> posição em outs
+	turnIdx := map[int]int{}   // índice do turno -> posição em turns
 	r := bufio.NewReaderSize(f, 1<<20)
 	for {
 		line, rerr := r.ReadBytes('\n')
@@ -141,30 +144,30 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 			if l.Message == nil {
 				continue
 			}
+			if u := l.Message.Usage; u != nil {
+				tokens := u.Input + u.CacheRead + u.CacheWrite
+				if tokens+u.Output > 0 { // mensagem sintética, sem token, não abre turno
+					if l.Message.ID != st.LastMessageID || st.LastTurn < 0 {
+						st.LastTurn++
+						st.LastMessageID = l.Message.ID
+					}
+					ct := ContextTurn{Turn: st.LastTurn, Segment: st.Segment, MessageID: l.Message.ID, At: at, Tokens: tokens}
+					if i, ok := turnIdx[ct.Turn]; ok {
+						turns[i] = ct
+					} else {
+						turnIdx[ct.Turn] = len(turns)
+						turns = append(turns, ct)
+					}
+				}
+			}
+			// O tool_use pertence ao turno desta mesma linha (já aberto acima).
 			for _, b := range contentBlocks(l.Message.Content) {
 				if b.Type == "tool_use" && b.ID != "" {
 					name, key := toolKey(b.Name, b.Input)
-					tools[b.ID] = toolInfo{name: name, key: key, inTokens: EstimateTokens(int64(len(b.Input)), 0)}
+					outIdx[b.ID] = len(outs)
+					outs = append(outs, ToolOutput{ItemID: b.ID, Tool: name, Key: key,
+						InTokens: EstimateTokens(int64(len(b.Input)), 0), Turn: st.LastTurn, Segment: st.Segment, At: at})
 				}
-			}
-			u := l.Message.Usage
-			if u == nil {
-				continue
-			}
-			tokens := u.Input + u.CacheRead + u.CacheWrite
-			if tokens+u.Output == 0 {
-				continue // mensagem sintética, sem token
-			}
-			if l.Message.ID != st.LastMessageID || st.LastTurn < 0 {
-				st.LastTurn++
-				st.LastMessageID = l.Message.ID
-			}
-			ct := ContextTurn{Turn: st.LastTurn, Segment: st.Segment, MessageID: l.Message.ID, At: at, Tokens: tokens}
-			if i, ok := turnIdx[ct.Turn]; ok {
-				turns[i] = ct
-			} else {
-				turnIdx[ct.Turn] = len(turns)
-				turns = append(turns, ct)
 			}
 		case "user":
 			if l.Message == nil {
@@ -175,13 +178,12 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 					continue
 				}
 				bytes, images := resultSize(b.Content)
-				ti, ok := tools[b.ToolUseID]
-				if !ok {
-					ti = toolInfo{name: "?", key: "?"}
+				if i, ok := outIdx[b.ToolUseID]; ok {
+					outs[i].Bytes, outs[i].Tokens, outs[i].IsError, outs[i].Result = bytes, EstimateTokens(bytes, images), b.IsError, true
+					continue
 				}
-				outs = append(outs, ToolOutput{ItemID: b.ToolUseID, Tool: ti.name, Key: ti.key, Bytes: bytes,
-					Tokens: EstimateTokens(bytes, images), InTokens: ti.inTokens, Turn: st.LastTurn, Segment: st.Segment,
-					At: at, IsError: b.IsError})
+				outs = append(outs, ToolOutput{ItemID: b.ToolUseID, Bytes: bytes, Tokens: EstimateTokens(bytes, images),
+					Turn: st.LastTurn, Segment: st.Segment, At: at, IsError: b.IsError, Result: true})
 			}
 		case "attachment":
 			if l.Attachment == nil {
@@ -283,7 +285,7 @@ func hookOutput(uuid, typ, event, command, stdout string, blocking json.RawMessa
 	default:
 		return o, false
 	}
-	o.Tokens = EstimateTokens(o.Bytes, 0)
+	o.Tokens, o.Result = EstimateTokens(o.Bytes, 0), true
 	return o, true
 }
 
