@@ -291,11 +291,12 @@ Um monorepo pode ter um sub-projeto por app. Cadastre a raiz e ligue cada app a 
 
 ```sh
 nobre project add ~/workspace/loja
-nobre project add ~/workspace/loja/apps/web --pai loja   # ou --pai <id>
-nobre project pai <projeto> <pai>                        # liga um projeto que já existe
+nobre project add ~/workspace/loja/apps/web --pai ~/workspace/loja   # ou --pai <id>
+nobre project pai <projeto> <pai>                        # liga um projeto que já existe (id, pasta, ou nome de grupo)
 nobre project pai <projeto> --nenhum                     # desliga
 nobre project grupo "Clientes"                           # grupo de repositórios, sem pasta
-nobre project scan                                       # sugere os apps (--nao-sugerir <pasta> recusa)
+nobre project scan                                       # sugere os apps
+nobre project scan --nao-sugerir apps/old,packages/x      # recusa pastas relativas, separadas por vírgula
 ```
 
 - A sessão cai no app cuja pasta contém o `cwd`; na raiz, cai no projeto principal.

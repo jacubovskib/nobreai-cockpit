@@ -218,7 +218,14 @@ func (c *cli) printMoved(m client.Moved, name string) {
 	if m.Sessions == 0 && m.Cards == 0 {
 		return
 	}
-	fmt.Fprintf(c.out, "%d sessões e %d cards passaram para %s.\n", m.Sessions, m.Cards, name)
+	sess, cards := "sessões", "cards"
+	if m.Sessions == 1 {
+		sess = "sessão"
+	}
+	if m.Cards == 1 {
+		cards = "card"
+	}
+	fmt.Fprintf(c.out, "%d %s e %d %s passaram para %s.\n", m.Sessions, sess, m.Cards, cards, name)
 }
 
 // projectPai liga um projeto a um principal (ou desliga, com --nenhum).

@@ -110,7 +110,7 @@ describe('Config sub-projetos', () => {
     fireEvent.change(await within(sec).findByLabelText('Mover web para…'), { target: { value: '1' } })
     expect(within(sec).getByText('A captura de web passa a seguir a de loja (ligada).')).toBeInTheDocument()
     fireEvent.click(within(sec).getByRole('button', { name: 'Mover para loja' }))
-    expect(await within(sec).findByText('2 sessões e 1 cards passaram para web.')).toBeInTheDocument()
+    expect(await within(sec).findByText('2 sessões e 1 card passaram para web.')).toBeInTheDocument()
     expect(calls(fn, 'PATCH', '/api/projects/2')).toEqual([{ parent_id: 1 }])
   })
 

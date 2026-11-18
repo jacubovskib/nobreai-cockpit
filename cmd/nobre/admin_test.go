@@ -322,7 +322,7 @@ func TestCLIProjectPaiWarnsCapture(t *testing.T) {
 		t.Fatalf("corpo = %s", patched)
 	}
 	for _, want := range []string{
-		"3 sessões e 1 cards passaram para loja › web.",
+		"3 sessões e 1 card passaram para loja › web.",
 		"A captura de web passa a seguir a de loja (ligada).",
 	} {
 		if !strings.Contains(r.stdout, want) {

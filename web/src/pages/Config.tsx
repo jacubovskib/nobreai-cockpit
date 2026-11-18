@@ -366,7 +366,7 @@ function Suggestions({ project }: { project: Project }) {
   const done = () => Promise.all([qc.invalidateQueries({ queryKey: ['projects'] }), qc.invalidateQueries({ queryKey: ['suggestions', project.id] })])
   const addAll = useMutation({
     mutationFn: async () => { for (const s of chosen) await post('/api/projects', { name: s.name, path: s.path, parent_id: project.id }) },
-    onSuccess: done,
+    onSettled: done,
   })
   const dismiss = useMutation({
     mutationFn: () => post(`/api/projects/${project.id}/suggestions/dismiss`, { rels: chosen.map((s) => s.rel) }),
@@ -405,7 +405,7 @@ function ProjectRow({ p, projects, nCards, child }: { p: Project; projects: Proj
     mutationFn: (parentId: number | null) => patch<Moved>(`/api/projects/${p.id}`, { parent_id: parentId }),
     onSuccess: async (r) => {
       setTarget(null)
-      setReport(r.moved ? `${r.moved.sessions} sessões e ${r.moved.cards} cards passaram para ${p.name}.` : '')
+      setReport(r.moved ? `${r.moved.sessions} ${r.moved.sessions === 1 ? 'sessão' : 'sessões'} e ${r.moved.cards} ${r.moved.cards === 1 ? 'card' : 'cards'} passaram para ${p.name}.` : '')
       await refresh()
     },
   })
