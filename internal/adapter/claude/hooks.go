@@ -221,41 +221,6 @@ func (a *Adapter) locate(cwd string) store.SessionLocation {
 	return l
 }
 
-// projectFor acha o projeto de cwd. Num worktree ligado, cwd é traduzido para o
-// mesmo lugar no checkout principal (l é a localização já lida pelo locate, sem
-// nova chamada ao git); se o projeto achado tem apps, o caminho relativo à raiz
-// do worktree pode apontar para um deles.
-func (a *Adapter) projectFor(cwd string, l store.SessionLocation) (*domain.Project, error) {
-	proj, err := a.st.ProjectForPath(cwd)
-	if err != nil || cwd == "" {
-		return proj, err
-	}
-	var main, rel string
-	linked := l.WorktreeLinked && l.Main != ""
-	if linked {
-		r, err := filepath.Rel(l.Worktree, cwd)
-		linked = err == nil && !strings.HasPrefix(r, "..")
-		main, rel = l.Main, r
-	}
-	if proj == nil {
-		if !linked {
-			return nil, nil
-		}
-		return a.st.ProjectForPath(filepath.Join(main, rel))
-	}
-	if !linked {
-		return proj, nil
-	}
-	kids, err := a.st.Children(proj.ID)
-	if err != nil || len(kids) == 0 {
-		return proj, err
-	}
-	if app, err := a.st.ProjectForPath(filepath.Join(main, rel)); err == nil && app != nil {
-		return app, nil
-	}
-	return proj, nil
-}
-
 // projectRoot é a raiz do projeto vista pela sessão: num worktree ligado, o
 // diretório equivalente dentro do worktree.
 func (a *Adapter) projectRoot(sess domain.Session, pr domain.Project) string {
@@ -286,7 +251,7 @@ func (a *Adapter) createSession(id string, p payload, pid int, now time.Time) (d
 	x := domain.Session{ID: id, Agent: a.Name(), ProviderSessionID: p.SessionID, PID: pid, Cwd: p.Cwd,
 		Branch: l.Branch, GitHead: l.GitHead, Worktree: l.Worktree, WorktreeLinked: l.WorktreeLinked,
 		TranscriptPath: p.TranscriptPath, StartedAt: now, LastEventAt: now}
-	proj, err := a.projectFor(p.Cwd, l)
+	proj, err := a.st.ProjectForLocation(p.Cwd, l)
 	if err != nil {
 		return x, err
 	}

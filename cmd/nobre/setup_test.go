@@ -508,3 +508,44 @@ func TestRemoverStatusLineTellsDaemon(t *testing.T) {
 		t.Fatalf("daemon fora: %+v", r)
 	}
 }
+
+// O --remover avisa o daemon (hooks, status line e skill saem de propósito)
+// antes de parar o serviço: senão a linha de base fica e o próximo setup
+// alerta uma remoção que o usuário pediu.
+func TestRemoverTellsDaemonBeforeStoppingService(t *testing.T) {
+	e := newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir()); r.code != 0 {
+		t.Fatalf("setup: %+v", r)
+	}
+	var order []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(r.Body)
+		order = append(order, r.Method+" "+r.URL.Path+" "+strings.TrimSpace(buf.String()))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	e.d.Run = func(name string, args ...string) error {
+		order = append(order, name+" "+strings.Join(args, " "))
+		return nil
+	}
+	if r := e.run(t, srv.Listener.Addr().String(), "", t.TempDir(), "--remover"); r.code != 0 {
+		t.Fatalf("remover: %+v", r)
+	}
+	want := `POST /api/integration/removed {"keys":["hooks","statusline","skill"],"origin":"cli"}`
+	if len(order) < 2 || order[0] != want || order[1] != "systemctl --user disable --now nobred" {
+		t.Fatalf("ordem = %q", order)
+	}
+
+	// Dry-run não mexe na linha de base.
+	order = nil
+	if r := e.run(t, srv.Listener.Addr().String(), "", t.TempDir(), "--remover", "--dry-run"); r.code != 0 {
+		t.Fatalf("dry-run: %+v", r)
+	}
+	for _, o := range order {
+		if strings.HasPrefix(o, "POST ") {
+			t.Fatalf("dry-run avisou o daemon: %q", order)
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,7 +56,9 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	dir := t.TempDir()
-	e := &env{st: newFakeStore(), now: time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC), settings: filepath.Join(dir, "settings.json")}
+	// bin: um nobre conhecido (não precisa existir); "" = nobre não encontrado.
+	e := &env{st: newFakeStore(), now: time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC), settings: filepath.Join(dir, "settings.json"),
+		bin: filepath.Join(dir, "bin", "nobre")}
 	os.WriteFile(e.settings, []byte("{}"), 0o600)
 	return e
 }
@@ -259,11 +262,164 @@ func TestUnreadableSettings(t *testing.T) {
 
 func TestDeadBinaryWithoutNobreAsksMakeInstall(t *testing.T) {
 	e := newEnv(t)
+	e.bin = ""
 	m := e.monitor()
 	e.checks = []adapter.Check{ok("hooks")}
 	m.CheckNow()
 	e.checks = []adapter.Check{bad("hooks", "dead_binary", "morto")}
 	if p := m.CheckNow(); len(p) != 1 || p[0].Action != ActionMakeInstall {
 		t.Fatalf("%+v", p)
+	}
+}
+
+// Sem nobre em disco, reinstalar gravaria um caminho morto: qualquer problema
+// dos hooks pede make install.
+func TestHooksMissingWithoutNobreAsksMakeInstall(t *testing.T) {
+	e := newEnv(t)
+	e.bin = ""
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("hooks")}
+	m.CheckNow()
+	e.checks = []adapter.Check{bad("hooks", "missing", "faltam: Stop")}
+	p := m.CheckNow()
+	if len(p) != 1 || p[0].Action != ActionMakeInstall || p[0].Text != "O nobre não foi encontrado; rode make install." {
+		t.Fatalf("%+v", p)
+	}
+}
+
+// settings.json ilegível ou ausente: a status line não foi "trocada por outro
+// comando"; o alerta manda olhar a configuração.
+func TestStatuslineWithoutReadableSettings(t *testing.T) {
+	for code, text := range map[string]string{
+		"unreadable":  unreadableText,
+		"no_settings": "O ~/.claude/settings.json não existe; a status line do Cockpit saiu junto.",
+	} {
+		e := newEnv(t)
+		m := e.monitor()
+		e.checks = []adapter.Check{ok("statusline")}
+		m.CheckNow()
+		e.checks = []adapter.Check{bad("statusline", code, "detalhe")}
+		if p := m.CheckNow(); len(p) != 1 || p[0].Action != ActionConfig || p[0].Text != text {
+			t.Fatalf("%s: %+v", code, p)
+		}
+	}
+}
+
+// A impressão de Ignorar é o estado do próprio item: mexer em outra chave do
+// settings.json não traz o alerta de volta; trocar o comando da status line traz.
+func TestIgnoreFingerprintIsItemState(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("statusline")}
+	m.CheckNow()
+	foreign := func(cmd string) adapter.Check {
+		return adapter.Check{Key: "statusline", Code: "missing", Detail: "não passa pelo nobre", State: cmd}
+	}
+	e.checks = []adapter.Check{foreign("echo a")}
+	m.CheckNow()
+	if err := m.Ignore("statusline"); err != nil {
+		t.Fatal(err)
+	}
+	later := e.now.Add(time.Minute)
+	os.WriteFile(e.settings, []byte(`{"model":"opus"}`), 0o600)
+	os.Chtimes(e.settings, later, later)
+	if p := m.CheckNow(); len(p) != 0 {
+		t.Fatalf("outra chave do settings.json trouxe o alerta: %+v", p)
+	}
+	e.checks = []adapter.Check{foreign("echo b")}
+	if p := m.CheckNow(); len(p) != 1 {
+		t.Fatalf("comando novo não alertou: %+v", p)
+	}
+}
+
+// Health roda fora da trava: um GET /api/integration durante a conferência
+// não espera por ela.
+func TestHealthRunsOutsideLock(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	m.Health = func() []adapter.Check {
+		m.Problems()
+		return []adapter.Check{ok("hooks")}
+	}
+	done := make(chan struct{})
+	go func() { m.CheckNow(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CheckNow travou: Health roda com a trava")
+	}
+}
+
+// Conferências simultâneas não se atropelam: uma de cada vez.
+func TestChecksAreSerialized(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	var mu sync.Mutex
+	running, overlap := 0, false
+	m.Health = func() []adapter.Check {
+		mu.Lock()
+		running++
+		overlap = overlap || running > 1
+		mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+		mu.Lock()
+		running--
+		mu.Unlock()
+		return []adapter.Check{ok("hooks")}
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() { defer wg.Done(); m.CheckNow() }()
+	}
+	wg.Wait()
+	if overlap {
+		t.Fatal("duas conferências rodaram ao mesmo tempo")
+	}
+}
+
+// O alerta muda de texto sem mudar de estado (o binário morto agora é outro):
+// a interface é avisada.
+func TestPublishWhenProblemListChanges(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("hooks")}
+	m.CheckNow()
+	e.checks = []adapter.Check{bad("hooks", "dead_binary", "aponta para um binário que não existe: /a/nobre")}
+	m.CheckNow()
+	before := e.published
+	m.CheckNow()
+	if e.published != before {
+		t.Fatalf("publicou sem mudança: %d -> %d", before, e.published)
+	}
+	e.checks = []adapter.Check{bad("hooks", "dead_binary", "aponta para um binário que não existe: /b/nobre")}
+	p := m.CheckNow()
+	if len(p) != 1 || e.published != before+1 {
+		t.Fatalf("%+v published %d -> %d", p, before, e.published)
+	}
+}
+
+// Um problema que continua depois de reiniciar o daemon não ganha outra linha
+// de "quebrou" no histórico; quebrar de novo depois de voltar ao normal ganha.
+func TestBrokenNotReloggedAfterRestart(t *testing.T) {
+	e := newEnv(t)
+	e.checks = []adapter.Check{ok("hooks")}
+	e.monitor().CheckNow()
+	broken := []adapter.Check{bad("hooks", "missing", "faltam: Stop")}
+	e.checks = broken
+	e.monitor().CheckNow()
+	m := e.monitor() // reinício
+	if p := m.CheckNow(); len(p) != 1 {
+		t.Fatalf("%+v", p)
+	}
+	if n := e.st.count(domain.LogIntegrationBroken); n != 1 {
+		t.Fatalf("broken logado %d vezes", n)
+	}
+	e.checks = []adapter.Check{ok("hooks")}
+	m.CheckNow()
+	e.checks = broken
+	e.monitor().CheckNow()
+	if n := e.st.count(domain.LogIntegrationBroken); n != 2 {
+		t.Fatalf("quebra nova: broken logado %d vezes", n)
 	}
 }

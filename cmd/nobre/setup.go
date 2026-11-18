@@ -249,13 +249,16 @@ func (c *cli) tellRemoved(keys ...string) {
 	_ = c.client().IntegrationRemoved(cx, keys, "cli")
 }
 
-// removeAll é o "nobre setup --remover": primeiro para o serviço (o monitor
-// nunca vê a remoção), depois desfaz hooks, status line e skill. Binários e
-// banco ficam.
+// removeAll é o "nobre setup --remover": avisa o daemon que hooks, status
+// line e skill saem de propósito (tira-os da linha de base, para um setup
+// futuro não alertar a remoção), para o serviço e depois desfaz os três.
+// Binários e banco ficam.
 func (c *cli) removeAll(d *setupDeps, dry bool, l *checklist) error {
 	prefix := ""
 	if dry {
 		prefix = "[dry-run] "
+	} else {
+		c.tellRemoved("hooks", "statusline", "skill")
 	}
 	c.removeService(d, dry, l)
 

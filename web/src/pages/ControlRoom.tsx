@@ -43,6 +43,9 @@ function withCommands(text: string) {
 
 const LOST_SESSIONS = 'Sessões abertas enquanto os hooks estavam fora não são registradas; reinicie-as.'
 
+// O relatório lista os eventos de hook que mudaram, mais "skill" e "statusLine".
+const hooksChanged = (r: InstallReport) => r.changed.some((c) => c !== 'skill' && c !== 'statusLine')
+
 // Ações de um alerta de integração. Reinstalar mostra antes o que vai mudar.
 function IntegrationActions({ alert, onInstalled }: { alert: Alert; onInstalled: (r: InstallReport) => void }) {
   const qc = useQueryClient()
@@ -78,7 +81,7 @@ function IntegrationActions({ alert, onInstalled }: { alert: Alert; onInstalled:
       </div>
       {plan && (
         <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 13 }}>Vai alterar: {plan.changed.join(', ')}. O resto do arquivo não muda.</span>
+          <span style={{ fontSize: 13 }}>{plan.changed.length === 0 ? 'Nada a alterar.' : `Vai alterar: ${plan.changed.join(', ')}. O resto do arquivo não muda.`}</span>
           <button type="button" style={btnPrimary} disabled={busy} onClick={() => install.mutate()}>Confirmar</button>
           <button type="button" style={btn} onClick={() => setPlan(null)}>Cancelar</button>
         </div>
@@ -368,7 +371,7 @@ export function ControlRoom() {
         {installed && (
           <div role="status" style={{ ...panel, gap: 6, fontSize: 13 }}>
             {installed.messages.map((m) => <div key={m}>{m}</div>)}
-            <div>{LOST_SESSIONS}</div>
+            {hooksChanged(installed) && <div>{LOST_SESSIONS}</div>}
             <div><button type="button" style={btn} onClick={() => setInstalled(null)}>Entendi</button></div>
           </div>
         )}

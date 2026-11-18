@@ -75,7 +75,8 @@ func TestDetectHooksPointingToMissingBinary(t *testing.T) {
 	gone := filepath.Join(t.TempDir(), "sumiu", "nobre")
 	empty := t.TempDir() // nenhum nobre para re-resolver
 	e.a.SetPaths(Paths{SettingsPath: p, SkillsDir: skills, NobreBin: gone, ClaudeBin: "/nao/existe", SearchPATH: func() string { return empty }})
-	if _, err := e.a.Install(); err != nil {
+	// Hooks gravados quando o nobre ainda existia (o Install recusa caminho morto).
+	if _, err := InstallHooks(p, gone); err != nil {
 		t.Fatal(err)
 	}
 	var hooks adapter.Check

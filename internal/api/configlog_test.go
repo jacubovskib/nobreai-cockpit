@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
 func (a *testAPI) startSess(t *testing.T, id, cwd string, project *int64, capture bool) {
@@ -221,5 +222,97 @@ func TestPatchProjectCaptureOffCountsOnlyCapturing(t *testing.T) {
 	rec := a.do(t, "PATCH", fmt.Sprintf("/api/projects/%d", p.ID), map[string]any{"name": "api", "path": "/w/api", "capture": false}, 0)
 	if n := decode[map[string]any](t, rec)["notified_sessions"]; n != float64(1) {
 		t.Fatalf("notified = %v (%s)", n, rec.Body)
+	}
+}
+
+// locGit é um Git falso que sabe de quais repositórios são os worktrees
+// ligados (pasta do worktree -> checkout principal).
+type locGit struct {
+	*fakeGit
+	mains map[string]string
+}
+
+func (g *locGit) Locate(dir string) gitinfo.Location {
+	return gitinfo.Location{Root: dir, Main: g.mains[dir], Linked: g.mains[dir] != ""}
+}
+func (g *locGit) Worktrees(string) ([]gitinfo.Worktree, error) { return nil, nil }
+
+func (a *testAPI) startLinkedSess(t *testing.T, id, cwd, worktree string) {
+	t.Helper()
+	err := a.st.StartSession(domain.Session{ID: id, Agent: "claude", PID: 1, Cwd: cwd, Worktree: worktree, WorktreeLinked: true,
+		StartedAt: testNow, LastEventAt: testNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (a *testAPI) patchCapture(t *testing.T, p domain.Project, on bool) float64 {
+	t.Helper()
+	rec := a.do(t, "PATCH", fmt.Sprintf("/api/projects/%d", p.ID), map[string]any{"name": p.Name, "path": p.Path, "capture": on}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH = %d %s", rec.Code, rec.Body)
+	}
+	n, _ := decode[map[string]any](t, rec)["notified_sessions"].(float64)
+	return n
+}
+
+func (a *testAPI) owner(t *testing.T, id string) (*int64, bool) {
+	t.Helper()
+	x, err := a.st.GetSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return x.ProjectID, x.FullCapture
+}
+
+// Um projeto avulso B sem captura dentro da pasta da família A é o dono das
+// sessões na pasta dele (como no hook): ligar a captura de A não as adota.
+func TestCaptureOnSkipsSessionsOwnedByNestedProject(t *testing.T) {
+	a := newTestAPI(t)
+	fam, _ := a.st.CreateProject("a", "/w/a")
+	b, _ := a.st.CreateProject("b", "/w/a/b")
+	a.patchCapture(t, fam, false)
+	a.patchCapture(t, b, false)
+	a.startSess(t, "claude:b", "/w/a/b/src", nil, false)
+	a.startSess(t, "claude:a", "/w/a/src", nil, false)
+	if n := a.patchCapture(t, fam, true); n != 1 {
+		t.Fatalf("notified = %v", n)
+	}
+	if pid, capture := a.owner(t, "claude:b"); pid != nil || capture {
+		t.Fatalf("sessão de B adotada por A: %v %v", pid, capture)
+	}
+	if pid, capture := a.owner(t, "claude:a"); pid == nil || *pid != fam.ID || !capture {
+		t.Fatalf("sessão de A: %v %v", pid, capture)
+	}
+}
+
+// Worktree ligado dentro do repositório (.worktrees/x) ou fora dele: a sessão
+// vai para o sub-projeto do mesmo lugar no checkout principal, como no hook.
+func TestCaptureOnAdoptsLinkedWorktreeSessionsInApp(t *testing.T) {
+	a := newTestAPI(t)
+	g := &locGit{fakeGit: &fakeGit{branch: "main"}, mains: map[string]string{
+		"/r/loja/.worktrees/x": "/r/loja", "/tmp/wt": "/r/loja",
+	}}
+	a.h = New(a.st, Deps{Now: func() time.Time { return testNow }, Hub: a.hub, Git: g})
+	mono, _ := a.st.CreateProject("loja", "/r/loja")
+	web, _, err := a.st.CreateChild("web", "/r/loja/apps/web", mono.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.patchCapture(t, mono, false)
+	a.startLinkedSess(t, "claude:in", "/r/loja/.worktrees/x/apps/web/src", "/r/loja/.worktrees/x")
+	a.startLinkedSess(t, "claude:out", "/tmp/wt/apps/web", "/tmp/wt")
+	a.startLinkedSess(t, "claude:root", "/tmp/wt", "/tmp/wt")
+	a.startLinkedSess(t, "claude:other", "/tmp/outro", "/tmp/outro")
+	if n := a.patchCapture(t, mono, true); n != 3 {
+		t.Fatalf("notified = %v", n)
+	}
+	for id, want := range map[string]int64{"claude:in": web.ID, "claude:out": web.ID, "claude:root": mono.ID} {
+		if pid, capture := a.owner(t, id); pid == nil || *pid != want || !capture {
+			t.Fatalf("%s: projeto %v captura %v, quer %d", id, pid, capture, want)
+		}
+	}
+	if pid, _ := a.owner(t, "claude:other"); pid != nil {
+		t.Fatalf("sessão fora do repositório adotada: %v", *pid)
 	}
 }

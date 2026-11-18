@@ -73,9 +73,14 @@ type Check struct {
 	Label  string `json:"label"`
 	Detail string `json:"detail"`
 	OK     bool   `json:"ok"`
-	// Code explica a falha: "missing", "outdated", "dead_binary", "unreadable"
-	// ou "not_found". Vazio quando OK.
+	// Code explica a falha: "missing", "outdated", "dead_binary", "unreadable",
+	// "no_settings" (o arquivo de configuração não existe) ou "not_found".
+	// Vazio quando OK.
 	Code string `json:"code,omitempty"`
+	// State resume o estado do próprio item (o comando da status line, a data
+	// e o tamanho da skill...): entra na impressão de "Ignorar", para que só
+	// uma mudança nele traga o alerta de volta.
+	State string `json:"-"`
 }
 
 // InstallReport resume o que Install alterou.

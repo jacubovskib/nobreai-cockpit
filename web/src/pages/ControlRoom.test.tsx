@@ -288,17 +288,43 @@ describe('ControlRoom · projeto', () => {
     const fn = mock({
       '/api/overview': integ('hooks', 'reinstall', 'Os hooks do Cockpit sumiram do ~/.claude/settings.json.'),
       '/api/settings': {},
-      '/api/agents/claude/install/plan': { changed: ['hooks'], backup: '', messages: [] },
-      'POST /api/agents/claude/install': { changed: ['hooks'], backup: '/b', messages: ['Hooks instalados.'] },
+      '/api/agents/claude/install/plan': { changed: ['Stop', 'SessionEnd'], backup: '', messages: [] },
+      'POST /api/agents/claude/install': { changed: ['Stop', 'SessionEnd'], backup: '/b', messages: ['Hooks instalados.'] },
     })
     wrap(<ControlRoom />)
     fireEvent.click(await screen.findByRole('button', { name: 'Reinstalar' }))
-    expect(await screen.findByText('Vai alterar: hooks. O resto do arquivo não muda.')).toBeInTheDocument()
+    expect(await screen.findByText('Vai alterar: Stop, SessionEnd. O resto do arquivo não muda.')).toBeInTheDocument()
     expect(calls(fn, 'POST', '/api/agents/claude/install')).toHaveLength(0)
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
     await waitFor(() => expect(calls(fn, 'POST', '/api/agents/claude/install')).toHaveLength(1))
     expect(await screen.findByText('Hooks instalados.')).toBeInTheDocument()
     expect(screen.getByText(/reinicie-as/)).toBeInTheDocument()
+  })
+
+  it('reinstalling only the skill does not ask to restart sessions', async () => {
+    mock({
+      '/api/overview': integ('skill', 'reinstall', 'A skill do Cockpit está desatualizada.'),
+      '/api/settings': {},
+      '/api/agents/claude/install/plan': { changed: ['skill'], backup: '', messages: [] },
+      'POST /api/agents/claude/install': { changed: ['skill'], backup: '', messages: ['Skill instalada.'] },
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reinstalar' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }))
+    expect(await screen.findByText('Skill instalada.')).toBeInTheDocument()
+    expect(screen.queryByText(/reinicie-as/)).not.toBeInTheDocument()
+  })
+
+  it('empty install plan says nothing to change', async () => {
+    mock({
+      '/api/overview': integ('hooks', 'reinstall', 'Os hooks do Cockpit sumiram do ~/.claude/settings.json.'),
+      '/api/settings': {},
+      '/api/agents/claude/install/plan': { changed: [], backup: '', messages: [] },
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reinstalar' }))
+    expect(await screen.findByText('Nada a alterar.')).toBeInTheDocument()
+    expect(screen.queryByText(/Vai alterar/)).not.toBeInTheDocument()
   })
 
   it('statusline alert offers keep current', async () => {

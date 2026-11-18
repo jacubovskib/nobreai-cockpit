@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -142,6 +143,42 @@ func (s *Store) ProjectForPath(cwd string) (*domain.Project, error) {
 		}
 	}
 	return best, nil
+}
+
+// ProjectForLocation é a regra de dono de uma sessão (a do hook, e a de quem
+// adota sessões sem projeto): o projeto mais fundo que contém cwd, de qualquer
+// família. Num worktree ligado (l.WorktreeLinked, com l.Main e l.Worktree), cwd
+// é traduzido para o mesmo lugar no checkout principal: sem projeto em cwd
+// vale o de lá; se o projeto achado tem sub-projetos, o de lá pode ser um deles.
+func (s *Store) ProjectForLocation(cwd string, l SessionLocation) (*domain.Project, error) {
+	proj, err := s.ProjectForPath(cwd)
+	if err != nil || cwd == "" {
+		return proj, err
+	}
+	var main, rel string
+	linked := l.WorktreeLinked && l.Main != ""
+	if linked {
+		r, err := filepath.Rel(l.Worktree, cwd)
+		linked = err == nil && !strings.HasPrefix(r, "..")
+		main, rel = l.Main, r
+	}
+	if proj == nil {
+		if !linked {
+			return nil, nil
+		}
+		return s.ProjectForPath(filepath.Join(main, rel))
+	}
+	if !linked {
+		return proj, nil
+	}
+	kids, err := s.Children(proj.ID)
+	if err != nil || len(kids) == 0 {
+		return proj, err
+	}
+	if app, err := s.ProjectForPath(filepath.Join(main, rel)); err == nil && app != nil {
+		return app, nil
+	}
+	return proj, nil
 }
 
 // ReassignSessions liga ao projeto as sessões sem projeto cujo cwd é root ou

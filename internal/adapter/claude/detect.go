@@ -192,6 +192,8 @@ func (a *Adapter) checks(withVersion bool) []adapter.Check {
 		}
 		cliCheck.Detail = strings.TrimSpace(cli + " " + version)
 	}
+	// O State de cada item resume o estado dele para a impressão de "Ignorar".
+	cliCheck.State = cli
 
 	hooks := adapter.Check{Key: "hooks", Label: "Hooks instalados"}
 	missing, bins, err := installedHooks(a.paths.SettingsPath)
@@ -218,13 +220,19 @@ func (a *Adapter) checks(withVersion bool) []adapter.Check {
 			}
 		}
 	}
+	hooks.State = strings.Join(bins, ",")
 
-	sline := adapter.Check{Key: statusLineCheckKey, Label: "Status line integrada"}
+	sline := adapter.Check{Key: statusLineCheckKey, Label: "Status line integrada", State: "missing"}
+	if cmd := statusLineCommand(a.paths.SettingsPath); cmd != "" {
+		sline.State = cmd
+	}
 	if b, detail := statusLineState(a.paths.SettingsPath); b == "" {
 		sline.Detail = detail
 		sline.Code = "missing"
-		if _, _, _, lerr := loadSettings(a.paths.SettingsPath); lerr != nil {
+		if _, _, exists, lerr := loadSettings(a.paths.SettingsPath); lerr != nil {
 			sline.Code = "unreadable"
+		} else if !exists {
+			sline.Code = "no_settings"
 		}
 	} else if !binaryExists(b) {
 		sline.Detail = "aponta para um binário que não existe: " + b
@@ -236,6 +244,10 @@ func (a *Adapter) checks(withVersion bool) []adapter.Check {
 
 	skill := adapter.Check{Key: "skill", Label: "Skill do Cockpit instalada"}
 	skillFile := SkillFile(a.paths.SkillsDir)
+	skill.State = "missing"
+	if st, err := os.Stat(skillFile); err == nil {
+		skill.State = fmt.Sprintf("%d-%d", st.ModTime().UnixNano(), st.Size())
+	}
 	if b, err := os.ReadFile(skillFile); err == nil {
 		skill.OK = true
 		skill.Detail = skillFile

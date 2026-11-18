@@ -84,10 +84,23 @@ func (s *server) installAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rep, err := ad.Install()
-	if err == nil && s.deps.Integration != nil {
-		s.deps.Integration.Fixed([]string{"hooks", "skill"}, rep.Changed)
+	if err == nil {
+		s.markFixed(rep, "hooks", "skill")
 	}
 	s.writeInstallReport(w, rep, err)
+}
+
+// markFixed avisa o monitor do conserto. Sem nada alterado não houve conserto
+// (nem linha no histórico): o monitor só confere de novo.
+func (s *server) markFixed(rep adapter.InstallReport, keys ...string) {
+	if s.deps.Integration == nil {
+		return
+	}
+	if len(rep.Changed) == 0 {
+		s.deps.Integration.CheckNow()
+		return
+	}
+	s.deps.Integration.Fixed(keys, rep.Changed)
 }
 
 // agentStatusLine integra ou remove a status line do agente: ação explícita,
@@ -116,8 +129,8 @@ func (s *server) agentStatusLine(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if in.Action == "install" {
 		rep, err = sl.InstallStatusLine()
-		if err == nil && s.deps.Integration != nil {
-			s.deps.Integration.Fixed([]string{"statusline"}, rep.Changed)
+		if err == nil {
+			s.markFixed(rep, "statusline")
 		}
 	} else {
 		// A marca de remoção deliberada vem antes de o arquivo mudar, para o

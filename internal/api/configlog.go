@@ -4,13 +4,12 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
 const (
@@ -104,8 +103,8 @@ func (s *server) countStaleCardsRule(now bool) (int, error) {
 // applyProjectCapture leva a mudança de captura de um projeto às sessões vivas
 // da família e devolve quantas foram avisadas. Desligar para as sessões vivas
 // da família; ligar religa as vivas da família que estavam sem captura e adota
-// as vivas sem projeto que rodam na pasta de algum membro (ou num worktree
-// ligado do repositório dele), no membro mais específico.
+// as vivas sem projeto cujo dono, pela regra do hook, é um membro da família
+// (um projeto de outra família aninhado na pasta fica com as dele).
 func (s *server) applyProjectCapture(projectID int64, on bool) (int, error) {
 	fam, err := s.st.FamilyIDs(projectID)
 	if err != nil {
@@ -139,26 +138,19 @@ func (s *server) applyProjectCapture(projectID int64, on bool) (int, error) {
 	if !on {
 		return n, nil
 	}
-	all, err := s.st.ListProjects()
-	if err != nil {
-		return 0, err
-	}
-	var members []domain.Project
-	for _, p := range all {
-		if inFam[p.ID] && p.Path != "" {
-			members = append(members, p)
-		}
-	}
 	wr, _ := s.deps.Git.(gitinfo.WorktreeReader)
 	for _, x := range live {
 		if !x.Live() || x.ProjectID != nil {
 			continue
 		}
-		pid, ok := familyOwner(members, wr, x)
-		if !ok {
+		owner, err := s.sessionOwner(wr, x)
+		if err != nil {
+			return n, err
+		}
+		if owner == nil || !inFam[owner.ID] {
 			continue
 		}
-		if err := s.st.AdoptSession(x.ID, pid); err != nil {
+		if err := s.st.AdoptSession(x.ID, owner.ID); err != nil {
 			return n, err
 		}
 		n++
@@ -166,58 +158,13 @@ func (s *server) applyProjectCapture(projectID int64, on bool) (int, error) {
 	return n, nil
 }
 
-// familyOwner escolhe o membro mais específico da família dono da sessão:
-// pela pasta (cwd) ou, num worktree ligado, pelo caminho relativo dentro dele.
-func familyOwner(members []domain.Project, wr gitinfo.WorktreeReader, x domain.Session) (int64, bool) {
-	deepest := func(rel string, within func(p domain.Project) (string, bool)) (int64, bool) {
-		var best int64
-		bestLen, found := -1, false
-		for _, m := range members {
-			r, ok := within(m)
-			if ok && (rel == r || strings.HasPrefix(rel, r+"/")) && len(r) > bestLen {
-				best, bestLen, found = m.ID, len(r), true
-			}
-		}
-		return best, found
+// sessionOwner acha o dono da sessão pela mesma regra do hook
+// (store.ProjectForLocation): o projeto mais fundo de qualquer família, com a
+// tradução do worktree ligado para o checkout principal.
+func (s *server) sessionOwner(wr gitinfo.WorktreeReader, x domain.Session) (*domain.Project, error) {
+	l := store.SessionLocation{Cwd: x.Cwd, Worktree: x.Worktree, WorktreeLinked: x.WorktreeLinked}
+	if wr != nil && x.WorktreeLinked && x.Worktree != "" {
+		l.Main = wr.Locate(x.Worktree).Main
 	}
-	cwd := filepath.Clean(x.Cwd)
-	var best int64
-	bestLen := -1
-	for _, m := range members {
-		root := filepath.Clean(m.Path)
-		if (cwd == root || strings.HasPrefix(cwd, root+"/")) && len(root) > bestLen {
-			best, bestLen = m.ID, len(root)
-		}
-	}
-	if bestLen >= 0 {
-		return best, true
-	}
-	if wr == nil || !x.WorktreeLinked || x.Worktree == "" {
-		return 0, false
-	}
-	main := filepath.Clean(wr.Locate(x.Worktree).Main)
-	var repo *domain.Project
-	for i := range members {
-		if filepath.Clean(members[i].Path) == main {
-			repo = &members[i]
-		}
-	}
-	if repo == nil {
-		return 0, false
-	}
-	wt := filepath.Clean(x.Worktree)
-	rel := ""
-	if r, ok := strings.CutPrefix(cwd, wt+"/"); ok {
-		rel = r
-	}
-	if id, ok := deepest(rel, func(p domain.Project) (string, bool) {
-		if p.ID == repo.ID {
-			return "", false
-		}
-		r := strings.TrimPrefix(filepath.Clean(p.Path), main+"/")
-		return r, strings.HasPrefix(filepath.Clean(p.Path), main+"/")
-	}); ok && rel != "" {
-		return id, true
-	}
-	return repo.ID, true
+	return s.st.ProjectForLocation(x.Cwd, l)
 }

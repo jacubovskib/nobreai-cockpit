@@ -356,3 +356,30 @@ func TestInstallReResolvesNobre(t *testing.T) {
 		t.Fatalf("hook com o caminho antigo: %s", b)
 	}
 }
+
+// Sem nenhum nobre em disco (o caminho antigo sumiu e não há outro), instalar
+// falha com msgNoNobre e não grava o caminho morto no settings.json.
+func TestInstallWithoutNobreWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	skills := filepath.Join(dir, "skills")
+	empty := t.TempDir()
+	a := New(nil, adapter.Deps{Now: time.Now})
+	a.SetPaths(Paths{SettingsPath: settings, SkillsDir: skills,
+		NobreBin:   filepath.Join(dir, "apagado", "nobre"),
+		SearchPATH: func() string { return empty }})
+	for name, f := range map[string]func() (adapter.InstallReport, error){
+		"Install": a.Install, "InstallStatusLine": a.InstallStatusLine, "PlanInstall": a.PlanInstall,
+	} {
+		if _, err := f(); err == nil || err.Error() != msgNoNobre {
+			t.Fatalf("%s: err = %v", name, err)
+		}
+	}
+	if _, err := os.Stat(settings); !os.IsNotExist(err) {
+		b, _ := os.ReadFile(settings)
+		t.Fatalf("settings.json escrito: %s", b)
+	}
+	if _, err := os.Stat(SkillFile(skills)); !os.IsNotExist(err) {
+		t.Fatalf("skill escrita: %v", err)
+	}
+}

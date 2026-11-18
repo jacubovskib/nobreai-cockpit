@@ -15,10 +15,11 @@ type fakeIntegration struct {
 	changed  [][]string
 	removed  [][]string
 	origins  []string
+	checks   int
 }
 
 func (f *fakeIntegration) Problems() []integration.Problem { return f.problems }
-func (f *fakeIntegration) CheckNow() []integration.Problem { return f.problems }
+func (f *fakeIntegration) CheckNow() []integration.Problem { f.checks++; return f.problems }
 func (f *fakeIntegration) Ignore(k string) error           { f.ignored = append(f.ignored, k); return nil }
 func (f *fakeIntegration) Fixed(keys, changed []string) {
 	f.fixed = append(f.fixed, keys)
@@ -74,6 +75,25 @@ func TestInstallMarksFixed(t *testing.T) {
 	}
 	if !reflect.DeepEqual(f.fixed, [][]string{{"hooks", "skill"}}) || len(f.changed[0]) == 0 {
 		t.Fatalf("%v %v", f.fixed, f.changed)
+	}
+}
+
+// Reinstalar sem nada a mudar não é um conserto: não vira linha de
+// "corrigida" no histórico (o monitor só confere de novo).
+func TestInstallWithoutChangesDoesNotMarkFixed(t *testing.T) {
+	f := &fakeIntegration{}
+	a, settings, _ := agentsAPIWith(t, f)
+	os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"echo oi"}}`), 0o600)
+	for range 2 {
+		if rec := a.do(t, "POST", "/api/agents/claude/install", map[string]any{}, 0); rec.Code != 200 {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+		if rec := a.do(t, "POST", "/api/agents/claude/statusline", map[string]any{"action": "install"}, 0); rec.Code != 200 {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+	}
+	if !reflect.DeepEqual(f.fixed, [][]string{{"hooks", "skill"}, {"statusline"}}) || f.checks != 2 {
+		t.Fatalf("fixed=%v checks=%d", f.fixed, f.checks)
 	}
 }
 

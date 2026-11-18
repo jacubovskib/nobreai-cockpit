@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,11 +20,13 @@ const (
 	keyBaseline = "integration_baseline"
 	keyIgnored  = "integration_ignored"
 	keyRemoved  = "integration_removed" // key -> hora da remoção deliberada
+	keyBroken   = "integration_broken"  // itens cuja quebra já está no histórico
 
 	againWindow   = 10 * time.Minute
 	removalWindow = 10 * time.Minute // validade da marca de remoção deliberada
 
 	unreadableText = "O ~/.claude/settings.json não pôde ser lido (JSON inválido?). O Cockpit não vai mexer nele; corrija o arquivo."
+	noSettingsText = "O ~/.claude/settings.json não existe; a status line do Cockpit saiu junto."
 )
 
 // Store é o que o monitor precisa do banco.
@@ -55,8 +58,8 @@ type Problem struct {
 // Monitor confere a integração e guarda a linha de base do que já funcionou.
 type Monitor struct {
 	Health func() []adapter.Check
-	// Files são os arquivos vigiados; o primeiro é o settings.json, cuja data
-	// e tamanho entram na impressão de "Ignorar".
+	// Files são os arquivos vigiados: mudou a data ou o tamanho de algum, a
+	// próxima volta confere de novo sem esperar a completa.
 	Files       func() []string
 	NobreBin    func() string // binário nobre atual em disco (para "restart")
 	Store       Store
@@ -65,13 +68,18 @@ type Monitor struct {
 	Publish     func(kind string)
 	Logf        func(string, ...any)
 
+	// run serializa as conferências inteiras (Health e o que se faz com o
+	// resultado), para um resultado velho nunca ser aplicado depois de um novo.
+	// mu guarda só o estado: Health roda sem ele, então Problems não espera.
+	run      sync.Mutex
 	mu       sync.Mutex
 	loaded   bool
 	baseline map[string]bool
 	ignored  map[string]string
 	fixedAt  map[string]time.Time
 	removed  map[string]time.Time
-	healthy  map[string]bool // último estado visto nesta execução
+	broken   map[string]bool // quebra já registrada no histórico (sobrevive ao reinício)
+	healthy  map[string]bool // último estado visto
 	checks   map[string]adapter.Check
 	problems []Problem
 }
@@ -101,7 +109,7 @@ func (m *Monitor) load() {
 	}
 	m.loaded = true
 	m.baseline, m.ignored = map[string]bool{}, map[string]string{}
-	m.removed = map[string]time.Time{}
+	m.removed, m.broken = map[string]time.Time{}, map[string]bool{}
 	m.fixedAt, m.healthy, m.checks = map[string]time.Time{}, map[string]bool{}, map[string]adapter.Check{}
 	if _, err := m.Store.GetKV(keyBaseline, &m.baseline); err != nil {
 		m.logf("integração: ler linha de base: %v", err)
@@ -112,8 +120,19 @@ func (m *Monitor) load() {
 	if _, err := m.Store.GetKV(keyRemoved, &m.removed); err != nil {
 		m.logf("integração: ler remoções: %v", err)
 	}
+	if _, err := m.Store.GetKV(keyBroken, &m.broken); err != nil {
+		m.logf("integração: ler quebras registradas: %v", err)
+	}
 	if m.removed == nil {
 		m.removed = map[string]time.Time{}
+	}
+	if m.broken == nil {
+		m.broken = map[string]bool{}
+	}
+	// A quebra registrada antes do reinício continua sendo a mesma: não ganha
+	// outra linha no histórico.
+	for k := range m.broken {
+		m.healthy[k] = false
 	}
 	if m.baseline == nil {
 		m.baseline = map[string]bool{}
@@ -137,9 +156,25 @@ func (m *Monitor) addLog(kind string, data any) {
 
 // CheckNow confere a integração agora e devolve os problemas ativos.
 func (m *Monitor) CheckNow() []Problem {
+	m.run.Lock()
+	defer m.run.Unlock()
+	p, notify := m.check()
+	if notify {
+		m.publish()
+	}
+	return p
+}
+
+// check roda Health sem a trava do estado e aplica o resultado com ela. Quem
+// chama segura m.run. notify: a lista de problemas mudou ou houve transição.
+func (m *Monitor) check() ([]Problem, bool) {
+	var checks []adapter.Check
+	if m.Health != nil {
+		checks = m.Health()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.checkLocked()
+	return m.apply(checks)
 }
 
 // Problems devolve o resultado da última conferência.
@@ -149,17 +184,19 @@ func (m *Monitor) Problems() []Problem {
 	return append([]Problem{}, m.problems...)
 }
 
-func (m *Monitor) checkLocked() []Problem {
+// apply compara os checks com a linha de base e calcula os problemas. Quem
+// chama segura m.mu.
+func (m *Monitor) apply(checks []adapter.Check) ([]Problem, bool) {
 	m.load()
-	var checks []adapter.Check
-	if m.Health != nil {
-		checks = m.Health()
-	}
 	problems := []Problem{}
-	changed, transition, tombs := false, false, false
+	changed, transition, tombs, brokenChanged := false, false, false, false
 	for _, c := range checks {
 		m.checks[c.Key] = c
 		if c.OK && c.Code == "" {
+			if m.broken[c.Key] {
+				delete(m.broken, c.Key)
+				brokenChanged = true
+			}
 			if m.ignored[c.Key] != "" {
 				delete(m.ignored, c.Key)
 				m.put(keyIgnored, m.ignored)
@@ -193,10 +230,12 @@ func (m *Monitor) checkLocked() []Problem {
 		}
 		if prev, seen := m.healthy[c.Key]; !seen || prev {
 			m.addLog(domain.LogIntegrationBroken, map[string]any{"key": c.Key, "code": c.Code, "text": c.Detail})
+			m.broken[c.Key] = true
+			brokenChanged = true
 			transition = true
 		}
 		m.healthy[c.Key] = false
-		if m.ignored[c.Key] != "" && m.ignored[c.Key] == m.fingerprint(c) {
+		if m.ignored[c.Key] != "" && m.ignored[c.Key] == fingerprint(c) {
 			continue
 		}
 		problems = append(problems, m.problemFor(c))
@@ -207,27 +246,25 @@ func (m *Monitor) checkLocked() []Problem {
 	if tombs {
 		m.put(keyRemoved, m.removed)
 	}
-	m.problems = problems
-	if transition {
-		m.publish()
+	if brokenChanged {
+		m.put(keyBroken, m.broken)
 	}
-	return append([]Problem{}, problems...)
+	notify := transition || !slices.Equal(problems, m.problems)
+	m.problems = problems
+	return append([]Problem{}, problems...), notify
 }
 
 func (m *Monitor) problemFor(c adapter.Check) Problem {
 	p := Problem{Key: c.Key, Text: c.Detail, Action: ActionConfig}
 	switch c.Key {
 	case "hooks":
-		switch c.Code {
-		case "unreadable":
-			p.Text = unreadableText
-		case "dead_binary":
-			p.Action = ActionReinstall
-			if m.NobreBin == nil || m.NobreBin() == "" {
-				p.Action = ActionMakeInstall
-			}
-		default:
-			p.Action = ActionReinstall
+		if c.Code == "unreadable" {
+			break
+		}
+		// Sem nobre em disco, reinstalar gravaria um caminho morto.
+		p.Action = ActionReinstall
+		if m.NobreBin == nil || m.NobreBin() == "" {
+			p.Action = ActionMakeInstall
 		}
 	case "skill":
 		p.Action = ActionReinstall
@@ -235,7 +272,9 @@ func (m *Monitor) problemFor(c adapter.Check) Problem {
 			p.Action = ActionRestart
 		}
 	case "statusline":
-		p.Action = ActionStatusline
+		if c.Code != "unreadable" && c.Code != "no_settings" {
+			p.Action = ActionStatusline
+		}
 	}
 	if t, ok := m.fixedAt[c.Key]; ok && m.now().Sub(t) < againWindow {
 		p.Again = true
@@ -250,6 +289,10 @@ func problemText(c adapter.Check, p Problem) string {
 	const deadPrefix = "aponta para um binário que não existe: "
 	bin := strings.TrimPrefix(c.Detail, deadPrefix)
 	switch {
+	case c.Code == "unreadable":
+		return unreadableText
+	case c.Code == "no_settings":
+		return noSettingsText
 	case p.Action == ActionMakeInstall:
 		return "O nobre não foi encontrado; rode make install."
 	case p.Action == ActionRestart:
@@ -284,16 +327,11 @@ func (m *Monitor) binaryNewerThanDaemon() bool {
 	return err == nil && st.ModTime().After(m.DaemonStart)
 }
 
-// fingerprint identifica o estado de um problema: se o conserto do usuário não
-// mexeu no erro nem no settings.json, a impressão é a mesma e o Ignorar vale.
-func (m *Monitor) fingerprint(c adapter.Check) string {
-	fp := c.Code + "|" + c.Detail + "|"
-	if m.Files != nil {
-		if fs := m.Files(); len(fs) > 0 {
-			fp += statSig(fs[0])
-		}
-	}
-	return fp
+// fingerprint identifica o estado de um problema pelo próprio item (erro,
+// detalhe e o estado que o adaptador resume em State): mexer em outra parte do
+// settings.json não muda a impressão, então o Ignorar continua valendo.
+func fingerprint(c adapter.Check) string {
+	return c.Code + "|" + c.Detail + "|" + c.State
 }
 
 func statSig(path string) string {
@@ -306,6 +344,17 @@ func statSig(path string) string {
 
 // Ignore esconde o problema de key até a impressão dele mudar.
 func (m *Monitor) Ignore(key string) error {
+	m.run.Lock()
+	defer m.run.Unlock()
+	if err := m.ignore(key); err != nil {
+		return err
+	}
+	m.check()
+	m.publish()
+	return nil
+}
+
+func (m *Monitor) ignore(key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.load()
@@ -313,20 +362,23 @@ func (m *Monitor) Ignore(key string) error {
 	if !ok {
 		return nil
 	}
-	m.ignored[key] = m.fingerprint(c)
+	m.ignored[key] = fingerprint(c)
 	if err := m.Store.PutKV(keyIgnored, m.ignored); err != nil {
 		return err
 	}
-	if err := m.Store.AddConfigLog(domain.LogIntegrationIgnored, map[string]any{"key": key}, m.now()); err != nil {
-		return err
-	}
-	m.checkLocked()
-	m.publish()
-	return nil
+	return m.Store.AddConfigLog(domain.LogIntegrationIgnored, map[string]any{"key": key}, m.now())
 }
 
 // Fixed registra um conserto (keys) e o que ele mudou, e confere de novo.
 func (m *Monitor) Fixed(keys []string, changed []string) {
+	m.run.Lock()
+	defer m.run.Unlock()
+	m.fixed(keys, changed)
+	m.check()
+	m.publish()
+}
+
+func (m *Monitor) fixed(keys []string, changed []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.load()
@@ -341,13 +393,19 @@ func (m *Monitor) Fixed(keys []string, changed []string) {
 	}
 	m.put(keyRemoved, m.removed)
 	m.put(keyIgnored, m.ignored)
-	m.checkLocked()
-	m.publish()
 }
 
 // Removed registra que o item saiu de propósito (origin: "config" ou "cli"):
 // deixa de contar como "já funcionou", então não alerta.
 func (m *Monitor) Removed(keys []string, origin string) {
+	m.run.Lock()
+	defer m.run.Unlock()
+	m.removedKeys(keys, origin)
+	m.check()
+	m.publish()
+}
+
+func (m *Monitor) removedKeys(keys []string, origin string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.load()
@@ -355,12 +413,12 @@ func (m *Monitor) Removed(keys []string, origin string) {
 		m.baseline[k] = false
 		m.removed[k] = m.now()
 		delete(m.healthy, k)
+		delete(m.broken, k)
 	}
 	m.put(keyBaseline, m.baseline)
 	m.put(keyRemoved, m.removed)
+	m.put(keyBroken, m.broken)
 	m.addLog(domain.LogIntegrationRemoved, map[string]any{"keys": keys, "origin": origin})
-	m.checkLocked()
-	m.publish()
 }
 
 func (m *Monitor) filesSig() string {

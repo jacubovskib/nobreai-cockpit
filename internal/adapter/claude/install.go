@@ -437,12 +437,16 @@ func (a *Adapter) resolveNobre() string {
 func (a *Adapter) NobreBinary() string { return a.resolveNobre() }
 
 // currentPaths devolve uma cópia dos caminhos, com o nobre re-resolvido: o
-// caminho antigo só vale se ainda existir.
+// caminho antigo só vale se ainda existir. Sem nenhum nobre em disco, NobreBin
+// vem vazio e quem instala falha com msgNoNobre em vez de gravar um caminho
+// morto.
 func (a *Adapter) currentPaths() Paths {
-	a.resolveNobre()
+	found := a.resolveNobre()
 	a.nobreMu.Lock()
 	defer a.nobreMu.Unlock()
-	return a.paths
+	p := a.paths
+	p.NobreBin = found
+	return p
 }
 
 // PlanInstall calcula o que Install mudaria, sem escrever nada.
