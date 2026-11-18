@@ -84,7 +84,7 @@ function ByApp({ project, list, cards, totals, sessions }: { project: Project; l
   const folder = (p: Project) => (project.path && p.path.startsWith(project.path.replace(/\/+$/, '') + '/') ? p.path.slice(project.path.replace(/\/+$/, '').length + 1) : p.path)
   const lines: { id: number; key: string; name: string; path: string; cost: number; unpriced: boolean; cards: CardSummary[] }[] = [
     ...row.children.map((c) => ({ id: c.project!.id, key: String(c.project!.id), name: c.project!.name, path: folder(c.project!), cost: c.costUsd, unpriced: c.unpriced, cards: cards.filter((x) => x.project_id === c.project!.id) })),
-    { id: project.id, key: 'geral', name: 'geral', path: project.path, cost: row.general.costUsd, unpriced: row.general.unpriced, cards: cards.filter((x) => x.project_id === project.id) },
+    { id: project.id, key: 'geral', name: 'geral', path: '(raiz)', cost: row.general.costUsd, unpriced: row.general.unpriced, cards: cards.filter((x) => x.project_id === project.id) },
   ]
   // Sessão viva: não encerrada e com o processo existindo. As do pai caem em "geral".
   const liveOf = (id: number) => (sessions.data ?? []).filter((s: SessionWithUsage) => s.project_id === id && !s.ended_at && !s.pid_dead_at).length

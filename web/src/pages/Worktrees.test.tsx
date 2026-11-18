@@ -105,7 +105,7 @@ describe('Worktrees', () => {
 })
 
 describe('Worktrees · família', () => {
-  const grupo: ProjectWorktrees = { project: { id: 10, name: 'loja', path: '', capture: true, base_branch: '', parent_id: null, kind: 'repo' }, error: '', worktrees: [], orphans: [] }
+  const grupo: ProjectWorktrees = { project: { id: 10, name: 'loja', path: '', capture: true, base_branch: '', parent_id: null, kind: 'group' }, error: '', worktrees: [], orphans: [] }
   const filho: ProjectWorktrees = { project: { id: 11, name: 'web', path: '/w/web', capture: true, base_branch: '', parent_id: 10, kind: 'repo' }, error: '', worktrees: [], orphans: [] }
   it('grupo vira cabeçalho com os repositórios dos filhos abaixo', async () => {
     mockApi({ '/api/worktrees': [grupo, filho], '/api/projects': [grupo.project, filho.project] })
@@ -114,6 +114,16 @@ describe('Worktrees · família', () => {
     const child = screen.getByRole('heading', { name: 'loja › web' })
     expect(head.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.getByText('grupo')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+  it('group with folder renders as header without git', async () => {
+    const comPasta: ProjectWorktrees = { ...grupo, project: { ...grupo.project, path: '/w/loja' } }
+    mockApi({ '/api/worktrees': [comPasta, filho], '/api/projects': [comPasta.project, filho.project] })
+    wrap('/worktrees')
+    expect(await screen.findByRole('heading', { name: 'loja' })).toBeInTheDocument()
+    expect(screen.getByText('grupo')).toBeInTheDocument()
+    expect(screen.queryByText('/w/loja')).toBeNull()
+    expect(screen.getAllByText(/agentes ao vivo/)).toHaveLength(1) // só o filho mostra contagem de git
     expect(screen.queryByRole('alert')).toBeNull()
   })
   it('com um app selecionado mostra a seção do repositório do pai', async () => {

@@ -6,6 +6,7 @@ import type { AgentDetection, InstallReport, Limit, Price, Project, Settings } f
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { AddProject } from './config/AddProject'
+import { isGroup } from '../app/project'
 import { ConfigLog } from './config/ConfigLog'
 import { ErrorLine, btn, btnPrimary, h2, input, muted, panel } from './card/shared'
 
@@ -360,7 +361,7 @@ interface Moved { moved?: { sessions: number; cards: number } }
 function validParents(p: Project, projects: Project[]): Project[] {
   return projects.filter((q) => {
     if (q.id === p.id || q.parent_id != null) return false
-    if (q.path === '') return true
+    if (isGroup(q) && q.path === '') return true
     return p.path.startsWith(q.path.replace(/\/+$/, '') + '/')
   })
 }
@@ -403,7 +404,7 @@ function ProjectRow({ p, projects, nCards, child, report, setReport, onRescan }:
   const qc = useQueryClient()
   const parent = p.parent_id == null ? undefined : projects.find((x) => x.id === p.parent_id)
   const hasKids = projects.some((x) => x.parent_id === p.id)
-  const loose = !child && !hasKids && p.path !== '' && p.kind !== 'group'
+  const loose = !child && !hasKids && p.path !== '' && !isGroup(p)
   const options = loose ? validParents(p, projects) : []
   const [target, setTarget] = useState<number | null>(null)
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['projects'] }), qc.invalidateQueries({ queryKey: ['cards'] })])
@@ -420,7 +421,7 @@ function ProjectRow({ p, projects, nCards, child, report, setReport, onRescan }:
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, padding: '10px 0', paddingLeft: child ? 28 : 0, borderTop: '1px solid var(--border)' }}>
       <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column' }}>
-        <strong>{p.name}{(p.kind === 'group' || p.path === '') && <span className="badge" style={{ marginLeft: 8 }}>grupo</span>}</strong>
+        <strong>{p.name}{isGroup(p) && <span className="badge" style={{ marginLeft: 8 }}>grupo</span>}</strong>
         {p.path !== '' && <span className="mono" style={{ ...muted, fontSize: 12 }}>{p.path}</span>}
       </div>
       <span style={muted}>{child ? (parent?.capture ? `${nCards} ${nCards === 1 ? 'card' : 'cards'}` : 'captura desligada') : p.capture ? `${nCards} ${nCards === 1 ? 'card' : 'cards'}` : 'captura desligada'}</span>

@@ -25,7 +25,7 @@ import { Sessions } from './card/Sessions'
 import { Todos } from './card/Todos'
 import { WhereStopped } from './card/WhereStopped'
 import { ErrorLine, btnPrimary, input, muted } from './card/shared'
-import { displayName, familyIds, useWithProject } from '../app/project'
+import { displayName, familyIds, isGroup, useWithProject } from '../app/project'
 
 export function CardPage() {
   const withP = useWithProject()
@@ -92,7 +92,7 @@ export function CardPage() {
               <select style={{ ...input, minHeight: 32 }} value={project.id} disabled={move.isPending} onChange={(e) => move.mutate(Number(e.target.value))}>
                 {family.map((id) => {
                   const p = projects.data?.find((x) => x.id === id)
-                  return p && p.path !== '' && <option key={id} value={id}>{displayName(p, projects.data ?? [])}</option>
+                  return p && (!isGroup(p) || p.path !== '') && <option key={id} value={id}>{displayName(p, projects.data ?? [])}</option>
                 })}
               </select>
             </label>

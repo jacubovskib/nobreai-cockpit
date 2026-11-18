@@ -251,7 +251,7 @@ describe('ContinuePanel', () => {
   })
 
   it('card project select leaves out pathless groups', async () => {
-    const mk = (id: number, name: string, path: string, parent_id: number | null) => ({ id, name, path, capture: true, base_branch: 'main', parent_id })
+    const mk = (id: number, name: string, path: string, parent_id: number | null) => ({ id, name, path, capture: true, base_branch: 'main', parent_id, kind: path === '' ? 'group' : 'repo' })
     mock({
       ...base, '/api/cards/NAC-42': { ...detail, project_id: 2 },
       '/api/projects': [mk(1, 'loja', '', null), mk(2, 'web', '/w/web', 1), mk(3, 'api', '/w/api', 1)],
@@ -259,5 +259,16 @@ describe('ContinuePanel', () => {
     wrap(<CardPage />)
     const sel = await screen.findByLabelText('Projeto')
     expect(Array.from((sel as HTMLSelectElement).options).map((o) => o.text)).toEqual(['loja › web', 'loja › api'])
+  })
+
+  it('group with folder is a valid card target', async () => {
+    const mk = (id: number, name: string, path: string, parent_id: number | null, kind: string) => ({ id, name, path, capture: true, base_branch: '', parent_id, kind })
+    mock({
+      ...base, '/api/cards/NAC-42': { ...detail, project_id: 1 },
+      '/api/projects': [mk(1, 'loja', '/w/loja', null, 'group'), mk(2, 'web', '/w/loja/web', 1, 'repo')],
+    })
+    wrap(<CardPage />)
+    const sel = await screen.findByLabelText('Projeto')
+    expect(Array.from((sel as HTMLSelectElement).options).map((o) => o.text)).toEqual(['loja', 'loja › web'])
   })
 })

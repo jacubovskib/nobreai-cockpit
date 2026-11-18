@@ -12,6 +12,11 @@ export function projectColor(projectId: number, projects: Project[]): string {
   return PROJECT_COLORS[(i < 0 ? 0 : i) % PROJECT_COLORS.length]
 }
 
+// isGroup: grupo organiza sub-projetos e não é um repositório (pode ou não ter pasta).
+export function isGroup(p: Project): boolean {
+  return p.kind === 'group'
+}
+
 // familyIds: o projeto e, se for pai, os filhos. Um filho é só ele mesmo.
 export function familyIds(projects: Project[], id: number): number[] {
   return [id, ...projects.filter((p) => p.parent_id === id).map((p) => p.id)]

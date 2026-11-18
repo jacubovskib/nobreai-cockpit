@@ -304,6 +304,16 @@ nobre project scan --nao-sugerir apps/old,packages/x      # recusa pastas relati
 - A captura é do projeto principal e vale para os apps. Os filtros e as somas de um monorepo ou grupo juntam os filhos.
 - Na Configuração, Projetos: "Novo grupo", "Mover para…", "Desligar do projeto principal" e as sugestões ("Adicionar selecionados", "Não sugerir estes").
 
+Grupo com pasta: uma pasta que não é repositório git (por exemplo `~/workspace/clientes`, com vários repositórios dentro) também pode virar um grupo.
+
+```sh
+nobre project add ~/workspace/clientes                   # pasta sem git: cadastra um grupo com pasta, se achar repositórios dentro dela
+```
+
+- O grupo com pasta não usa git: não tem branch, worktree nem base. Ele aceita cards (o grupo sem pasta continua recusando) e aparece em Worktrees só como cabeçalho, com os repositórios dos filhos abaixo.
+- Na Configuração, "Adicionar projeto" abre o seletor de pasta. Escolha a pasta e o Cockpit varre os sub-projetos (repositório, monorepo ou grupo) e cadastra tudo de uma vez, com os sub-projetos que você marcar. "Varrer de novo" repete a varredura numa pasta já cadastrada.
+- Na página do projeto principal, a linha "geral" da tabela "Por app" mostra `(raiz)`: é o que caiu no principal e não em um app.
+
 ## Referência do comando `nobre`
 
 Comandos para o agente (dentro de uma sessão):
@@ -328,7 +338,7 @@ Comandos de administração:
 
 | Comando | O que faz |
 |---|---|
-| `nobre project add [caminho] [--name <nome>] [--pai <id\|pasta>]` | Cadastra um repositório (ou um app de monorepo, com `--pai`) |
+| `nobre project add [caminho] [--name <nome>] [--pai <id\|pasta>]` | Cadastra um repositório (ou um app de monorepo, com `--pai`). Numa pasta que não é git e tem repositórios dentro, cadastra um grupo com pasta (não aceita `--pai`) |
 | `nobre project pai <projeto> <pai\|--nenhum>` | Liga ou desliga um projeto de um pai |
 | `nobre project grupo "<nome>"` | Cria um grupo de repositórios |
 | `nobre app <nome>` / `nobre app --geral` | Põe o card no app do monorepo, ou no principal |

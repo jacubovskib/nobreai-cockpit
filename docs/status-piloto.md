@@ -123,6 +123,15 @@ Branch `feat/sub-projetos` (spec `docs/superpowers/specs/2026-11-17-sub-projetos
 - **CLI:** `nobre project add --pai`, `nobre project pai`, `nobre project grupo`, `nobre project scan [--nao-sugerir]`, `nobre app`.
 - **Soma e filtro:** escolher um principal filtra e soma pela família; a página de Worktrees mostra o grupo como cabeçalho.
 
+## Grupo com pasta e varredura de sub-projetos (NAC-27, 2026-11-18)
+
+Branch `feat/grupo-pasta` (spec `docs/superpowers/specs/2026-11-18-grupo-com-pasta-design.md`). Uma pasta que não é repositório git vira um grupo com pasta, e a Configuração cadastra a pasta escolhida junto com seus sub-projetos.
+
+- **Modelo:** `Project.kind` (`repo` ou `group`) no lugar de `path == ""` para reconhecer grupo. Grupo com pasta nunca toca no git e nunca recebe branch; o grupo sem pasta continua recusando cards.
+- **API e CLI:** `nobre project add <pasta>` numa pasta não git cadastra o grupo com pasta e lista as sugestões de sub-projetos; sem nenhum repositório dentro da pasta, ou com `--pai`, a CLI recusa. A recusa de sugestões do grupo com pasta funciona como a do monorepo, e o cadastro tolera falha na recusa.
+- **Interface:** "Adicionar projeto" escolhe a pasta, varre e cadastra tudo de uma vez ("Varrer de novo" repete). O grupo com pasta é destino válido de card (CardPage e Nova tarefa) e aparece em Worktrees como cabeçalho, sem rodar git.
+- **Detalhe visual (NAC-25):** a linha "geral" da tabela "Por app" mostra `(raiz)` no lugar do caminho completo.
+
 ## Mudanças de configuração e saúde da integração (NAC-6, 2026-11-17)
 
 Branch `feat/config-saude` (spec `docs/superpowers/specs/2026-11-17-mudancas-de-configuracao-design.md`).
