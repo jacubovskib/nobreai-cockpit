@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -63,7 +62,7 @@ func ctxEnv(t *testing.T) (e *env, main, sub string) {
 
 func TestReadTranscripts_Context(t *testing.T) {
 	e, main, sub := ctxEnv(t)
-	if err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{main, sub} {
@@ -72,7 +71,7 @@ func TestReadTranscripts_Context(t *testing.T) {
 		}
 	}
 	// Segunda leitura sem mudança não duplica.
-	if err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
 		t.Fatal(err)
 	}
 	if ctxCount(t, e, "tool_outputs", main) != 1 || ctxCount(t, e, "context_turns", main) != 1 {
@@ -80,15 +79,32 @@ func TestReadTranscripts_Context(t *testing.T) {
 	}
 	// Linhas novas: só o novo é lido.
 	off, _, _ := e.st.ContextCursor(ctxSess, main)
+	// Adultera o turno 0 direto no banco: se o arquivo fosse relido do começo,
+	// o upsert o restauraria.
+	if _, err := e.st.DB.Exec(`UPDATE context_turns SET tokens=777, at='orig' WHERE session_id=? AND path=? AND turn=0`, ctxSess, main); err != nil {
+		t.Fatal(err)
+	}
 	appendFile(t, main, ctxAssistant("m2", "Grep", "t3")+ctxResult("t3", "xy"))
-	if err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
 		t.Fatal(err)
 	}
 	if ctxCount(t, e, "tool_outputs", main) != 2 || ctxCount(t, e, "context_turns", main) != 2 {
 		t.Fatal("novo não lido")
 	}
-	if off2, _, _ := e.st.ContextCursor(ctxSess, main); off2 <= off {
-		t.Fatalf("cursor não avançou: %d -> %d", off, off2)
+	if off2, st2, _ := e.st.ContextCursor(ctxSess, main); off2 <= off || st2.LastTurn != 1 || st2.LastMessageID != "m2" {
+		t.Fatalf("cursor: %d -> %d, st=%+v", off, off2, st2)
+	}
+	var tok int64
+	var at string
+	if err := e.st.DB.QueryRow(`SELECT tokens, at FROM context_turns WHERE session_id=? AND path=? AND turn=0`, ctxSess, main).Scan(&tok, &at); err != nil {
+		t.Fatal(err)
+	}
+	if tok != 777 || at != "orig" {
+		t.Fatalf("turno antigo foi relido: tokens=%d at=%s", tok, at)
+	}
+	var mid string
+	if err := e.st.DB.QueryRow(`SELECT message_id FROM context_turns WHERE session_id=? AND path=? AND turn=1`, ctxSess, main).Scan(&mid); err != nil || mid != "m2" {
+		t.Fatalf("turno novo: %q %v", mid, err)
 	}
 }
 
@@ -123,7 +139,7 @@ func TestBackfillContext(t *testing.T) {
 
 func TestReadTranscripts_ContextTruncated(t *testing.T) {
 	e, main, _ := ctxEnv(t)
-	if err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
 		t.Fatal(err)
 	}
 	// O arquivo é reescrito menor, com outro conteúdo.
@@ -134,12 +150,14 @@ func TestReadTranscripts_ContextTruncated(t *testing.T) {
 	if off, _, _ := e.st.ContextCursor(ctxSess, main); off <= int64(len(short)) {
 		t.Fatalf("pré-condição: tool_offset %d deveria superar %d", off, len(short))
 	}
-	if err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
 		t.Fatal(err)
 	}
 	var tool string
-	e.st.DB.QueryRow(`SELECT tool FROM tool_outputs WHERE session_id=? AND path=?`, ctxSess, main).Scan(&tool)
-	if ctxCount(t, e, "tool_outputs", main) != 1 || tool != "Edit" || !strings.HasPrefix(short, "{") {
+	if err := e.st.DB.QueryRow(`SELECT tool FROM tool_outputs WHERE session_id=? AND path=?`, ctxSess, main).Scan(&tool); err != nil {
+		t.Fatal(err)
+	}
+	if ctxCount(t, e, "tool_outputs", main) != 1 || tool != "Edit" {
 		t.Fatalf("linhas antigas não sumiram: tool=%q", tool)
 	}
 }
