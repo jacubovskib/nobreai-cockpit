@@ -79,7 +79,15 @@ func (s *Store) UpdateProject(p domain.Project) error {
 		p.Capture = parent.Capture // a captura do sub-projeto é a do pai
 	} else if cur.IsGroup() {
 		// grupo pode ganhar ou trocar de pasta, desde que os filhos fiquem dentro
+		if p.Path == "" && cur.Path != "" && len(kids) > 0 {
+			return familyErr("um grupo com sub-projetos não pode ficar sem pasta")
+		}
 		if p.Path != "" && p.Path != cur.Path {
+			clean, err := checkGroupFolder(tx, p.Path, cur.ID)
+			if err != nil {
+				return err
+			}
+			p.Path = clean
 			for _, k := range kids {
 				if !inside(p.Path, k.Path) {
 					return familyErr("o sub-projeto " + k.Name + " fica fora da pasta nova do grupo")

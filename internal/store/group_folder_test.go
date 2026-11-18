@@ -3,8 +3,11 @@ package store
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
 
 func TestMigrationMarksPathlessGroups(t *testing.T) {
@@ -30,6 +33,7 @@ func TestMigrationMarksPathlessGroups(t *testing.T) {
 }
 
 func TestCreateGroupAtRules(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	s := newTestStore(t)
 	g, err := s.CreateGroupAt("bravonix", "/w/bravonix")
 	if err != nil || g.Kind != "group" || g.Path != "/w/bravonix" {
@@ -136,5 +140,97 @@ func TestRepoProjectOfGroupFolderChild(t *testing.T) {
 	got, err := s.RepoProject(k)
 	if err != nil || got.ID != k.ID {
 		t.Errorf("%+v %v", got, err)
+	}
+}
+
+func TestUpdateGroupFolderRules(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	s := newTestStore(t)
+	mustProject(t, s, "repo", "/w/repo")
+	g, _ := s.CreateGroup("g")
+	for _, bad := range []string{"relativo/x", "/", home, "/w/repo/sub", "/w/repo"} {
+		g.Path = bad
+		if err := s.UpdateProject(g); !errors.Is(err, ErrFamily) {
+			t.Errorf("%q: esperava ErrFamily, veio %v", bad, err)
+		}
+	}
+	g.Path = "/w/g"
+	if err := s.UpdateProject(g); err != nil {
+		t.Fatal(err)
+	}
+	// o próprio grupo e os filhos não contam como sobreposição
+	mustChild(t, s, "k", "/w/g/k", g.ID)
+	g.Path = "/w/g2"
+	if err := s.UpdateProject(g); !errors.Is(err, ErrFamily) {
+		t.Errorf("filho fora: %v", err)
+	}
+	g.Path = ""
+	if err := s.UpdateProject(g); !errors.Is(err, ErrFamily) || !strings.Contains(err.Error(), "sem pasta") {
+		t.Errorf("grupo com filhos sem pasta: %v", err)
+	}
+}
+
+func TestCreateGroupAtResolvesSymlinkedHome(t *testing.T) {
+	real := t.TempDir()
+	link := t.TempDir() + "/link"
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", link)
+	s := newTestStore(t)
+	if _, err := s.CreateGroupAt("h", real); !errors.Is(err, ErrFamily) {
+		t.Errorf("home pelo caminho real: %v", err)
+	}
+	if _, err := s.CreateGroupAt("h2", filepath.Dir(real)); !errors.Is(err, ErrFamily) {
+		t.Errorf("ancestral da home: %v", err)
+	}
+}
+
+func TestUpdateRepoWithoutPathRefused(t *testing.T) {
+	s := newTestStore(t)
+	r := mustProject(t, s, "r", "/w/r")
+	r.Path = ""
+	if err := s.UpdateProject(r); !errors.Is(err, ErrFamily) || !strings.Contains(err.Error(), "um repositório precisa de uma pasta") {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestGroupCannotBeChild(t *testing.T) {
+	s := newTestStore(t)
+	p := mustProject(t, s, "p", "/w/p")
+	g, _ := s.CreateGroupAt("g", "/w/p2")
+	if _, err := s.SetParent(g.ID, &p.ID); !errors.Is(err, ErrFamily) {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestProjectForLocationPlainRepoKeepsOwner(t *testing.T) {
+	s := newTestStore(t)
+	r := mustProject(t, s, "r", "/w/r")
+	mustProject(t, s, "other", "/w/other")
+	l := SessionLocation{WorktreeLinked: true, Worktree: "/w/r/.worktrees/x", Main: "/w/other"}
+	p, err := s.ProjectForLocation("/w/r/.worktrees/x/src", l)
+	if err != nil || p == nil || p.ID != r.ID {
+		t.Errorf("%+v %v", p, err)
+	}
+}
+
+func TestMoveHistoryFromGroupFolder(t *testing.T) {
+	s := newTestStore(t)
+	g, _ := s.CreateGroupAt("g", "/w/g")
+	card, err := s.CreateCard(domain.Card{Title: "c", ProjectID: g.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid := card.ID
+	sessionIn(t, s, "claude:a", 1, g.ID, "/w/g/k/src", "", &cid)
+	sessionIn(t, s, "claude:b", 2, g.ID, "/w/g/docs", "", nil)
+	k, m, err := s.CreateChild("k", "/w/g/k", g.ID)
+	if err != nil || m.Sessions != 1 || m.Cards != 1 {
+		t.Fatalf("%+v %v", m, err)
+	}
+	if projectOf(t, s, "claude:a") != k.ID || projectOf(t, s, "claude:b") != g.ID {
+		t.Error("sessões no projeto errado")
 	}
 }

@@ -98,22 +98,67 @@ func (s *Store) CreateGroup(name string) (domain.Project, error) {
 // CreateGroupAt cria um grupo com pasta. A pasta é absoluta, não é a home nem
 // ancestral dela, e não fica dentro de um projeto cadastrado.
 func (s *Store) CreateGroupAt(name, path string) (domain.Project, error) {
-	if !filepath.IsAbs(path) {
-		return domain.Project{}, familyErr("a pasta do grupo precisa ser um caminho absoluto")
-	}
-	path = filepath.Clean(path)
-	if home, err := os.UserHomeDir(); err == nil {
-		home = filepath.Clean(home)
-		if path == home || path == "/" || inside(path, home) {
-			return domain.Project{}, familyErr("a pasta do grupo não pode ser a home nem uma pasta que a contém")
-		}
-	}
-	if p, err := s.ProjectForPath(path); err != nil {
+	path, err := checkGroupFolder(s.DB, path, 0)
+	if err != nil {
 		return domain.Project{}, err
-	} else if p != nil {
-		return domain.Project{}, familyErr("a pasta do grupo fica dentro do projeto " + p.Name)
 	}
 	return s.insertProject(name, path, "group")
+}
+
+// resolveExisting resolve symlinks de path; se o fim ainda não existe, resolve
+// o ancestral mais fundo que existe e reanexa o resto.
+func resolveExisting(path string) (string, error) {
+	rest := ""
+	for p := path; ; p = filepath.Dir(p) {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest), nil
+		}
+		if p == "/" || p == "." {
+			return "", fmt.Errorf("resolver %s", path)
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+	}
+}
+
+// checkGroupFolder valida a pasta de um grupo e devolve o caminho limpo: absoluta,
+// não é a home nem ancestral dela, e não fica dentro (nem é a pasta) de outro
+// projeto cadastrado. O grupo selfID e os filhos dele não contam.
+func checkGroupFolder(q querier, path string, selfID int64) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", familyErr("a pasta do grupo precisa ser um caminho absoluto")
+	}
+	path = filepath.Clean(path)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", familyErr("não foi possível resolver a home do usuário")
+	}
+	home, err = resolveExisting(filepath.Clean(home))
+	if err != nil {
+		return "", familyErr("não foi possível resolver a home do usuário")
+	}
+	real, err := resolveExisting(path)
+	if err != nil {
+		return "", familyErr("não foi possível resolver a pasta do grupo")
+	}
+	if real == home || real == "/" || inside(real, home) {
+		return "", familyErr("a pasta do grupo não pode ser a home nem uma pasta que a contém")
+	}
+	rows, err := q.Query(`SELECT name, path FROM projects
+		WHERE path IS NOT NULL AND id<>? AND parent_id IS NOT ?`, selfID, selfID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n, p string
+		if err := rows.Scan(&n, &p); err != nil {
+			return "", err
+		}
+		if path == p || inside(p, path) {
+			return "", familyErr("a pasta do grupo fica dentro do projeto " + n)
+		}
+	}
+	return path, rows.Err()
 }
 
 // checkAttach valida ligar o projeto child (path e nome já definidos) ao pai.
