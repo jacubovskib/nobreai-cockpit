@@ -209,6 +209,12 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		return
 	}
 	branch := strings.TrimSpace(in.Branch)
+	if gp, err := s.projectByID(projectID); err != nil {
+		writeStoreError(w, err, "")
+		return
+	} else if gp != nil && gp.IsGroup() {
+		branch = "" // card de grupo nunca guarda branch
+	}
 	if branch != "" {
 		base, err := s.projectBase(projectID)
 		if err != nil {
@@ -347,6 +353,13 @@ func (s *server) meBranch(w http.ResponseWriter, r *http.Request, sess domain.Se
 		writeError(w, http.StatusBadRequest, "branch obrigatório")
 		return
 	}
+	if cur, err := s.projectByID(c.ProjectID); err != nil {
+		writeStoreError(w, err, "")
+		return
+	} else if cur != nil && cur.IsGroup() {
+		writeError(w, http.StatusBadRequest, msgGroupNoBranch)
+		return
+	}
 	// A sessão fica com o branch atual: senão o PostToolUse deste mesmo comando
 	// veria a diferença e trocaria o branch que o agente acabou de informar.
 	s.liveBranch(sess)
@@ -403,7 +416,7 @@ func (s *server) meApp(w http.ResponseWriter, r *http.Request, sess domain.Sessi
 		writeError(w, http.StatusBadRequest, "informe o app ou geral, não os dois")
 		return
 	case in.Geral:
-		if repo.Path == "" {
+		if repo.IsGroup() && repo.Path == "" {
 			writeError(w, http.StatusBadRequest, msgGroupNoCards)
 			return
 		}

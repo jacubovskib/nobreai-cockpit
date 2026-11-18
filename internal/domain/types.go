@@ -13,9 +13,15 @@ type Project struct {
 	Capture bool   `json:"capture"`
 	// BaseBranch é o branch base do projeto ("" = detectar pelo git).
 	BaseBranch string `json:"base_branch"`
-	// ParentID é o projeto-pai (nil = projeto de topo). Path "" = grupo, sem pasta.
+	// ParentID é o projeto-pai (nil = projeto de topo).
 	ParentID *int64 `json:"parent_id"`
+	// Kind é "repo" ou "group". Um grupo agrupa repositórios e pode ter ou não
+	// pasta (Path "" = sem pasta). Não muda depois do cadastro.
+	Kind string `json:"kind"`
 }
+
+// IsGroup diz se o projeto é um grupo de repositórios.
+func (p Project) IsGroup() bool { return p.Kind == "group" }
 
 type Card struct {
 	ID             int64      `json:"id"`

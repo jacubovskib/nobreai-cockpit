@@ -48,7 +48,7 @@ func ForCard(st *store.Store, git gitinfo.GitInfo, c domain.Card, exclude string
 			}
 		}
 		for _, p := range projects {
-			if p.ID == c.ProjectID && p.Path != "" {
+			if p.ID == c.ProjectID && !p.IsGroup() && p.Path != "" {
 				diff = git.DiffStat(p.Path, since)
 			}
 		}

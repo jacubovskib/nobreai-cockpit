@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useProjects, useWorktrees } from '../api/queries'
-import { displayName, useProjectFilter, useWithProject } from '../app/project'
+import { displayName, isGroup, useProjectFilter, useWithProject } from '../app/project'
 import type { Project, ProjectWorktrees, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { StatusBadge } from '../ui/StatusBadge'
@@ -83,7 +83,7 @@ function OrphanRow({ s }: { s: WorktreeSession }) {
 }
 
 function ProjectSection({ p, all }: { p: ProjectWorktrees; all: Project[] }) {
-  const group = p.project.path === ''
+  const group = isGroup(p.project)
   const live = p.worktrees.reduce((n, w) => n + w.sessions.filter((s) => s.live).length, 0)
   const measured = p.worktrees.flatMap((w) => (w.resources?.ready ? [w.resources] : []))
   const cpu = measured.reduce((n, r) => n + machinePct(r), 0)
@@ -139,7 +139,7 @@ export function Worktrees() {
   const sectionIds = ids === null ? null : ids.map((id) => {
     const p = projects?.find((x) => x.id === id)
     const parent = p?.parent_id == null ? undefined : projects?.find((x) => x.id === p.parent_id)
-    return parent && parent.path !== '' ? parent.id : id
+    return parent && !isGroup(parent) ? parent.id : id
   })
   const shown = data.filter((p) => sectionIds === null || sectionIds.includes(p.project.id))
   const all = data.map((p) => p.project)

@@ -248,6 +248,40 @@ func (c *Client) AddGroup(ctx context.Context, name string) (AddedProject, error
 	return p, err
 }
 
+// FolderScan espelha GET /api/fs/scan: o que a pasta é e os repositórios dentro.
+type FolderScan struct {
+	Path        string `json:"path"`
+	Git         bool   `json:"git"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	Suggestions []struct {
+		workspaces.Suggestion
+		Registered *domain.Project `json:"registered"`
+		Blocked    string          `json:"blocked"`
+	} `json:"suggestions"`
+}
+
+// ScanFolder pergunta ao daemon o que há na pasta path.
+func (c *Client) ScanFolder(ctx context.Context, path string) (FolderScan, error) {
+	var s FolderScan
+	return s, c.Do(ctx, "GET", "/api/fs/scan?path="+url.QueryEscape(path), nil, &s)
+}
+
+// BatchResult é a resposta de POST /api/projects/batch.
+type BatchResult struct {
+	Project  domain.Project   `json:"project"`
+	Children []domain.Project `json:"children"`
+	Moved    Moved            `json:"moved"`
+}
+
+// ProjectsBatch cadastra o principal de path (grupo, se a pasta não é git)
+// sem filhos; é o que o nobre project add faz numa pasta de repositórios.
+func (c *Client) ProjectsBatch(ctx context.Context, name, path string) (BatchResult, error) {
+	var r BatchResult
+	err := c.Do(ctx, "POST", "/api/projects/batch", map[string]any{"name": name, "path": path, "children": []any{}}, &r)
+	return r, err
+}
+
 // SetProjectParent liga o projeto id ao pai (nil desliga).
 func (c *Client) SetProjectParent(ctx context.Context, id int64, parentID *int64) (Moved, error) {
 	var out struct {

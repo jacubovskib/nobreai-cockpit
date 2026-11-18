@@ -41,11 +41,11 @@ func CheckIntegrations(st *store.Store, git gitinfo.BranchReader, now time.Time)
 		}
 		// App de monorepo (pai lido do mapa já carregado, sem uma consulta por card): o repositório é o do pai, que cobre os cards da família.
 		if p.ParentID != nil {
-			if parent, ok := projects[*p.ParentID]; ok && parent.Path != "" {
+			if parent, ok := projects[*p.ParentID]; ok && !parent.IsGroup() {
 				p = parent
 			}
 		}
-		if p.Path == "" {
+		if p.IsGroup() || p.Path == "" {
 			continue
 		}
 		ch, err := checkCardIntegration(st, git, now, p, c)

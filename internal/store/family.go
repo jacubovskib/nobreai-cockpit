@@ -4,7 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
@@ -29,8 +32,8 @@ type querier interface {
 
 func getProjectTx(q querier, id int64) (domain.Project, error) {
 	var p domain.Project
-	err := q.QueryRow(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id FROM projects WHERE id=?`, id).
-		Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID)
+	err := q.QueryRow(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id, kind FROM projects WHERE id=?`, id).
+		Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID, &p.Kind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -38,7 +41,7 @@ func getProjectTx(q querier, id int64) (domain.Project, error) {
 }
 
 func childrenTx(q querier, id int64) ([]domain.Project, error) {
-	rows, err := q.Query(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id FROM projects WHERE parent_id=? ORDER BY id`, id)
+	rows, err := q.Query(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id, kind FROM projects WHERE parent_id=? ORDER BY id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +49,7 @@ func childrenTx(q querier, id int64) ([]domain.Project, error) {
 	var out []domain.Project
 	for rows.Next() {
 		var p domain.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID, &p.Kind); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -60,7 +63,8 @@ func inside(root, path string) bool {
 	return strings.HasPrefix(path, root+"/")
 }
 
-// checkInside vale só para pai com pasta (monorepo); grupo aceita qualquer pasta.
+// checkInside vale para pai com pasta (monorepo ou grupo com pasta); grupo sem
+// pasta aceita qualquer pasta.
 func checkInside(parent domain.Project, path string) error {
 	if parent.Path != "" && !inside(parent.Path, path) {
 		return familyErr("a pasta do sub-projeto precisa ficar dentro da pasta do projeto principal")
@@ -87,9 +91,75 @@ func checkNameFree(q querier, p domain.Project, name string) error {
 	return nil
 }
 
-// CreateGroup cria um projeto principal sem pasta (grupo de repositórios).
+// CreateGroup cria um grupo de repositórios sem pasta.
 func (s *Store) CreateGroup(name string) (domain.Project, error) {
-	return s.CreateProject(name, "")
+	return s.insertProject(name, "", "group")
+}
+
+// CreateGroupAt cria um grupo com pasta. A pasta é absoluta, não é a home nem
+// ancestral dela, e não fica dentro de um projeto cadastrado.
+func (s *Store) CreateGroupAt(name, path string) (domain.Project, error) {
+	path, err := checkGroupFolder(s.DB, path, 0)
+	if err != nil {
+		return domain.Project{}, err
+	}
+	return s.insertProject(name, path, "group")
+}
+
+// resolveExisting resolve symlinks de path; se o fim ainda não existe, resolve
+// o ancestral mais fundo que existe e reanexa o resto.
+func resolveExisting(path string) (string, error) {
+	rest := ""
+	for p := path; ; p = filepath.Dir(p) {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest), nil
+		}
+		if p == "/" || p == "." {
+			return "", fmt.Errorf("resolver %s", path)
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+	}
+}
+
+// checkGroupFolder valida a pasta de um grupo e devolve o caminho limpo: absoluta,
+// não é a home nem ancestral dela, e não fica dentro (nem é a pasta) de outro
+// projeto cadastrado. O grupo selfID e os filhos dele não contam.
+func checkGroupFolder(q querier, path string, selfID int64) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", familyErr("a pasta do grupo precisa ser um caminho absoluto")
+	}
+	path = filepath.Clean(path)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", familyErr("não foi possível resolver a home do usuário")
+	}
+	home, err = resolveExisting(filepath.Clean(home))
+	if err != nil {
+		return "", familyErr("não foi possível resolver a home do usuário")
+	}
+	real, err := resolveExisting(path)
+	if err != nil {
+		return "", familyErr("não foi possível resolver a pasta do grupo")
+	}
+	if real == home || real == "/" || inside(real, home) {
+		return "", familyErr("a pasta do grupo não pode ser a home nem uma pasta que a contém")
+	}
+	rows, err := q.Query(`SELECT name, path FROM projects
+		WHERE path IS NOT NULL AND id<>? AND parent_id IS NOT ?`, selfID, selfID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n, p string
+		if err := rows.Scan(&n, &p); err != nil {
+			return "", err
+		}
+		if path == p || inside(p, path) {
+			return "", familyErr("a pasta do grupo fica dentro do projeto " + n)
+		}
+	}
+	return path, rows.Err()
 }
 
 // checkAttach valida ligar o projeto child (path e nome já definidos) ao pai.
@@ -105,6 +175,9 @@ func checkAttach(q querier, child, parent domain.Project) error {
 		if len(kids) > 0 {
 			return familyErr("um projeto com sub-projetos não pode virar sub-projeto")
 		}
+	}
+	if child.IsGroup() {
+		return familyErr("um grupo não pode ser sub-projeto")
 	}
 	if child.Path == "" {
 		return familyErr("o sub-projeto precisa de uma pasta")
@@ -193,7 +266,7 @@ func (s *Store) SetParent(id int64, parentID *int64) (Moved, error) {
 func moveHistory(tx querier, parent, child domain.Project) (Moved, error) {
 	var m Moved
 	if parent.Path == "" {
-		return m, nil // grupo: não tem pasta de onde puxar histórico
+		return m, nil // grupo sem pasta: não tem de onde puxar histórico
 	}
 	rel := strings.TrimPrefix(strings.TrimRight(child.Path, "/"), strings.TrimRight(parent.Path, "/")+"/")
 	root := strings.TrimRight(child.Path, "/")
@@ -268,7 +341,8 @@ func (s *Store) FamilyIDs(id int64) ([]int64, error) {
 // Children lista os sub-projetos de id.
 func (s *Store) Children(id int64) ([]domain.Project, error) { return childrenTx(s.DB, id) }
 
-// RepoProject devolve o pai quando p é app de monorepo (pai com pasta); senão p.
+// RepoProject devolve o pai quando p é app de monorepo (pai repositório); senão
+// p, inclusive para filho de grupo, com ou sem pasta.
 func (s *Store) RepoProject(p domain.Project) (domain.Project, error) {
 	if p.ParentID == nil {
 		return p, nil
@@ -277,7 +351,7 @@ func (s *Store) RepoProject(p domain.Project) (domain.Project, error) {
 	if err != nil {
 		return p, err
 	}
-	if parent.Path == "" {
+	if parent.IsGroup() {
 		return p, nil
 	}
 	return parent, nil
@@ -318,4 +392,136 @@ func DisplayName(p domain.Project, parent *domain.Project) string {
 		return p.Name
 	}
 	return parent.Name + " › " + p.Name
+}
+
+// ChildSpec é um sub-projeto a cadastrar ou ligar em CreateFamily.
+type ChildSpec struct {
+	Name string
+	Path string
+}
+
+func projectAtTx(q querier, path string) (*domain.Project, error) {
+	var id int64
+	err := q.QueryRow(`SELECT id FROM projects WHERE path=?`, path).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	p, err := getProjectTx(q, id)
+	return &p, err
+}
+
+func insertProjectTx(q querier, name, path, kind string, capture bool, parentID *int64) (domain.Project, error) {
+	res, err := q.Exec(`INSERT INTO projects(name, path, kind, capture, parent_id) VALUES (?, NULLIF(?, ''), ?, ?, ?)`,
+		name, path, kind, capture, parentID)
+	if err != nil {
+		return domain.Project{}, fmt.Errorf("criar projeto: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return domain.Project{}, err
+	}
+	return getProjectTx(q, id)
+}
+
+// CreateFamily cadastra, numa transação só, o projeto principal (parent.ID 0
+// cria: grupo com pasta se parent.Kind é "group", repositório senão) e liga
+// os filhos: um projeto solto já cadastrado na pasta é ligado, os demais são
+// criados. Qualquer item inválido desfaz tudo. Os filhos voltam na ordem dada.
+func (s *Store) CreateFamily(parent domain.Project, children []ChildSpec) (domain.Project, []domain.Project, Moved, error) {
+	var total Moved
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return domain.Project{}, nil, total, err
+	}
+	defer tx.Rollback()
+	if parent.ID != 0 {
+		if parent, err = getProjectTx(tx, parent.ID); err != nil {
+			return domain.Project{}, nil, total, err
+		}
+	} else if parent.IsGroup() {
+		path, err := checkGroupFolder(tx, parent.Path, 0)
+		if err != nil {
+			return domain.Project{}, nil, total, err
+		}
+		if parent, err = insertProjectTx(tx, parent.Name, path, "group", true, nil); err != nil {
+			return domain.Project{}, nil, total, err
+		}
+	} else if parent, err = insertProjectTx(tx, parent.Name, parent.Path, "repo", true, nil); err != nil {
+		return domain.Project{}, nil, total, err
+	}
+	kids := make([]domain.Project, 0, len(children))
+	for _, c := range children {
+		cur, err := projectAtTx(tx, c.Path)
+		if err != nil {
+			return domain.Project{}, nil, total, err
+		}
+		switch {
+		case cur == nil:
+			child := domain.Project{Name: c.Name, Path: c.Path, Capture: parent.Capture, ParentID: &parent.ID}
+			if err := checkAttach(tx, child, parent); err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			if child, err = insertProjectTx(tx, c.Name, c.Path, "repo", parent.Capture, &parent.ID); err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			m, err := moveHistory(tx, parent, child)
+			if err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			total.Sessions += m.Sessions
+			total.Cards += m.Cards
+			kids = append(kids, child)
+		case cur.ParentID != nil && *cur.ParentID == parent.ID:
+			kids = append(kids, *cur) // já é filho deste principal
+		case cur.ParentID != nil:
+			owner, err := getProjectTx(tx, *cur.ParentID)
+			if err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			return domain.Project{}, nil, total, familyErr(cur.Name + " pertence a " + owner.Name)
+		default:
+			sub, err := childrenTx(tx, cur.ID)
+			if err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			if len(sub) > 0 {
+				return domain.Project{}, nil, total, familyErr(cur.Name + " tem sub-projetos")
+			}
+			if err := checkAttach(tx, *cur, parent); err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			if _, err := tx.Exec(`UPDATE projects SET parent_id=?, capture=? WHERE id=?`, parent.ID, parent.Capture, cur.ID); err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			m, err := moveHistory(tx, parent, *cur)
+			if err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			total.Sessions += m.Sessions
+			total.Cards += m.Cards
+			cur.ParentID, cur.Capture = &parent.ID, parent.Capture
+			kids = append(kids, *cur)
+		}
+	}
+	return parent, kids, total, tx.Commit()
+}
+
+// UnassignedSessionsUnder lista as sessões sem projeto (vivas e encerradas)
+// cujo cwd é root ou fica dentro dele.
+func (s *Store) UnassignedSessionsUnder(root string) ([]domain.Session, error) {
+	root = strings.TrimRight(root, "/")
+	prefix := root + "/"
+	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
+		WHERE project_id IS NULL AND (cwd=? OR substr(cwd, 1, ?)=?) ORDER BY julianday(started_at), id`,
+		root, utf8.RuneCountInString(prefix), prefix)
+}
+
+// UnassignedLinkedSessions lista as sessões sem projeto (vivas e encerradas)
+// que rodam num worktree ligado, na ordem em que começaram.
+func (s *Store) UnassignedLinkedSessions() ([]domain.Session, error) {
+	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
+		WHERE project_id IS NULL AND worktree_linked=1 AND worktree<>'' ORDER BY julianday(started_at), id`)
 }

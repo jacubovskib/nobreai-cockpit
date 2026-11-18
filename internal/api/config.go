@@ -48,6 +48,7 @@ func (s *server) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/prices", s.deletePrice)
 	mux.HandleFunc("GET /api/projects", s.listProjects)
 	mux.HandleFunc("POST /api/projects", s.createProject)
+	mux.HandleFunc("POST /api/projects/batch", s.batchProjects)
 	mux.HandleFunc("PATCH /api/projects/{id}", s.patchProject)
 	mux.HandleFunc("DELETE /api/projects/{id}", s.deleteProject)
 	mux.HandleFunc("GET /api/projects/{id}/scan", s.scanProject)
@@ -452,6 +453,15 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 	if err != nil || fresh == nil {
 		writeStoreError(w, err, "projeto não encontrado")
 		return
+	}
+	// Grupo que ganhou ou trocou de pasta adota as sessões soltas que ficam nela.
+	if fresh.IsGroup() && fresh.Path != "" && fresh.Path != oldPath {
+		n, err := s.adoptRootSessions(*fresh)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		moved.Sessions += n
 	}
 	// Mudar a captura vale para as sessões vivas da família; o filho segue o pai,
 	// então só a mudança de quem tem o controle chega aqui.

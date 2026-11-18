@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -109,5 +110,224 @@ func TestSessionStartUnregisteredWithoutAgentCreatesCards(t *testing.T) {
 	}
 	if strings.Contains(ctx, "crie os cards importantes") || strings.Contains(ctx, "quando começar algo que precisa de histórico") {
 		t.Fatalf("contexto manda criar cards: %q", ctx)
+	}
+}
+
+func TestUnregisteredNonGitFolderWithRepos(t *testing.T) {
+	e := newEnv(t)
+	e.realGit()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "api", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", dir)))
+	if !strings.HasPrefix(ctx, unregisteredFolderPhrase) || !strings.Contains(ctx, "nobre project add "+dir) {
+		t.Fatalf("contexto = %q", ctx)
+	}
+	if strings.Contains(ctx, "nobre project scan") {
+		t.Fatalf("grupo não tem levantamento: %q", ctx)
+	}
+
+	// Sem repositórios no primeiro nível: sem aviso.
+	empty, _ := filepath.EvalSymlinks(t.TempDir())
+	if err := os.MkdirAll(filepath.Join(empty, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.call(t, "session_start", with("cwd", empty)); r.Stdout != "" {
+		t.Fatalf("pasta sem repositórios não avisa: %q", r.Stdout)
+	}
+
+	// A home nunca recebe aviso, mesmo com repositórios dentro.
+	t.Setenv("HOME", dir)
+	if r := e.call(t, "session_start", with("cwd", dir)); r.Stdout != "" {
+		t.Fatalf("HOME não avisa: %q", r.Stdout)
+	}
+}
+
+func TestUnregisteredRepoInsideGroupSuggestsPai(t *testing.T) {
+	e := newEnv(t)
+	e.realGit()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := e.st.CreateGroupAt("meus", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	novo := filepath.Join(dir, "novo")
+	if err := os.MkdirAll(novo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", novo, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
+		t.Skipf("git init: %v %s", err, out)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", novo), with("session_id", "s1")))
+	if !strings.Contains(ctx, "--pai") || !strings.Contains(ctx, registeredPhrase) {
+		t.Fatalf("contexto = %q", ctx)
+	}
+	sess, err := e.st.GetSession("claude:s1")
+	if err != nil || sess.ProjectID == nil || *sess.ProjectID != g.ID {
+		t.Fatalf("sessão = %+v err=%v", sess, err)
+	}
+
+	if err := e.st.PutKV("subproject_dismissed", map[string][]string{strconv.FormatInt(g.ID, 10): {"novo"}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx = additionalContext(t, e.call(t, "session_start", with("cwd", novo), with("session_id", "s2")))
+	if strings.Contains(ctx, "--pai") {
+		t.Fatalf("recusado não avisa: %q", ctx)
+	}
+}
+
+// groupGit é o wtGit que falha o teste se o git rodar na pasta do grupo.
+type groupGit struct {
+	wtGit
+	t     *testing.T
+	group string
+}
+
+func (g groupGit) guard(op, d string) {
+	if filepath.Clean(d) == g.group {
+		g.t.Errorf("git %s rodou na pasta do grupo %s", op, d)
+	}
+}
+func (g groupGit) Branch(d string) string { g.guard("Branch", d); return g.wtGit.Branch(d) }
+func (g groupGit) Head(d string) string   { g.guard("Head", d); return g.wtGit.Head(d) }
+func (g groupGit) Locate(d string) gitinfo.Location {
+	g.guard("Locate", d)
+	return g.wtGit.Locate(d)
+}
+func (g groupGit) DetectBase(d string) string { g.guard("DetectBase", d); return g.wtGit.DetectBase(d) }
+
+// groupEnv tem o grupo com pasta /w/grp e um git que recusa essa pasta.
+func groupEnv(t *testing.T, locs map[string]string) (*env, domain.Project) {
+	t.Helper()
+	e := newEnv(t)
+	e.a.deps.Git = groupGit{wtGit: wtGit{fakeGit: fakeGit{branch: "feat/x"}, locs: locs}, t: t, group: "/w/grp"}
+	g, err := e.st.CreateGroupAt("grp", "/w/grp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, g
+}
+
+// Sessão dona do grupo (pasta que não é repositório, como bravonix/.projects)
+// num branch: os cards pausados não detectam a base na pasta do grupo.
+func TestPausedCardsSkipGroupBaseDetection(t *testing.T) {
+	e, g := groupEnv(t, map[string]string{})
+	c, err := e.st.CreateCard(domain.Card{Title: "geral", ProjectID: g.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.MoveCard(c.Key, domain.Pausado); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", "/w/grp/.projects/x")))
+	if !strings.Contains(ctx, c.Key) {
+		t.Fatalf("card pausado do grupo sumiu: %q", ctx)
+	}
+}
+
+// Worktree ligado de um repositório não cadastrado dentro do grupo: a sessão é
+// do grupo e os caminhos editados não fazem o git rodar na pasta do grupo.
+func TestLinkedWorktreeOwnedByGroupNeverLocatesGroup(t *testing.T) {
+	e, g := groupEnv(t, map[string]string{"/w/grp/novo": "/w/grp/novo", "/w/wt-novo": "/w/grp/novo"})
+	wt := with("cwd", "/w/wt-novo/src")
+	e.call(t, "session_start", wt)
+	s, err := e.st.GetSession(sessID)
+	if err != nil || s.ProjectID == nil || *s.ProjectID != g.ID || !s.WorktreeLinked {
+		t.Fatalf("sessão = %+v err=%v", s, err)
+	}
+	for i := 0; i < 2; i++ {
+		e.call(t, "post_tool_use_edit", wt, with("tool_input", map[string]any{"file_path": "/w/wt-novo/src/a.go"}))
+	}
+	for _, ev := range e.events(t, domain.EvFileEdit) {
+		if p := eventPath(t, ev); p != "/w/wt-novo/src/a.go" {
+			t.Fatalf("file_edit = %q", p)
+		}
+	}
+}
+
+// O aviso de repositório novo dentro do grupo segue a regra da varredura:
+// nada em pastas ocultas, de dependências/build ou abaixo de 2 níveis.
+func TestUnregisteredInGroupFollowsScanRules(t *testing.T) {
+	locs := map[string]string{}
+	for _, r := range []string{"/w/grp/a/b", "/w/grp/.projects/x", "/w/grp/node_modules/y", "/w/grp/a/vendor/z", "/w/grp/a/b2/c"} {
+		locs[r] = r
+	}
+	e, _ := groupEnv(t, locs)
+	for i, c := range []struct {
+		cwd  string
+		warn bool
+	}{
+		{"/w/grp/a/b", true},
+		{"/w/grp/.projects/x", false},
+		{"/w/grp/node_modules/y", false},
+		{"/w/grp/a/vendor/z", false},
+		{"/w/grp/a/b2/c", false},
+	} {
+		ctx := additionalContext(t, e.call(t, "session_start", with("cwd", c.cwd), with("session_id", "s"+strconv.Itoa(i))))
+		if strings.Contains(ctx, "--pai") != c.warn {
+			t.Fatalf("%s: aviso = %v, quer %v: %q", c.cwd, !c.warn, c.warn, ctx)
+		}
+	}
+}
+
+// Os apps e o nobre app são só de monorepo: a sessão de um grupo não os recebe.
+func TestGroupSessionGetsNoAppsGuidance(t *testing.T) {
+	e, g := groupEnv(t, map[string]string{"/w/grp/api": "/w/grp/api"})
+	if _, _, err := e.st.CreateChild("api", "/w/grp/api", g.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", "/w/grp/docs")))
+	if !strings.Contains(ctx, registeredPhrase) || strings.Contains(ctx, "Apps deste projeto") || strings.Contains(ctx, "nobre app") {
+		t.Fatalf("contexto = %q", ctx)
+	}
+}
+
+// A pasta que já contém um projeto ou grupo cadastrado (como ~/workspace) não
+// recebe o aviso de pasta não cadastrada.
+func TestUnregisteredFolderSkippedWhenItContainsProjects(t *testing.T) {
+	e := newEnv(t)
+	e.realGit()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"api/.git", "grupo/x/.git"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.st.CreateGroupAt("grupo", filepath.Join(dir, "grupo")); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.call(t, "session_start", with("cwd", dir)); r.Stdout != "" {
+		t.Fatalf("pasta com grupo cadastrado dentro avisa: %q", r.Stdout)
+	}
+}
+
+// O aviso de pasta não cadastrada manda perguntar ao usuário antes de
+// cadastrar o grupo, ao contrário do aviso de repositório.
+func TestUnregisteredFolderAsksBeforeRegistering(t *testing.T) {
+	e := newEnv(t)
+	e.realGit()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "api", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", dir)))
+	if !strings.Contains(ctx, "Pergunte ao usuário") || strings.Contains(ctx, "Antes de seguir com o pedido do usuário, cadastre") {
+		t.Fatalf("contexto = %q", ctx)
+	}
+	if !strings.Contains(skillContent, unregisteredFolderPhrase) {
+		t.Fatalf("skill.md não cita a frase %q", unregisteredFolderPhrase)
 	}
 }

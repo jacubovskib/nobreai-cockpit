@@ -11,7 +11,15 @@ import (
 
 // CreateProject cadastra um projeto (captura ligada por padrão).
 func (s *Store) CreateProject(name, path string) (domain.Project, error) {
-	res, err := s.DB.Exec(`INSERT INTO projects(name, path) VALUES (?, NULLIF(?, ''))`, name, path)
+	kind := "repo"
+	if path == "" {
+		kind = "group" // sem pasta só existe grupo
+	}
+	return s.insertProject(name, path, kind)
+}
+
+func (s *Store) insertProject(name, path, kind string) (domain.Project, error) {
+	res, err := s.DB.Exec(`INSERT INTO projects(name, path, kind) VALUES (?, NULLIF(?, ''), ?)`, name, path, kind)
 	if err != nil {
 		return domain.Project{}, fmt.Errorf("criar projeto: %w", err)
 	}
@@ -19,12 +27,12 @@ func (s *Store) CreateProject(name, path string) (domain.Project, error) {
 	if err != nil {
 		return domain.Project{}, err
 	}
-	return domain.Project{ID: id, Name: name, Path: path, Capture: true}, nil
+	return domain.Project{ID: id, Name: name, Path: path, Capture: true, Kind: kind}, nil
 }
 
 // ListProjects lista os projetos por id.
 func (s *Store) ListProjects() ([]domain.Project, error) {
-	rows, err := s.DB.Query(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id FROM projects ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id, kind FROM projects ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +40,7 @@ func (s *Store) ListProjects() ([]domain.Project, error) {
 	var out []domain.Project
 	for rows.Next() {
 		var p domain.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID, &p.Kind); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -69,13 +77,29 @@ func (s *Store) UpdateProject(p domain.Project) error {
 			return err
 		}
 		p.Capture = parent.Capture // a captura do sub-projeto é a do pai
-	} else if len(kids) > 0 && p.Path != cur.Path {
-		if (p.Path == "") != (cur.Path == "") {
-			return familyErr("um projeto com sub-projetos não pode trocar entre ter pasta e ser grupo")
+	} else if cur.IsGroup() {
+		// grupo pode ganhar ou trocar de pasta, desde que os filhos fiquem dentro
+		if p.Path == "" && cur.Path != "" && len(kids) > 0 {
+			return familyErr("um grupo com sub-projetos não pode ficar sem pasta")
 		}
-		for _, k := range kids {
-			if err := checkInside(domain.Project{Path: p.Path}, k.Path); err != nil {
+		if p.Path != "" && p.Path != cur.Path {
+			clean, err := checkGroupFolder(tx, p.Path, cur.ID)
+			if err != nil {
 				return err
+			}
+			p.Path = clean
+			for _, k := range kids {
+				if !inside(p.Path, k.Path) {
+					return familyErr("o sub-projeto " + k.Name + " fica fora da pasta nova do grupo")
+				}
+			}
+		}
+	} else if p.Path == "" {
+		return familyErr("um repositório precisa de uma pasta")
+	} else if p.Path != cur.Path {
+		for _, k := range kids {
+			if !inside(p.Path, k.Path) {
+				return familyErr("o sub-projeto " + k.Name + " fica fora da pasta nova do projeto")
 			}
 		}
 	}
@@ -131,7 +155,7 @@ func (s *Store) ProjectForPath(cwd string) (*domain.Project, error) {
 	var best *domain.Project
 	for i := range ps {
 		p := ps[i]
-		if p.Path == "" { // grupo: não tem pasta
+		if p.Path == "" { // grupo sem pasta
 			continue
 		}
 		root := strings.TrimRight(p.Path, "/")
@@ -149,7 +173,8 @@ func (s *Store) ProjectForPath(cwd string) (*domain.Project, error) {
 // adota sessões sem projeto): o projeto mais fundo que contém cwd, de qualquer
 // família. Num worktree ligado (l.WorktreeLinked, com l.Main e l.Worktree), cwd
 // é traduzido para o mesmo lugar no checkout principal: sem projeto em cwd
-// vale o de lá; se o projeto achado tem sub-projetos, o de lá pode ser um deles.
+// vale o de lá; se o projeto achado é um grupo ou tem sub-projetos, o de lá
+// vence quando é um projeto que não é grupo.
 func (s *Store) ProjectForLocation(cwd string, l SessionLocation) (*domain.Project, error) {
 	proj, err := s.ProjectForPath(cwd)
 	if err != nil || cwd == "" {
@@ -171,11 +196,13 @@ func (s *Store) ProjectForLocation(cwd string, l SessionLocation) (*domain.Proje
 	if !linked {
 		return proj, nil
 	}
-	kids, err := s.Children(proj.ID)
-	if err != nil || len(kids) == 0 {
-		return proj, err
+	if !proj.IsGroup() {
+		kids, err := s.Children(proj.ID)
+		if err != nil || len(kids) == 0 {
+			return proj, err
+		}
 	}
-	if app, err := s.ProjectForPath(filepath.Join(main, rel)); err == nil && app != nil {
+	if app, err := s.ProjectForPath(filepath.Join(main, rel)); err == nil && app != nil && !app.IsGroup() {
 		return app, nil
 	}
 	return proj, nil

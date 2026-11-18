@@ -222,10 +222,11 @@ func (a *Adapter) locate(cwd string) store.SessionLocation {
 }
 
 // projectRoot é a raiz do projeto vista pela sessão: num worktree ligado, o
-// diretório equivalente dentro do worktree.
+// diretório equivalente dentro do worktree. Um grupo não é repositório: fica a
+// pasta dele, sem git.
 func (a *Adapter) projectRoot(sess domain.Session, pr domain.Project) string {
 	root := filepath.Clean(pr.Path)
-	if !sess.WorktreeLinked || sess.Worktree == "" {
+	if pr.IsGroup() || !sess.WorktreeLinked || sess.Worktree == "" {
 		return root
 	}
 	wr, ok := a.deps.Git.(gitinfo.WorktreeReader)

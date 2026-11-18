@@ -42,7 +42,10 @@ func validColumn(c domain.Column) bool {
 	return false
 }
 
-// msgGroupNoCards recusa um grupo (projeto sem pasta) como destino de card.
+// msgGroupNoBranch recusa branch num card de grupo.
+const msgGroupNoBranch = "grupo não tem branch"
+
+// msgGroupNoCards recusa um grupo sem pasta como destino de card.
 const msgGroupNoCards = "um grupo não recebe cards; escolha um dos repositórios"
 
 func (s *server) projectByID(id int64) (*domain.Project, error) {
@@ -137,8 +140,12 @@ func (s *server) createCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "projeto não encontrado")
 		return
 	}
-	if p.Path == "" {
+	if p.IsGroup() && p.Path == "" {
 		writeError(w, http.StatusBadRequest, msgGroupNoCards)
+		return
+	}
+	if p.IsGroup() && strings.TrimSpace(in.Branch) != "" {
+		writeError(w, http.StatusBadRequest, msgGroupNoBranch)
 		return
 	}
 	c, err := s.st.CreateCard(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
@@ -248,14 +255,16 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		c.WhereStopped, c.WhereStoppedAt = *in.WhereStopped, &now
 	}
 	if in.ProjectID != nil && *in.ProjectID != c.ProjectID {
-		if dest, err := s.projectByID(*in.ProjectID); err != nil {
+		dest, err := s.projectByID(*in.ProjectID)
+		if err != nil {
 			writeStoreError(w, err, "")
 			return
-		} else if dest != nil && dest.Path == "" {
+		}
+		if dest != nil && dest.IsGroup() && dest.Path == "" {
 			writeError(w, http.StatusBadRequest, msgGroupNoCards)
 			return
 		}
-		err := s.st.SetCardProject(c.ID, *in.ProjectID)
+		err = s.st.SetCardProject(c.ID, *in.ProjectID)
 		switch {
 		case errors.Is(err, store.ErrFamily):
 			writeError(w, http.StatusBadRequest, "o card só pode ir para um projeto da mesma família")
@@ -268,6 +277,14 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c.ProjectID = *in.ProjectID
+		// Card de grupo nunca tem branch: zera também as marcas do branch.
+		if dest != nil && dest.IsGroup() && c.Branch != "" {
+			if _, err := s.st.SetCardBranch(c.ID, ""); err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+			c.Branch = ""
+		}
 	}
 	if err := s.st.UpdateCard(c); err != nil {
 		writeStoreError(w, err, msgCardNotFound)

@@ -332,3 +332,34 @@ func TestIntegrationCoversFamilyCards(t *testing.T) {
 		t.Fatalf("card do app: %+v", got)
 	}
 }
+
+type panicReader struct{ t *testing.T }
+
+func (r panicReader) DetectBase(string) string { r.t.Error("DetectBase"); return "" }
+func (r panicReader) BranchTip(string, string) (string, bool) {
+	r.t.Error("BranchTip")
+	return "", false
+}
+func (r panicReader) IsAncestor(string, string, string) bool { r.t.Error("IsAncestor"); return false }
+
+func TestIntegrationSkipsGroupCard(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	g, err := st.CreateGroupAt("turing", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.CreateCard(domain.Card{Title: "x", ProjectID: g.ID, Branch: "feat/x", Column: domain.Revisao})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := CheckIntegrations(st, panicReader{t}, integNow); err != nil || changed {
+		t.Fatalf("changed = %v err = %v", changed, err)
+	}
+	if got, _ := st.GetCardByID(c.ID); got.Column != domain.Revisao {
+		t.Fatalf("column = %s", got.Column)
+	}
+}

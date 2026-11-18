@@ -7,7 +7,7 @@ const card = (o: Partial<CardSummary>) => ({
   id: 1, key: 'NAC-1', title: 'x', column: 'backlog', project_id: 1, created_at: iso(500), updated_at: iso(500),
   last_activity_at: null, signal: '', signal_since: null, ...o,
 }) as CardSummary
-const proj = (id: number, capture = true): Project => ({ id, name: `p${id}`, path: `/w/${id}`, capture, base_branch: "", parent_id: null })
+const proj = (id: number, capture = true): Project => ({ id, name: `p${id}`, path: `/w/${id}`, capture, base_branch: "", parent_id: null, kind: "repo" })
 const tot = (key: string, cost: number) => ({ key, cost_usd: cost, unpriced: false }) as Total
 
 describe('buildRows', () => {

@@ -9,8 +9,8 @@ O Cockpit é o quadro (kanban) onde o trabalho dos agentes fica registrado em ca
 
 ## Antes de tudo: esta sessão é registrada?
 
-- Use os comandos `nobre` só quando o contexto desta sessão contiver a frase "NobreAI Cockpit: esta sessão é registrada no board" (repositório cadastrado) ou a frase "NobreAI Cockpit: este repositório não está cadastrado no board" (veja "Repositório não cadastrado").
-- Sem nenhuma das duas frases, não rode comandos `nobre`.
+- Use os comandos `nobre` só quando o contexto desta sessão contiver a frase "NobreAI Cockpit: esta sessão é registrada no board" (repositório cadastrado), a frase "NobreAI Cockpit: este repositório não está cadastrado no board" (veja "Repositório não cadastrado") ou a frase "NobreAI Cockpit: esta pasta não está cadastrada no board" (veja "Pasta não cadastrada").
+- Sem nenhuma dessas frases, não rode comandos `nobre`.
 - Se um comando `nobre` responder que o repositório não está cadastrado, siga "Repositório não cadastrado".
 
 ## Repositório não cadastrado
@@ -25,6 +25,10 @@ Quando o contexto trouxer a frase "NobreAI Cockpit: este repositório não está
 6. Diga ao usuário, em poucas linhas, o que cadastrou e quais cards criou, e siga com o pedido dele.
 
 Se o usuário não quiser o repositório no board, ele desliga a captura do projeto na Configuração. Se o `nobre project add` falhar, avise o usuário e siga sem card.
+
+## Pasta não cadastrada
+
+Quando o contexto trouxer a frase "NobreAI Cockpit: esta pasta não está cadastrada no board", a sessão está numa pasta que não é git e tem repositórios dentro. Pergunte ao usuário se quer cadastrá-la como grupo; só rode `nobre project add <pasta>` (a pasta que a frase indica) se ele aceitar. Depois, liste ao usuário os sub-projetos sugeridos que o comando imprimir, sem cadastrá-los. Se ele recusar, siga com o pedido sem comandos `nobre`.
 
 ## Quando criar um card
 
@@ -52,6 +56,7 @@ Se o usuário não quiser o repositório no board, ele desliga a captura do proj
 - `nobre done`: marca o card como pronto para revisão. Recusa se "Como testar" estiver vazio ou mais antigo que a última edição de arquivo, ou se houver pergunta sem resposta. `nobre done --force` ignora essas recusas; use só depois de registrar o motivo com `nobre note`.
 - `nobre card add "Migrar sessões" --goal "..." --done-when "..." --branch feat/sessoes --where "parei na migration 3" --column pausado`: cria um card sem ligar esta sessão (`--column` aceita `backlog` ou `pausado`).
 - `nobre project scan`: levantamento só de leitura do projeto (inclui os sub-projetos sugeridos; `--nao-sugerir rel,rel` recusa); `nobre project base main`: define o branch base (`nobre project base <branch> [path]`).
+- `nobre project add <pasta>`: numa pasta que não é git e tem repositórios dentro, cadastra um grupo com pasta e lista os repositórios como sub-projetos sugeridos. Pergunte ao usuário antes de cadastrar a pasta; depois, mostre a lista e só cadastre um deles (`nobre project add <repo> --pai <id do grupo>`) se ele pedir.
 - `nobre status`: mostra o card, "Onde parei" e o que falta para o handoff.
 
 ## Como manter o card útil

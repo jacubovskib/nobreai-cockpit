@@ -7,7 +7,7 @@ export type Signal = '' | 'parado' | 'aguardando_revisao' | 'aguardando_voce' | 
 
 export interface Health { ok: boolean; version: string }
 
-export interface Project { id: number; name: string; path: string; capture: boolean; base_branch: string; parent_id: number | null }
+export interface Project { id: number; name: string; path: string; capture: boolean; base_branch: string; parent_id: number | null; kind: 'repo' | 'group' }
 
 export interface Card {
   id: number
@@ -356,3 +356,21 @@ export interface RemoveNeedsConfirm {
   // Sessões vivas em outro worktree do mesmo repositório.
   repo_sessions?: number
 }
+
+// GET /api/fs/dirs?path=
+export interface FsDir { name: string; path: string; git: boolean; registered: boolean }
+export interface FsDirs { path: string; parent: string; dirs: FsDir[] }
+
+// GET /api/fs/scan?path=
+export interface ScanSuggestion { path: string; rel: string; name: string; source: string; registered: Project | null; blocked: string }
+export interface FsScan {
+  path: string
+  git: boolean
+  kind: 'repo' | 'monorepo' | 'group'
+  name: string
+  registered: Project | null
+  suggestions: ScanSuggestion[]
+}
+
+// POST /api/projects/batch
+export interface BatchResult { project: Project; children: Project[]; moved: { sessions: number; cards: number } }

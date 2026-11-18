@@ -5,6 +5,8 @@ import { useAgents, useCards, useLimits, usePrices, useProjects, useSettings, us
 import type { AgentDetection, InstallReport, Limit, Price, Project, Settings } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
+import { AddProject } from './config/AddProject'
+import { isGroup } from '../app/project'
 import { ConfigLog } from './config/ConfigLog'
 import { ErrorLine, btn, btnPrimary, h2, input, muted, panel } from './card/shared'
 
@@ -359,7 +361,7 @@ interface Moved { moved?: { sessions: number; cards: number } }
 function validParents(p: Project, projects: Project[]): Project[] {
   return projects.filter((q) => {
     if (q.id === p.id || q.parent_id != null) return false
-    if (q.path === '') return true
+    if (isGroup(q) && q.path === '') return true
     return p.path.startsWith(q.path.replace(/\/+$/, '') + '/')
   })
 }
@@ -398,11 +400,11 @@ function Suggestions({ project }: { project: Project }) {
   )
 }
 
-function ProjectRow({ p, projects, nCards, child, report, setReport }: { p: Project; projects: Project[]; nCards: number; child: boolean; report: string; setReport: (id: number, text: string) => void }) {
+function ProjectRow({ p, projects, nCards, child, report, setReport, onRescan }: { p: Project; projects: Project[]; nCards: number; child: boolean; report: string; setReport: (id: number, text: string) => void; onRescan?: (path: string) => void }) {
   const qc = useQueryClient()
   const parent = p.parent_id == null ? undefined : projects.find((x) => x.id === p.parent_id)
   const hasKids = projects.some((x) => x.parent_id === p.id)
-  const loose = !child && !hasKids && p.path !== ''
+  const loose = !child && !hasKids && p.path !== '' && !isGroup(p)
   const options = loose ? validParents(p, projects) : []
   const [target, setTarget] = useState<number | null>(null)
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['projects'] }), qc.invalidateQueries({ queryKey: ['cards'] })])
@@ -419,7 +421,7 @@ function ProjectRow({ p, projects, nCards, child, report, setReport }: { p: Proj
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, padding: '10px 0', paddingLeft: child ? 28 : 0, borderTop: '1px solid var(--border)' }}>
       <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column' }}>
-        <strong>{p.name}{p.path === '' && <span className="badge" style={{ marginLeft: 8 }}>grupo</span>}</strong>
+        <strong>{p.name}{isGroup(p) && <span className="badge" style={{ marginLeft: 8 }}>grupo</span>}</strong>
         {p.path !== '' && <span className="mono" style={{ ...muted, fontSize: 12 }}>{p.path}</span>}
       </div>
       <span style={muted}>{child ? (parent?.capture ? `${nCards} ${nCards === 1 ? 'card' : 'cards'}` : 'captura desligada') : p.capture ? `${nCards} ${nCards === 1 ? 'card' : 'cards'}` : 'captura desligada'}</span>
@@ -436,6 +438,7 @@ function ProjectRow({ p, projects, nCards, child, report, setReport }: { p: Proj
           {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
         </select>
       )}
+      {!child && p.path !== '' && onRescan && <button type="button" style={btn} aria-label={`Varrer de novo ${p.name}`} onClick={() => onRescan(p.path)}>Varrer de novo</button>}
       {child && <button type="button" style={btn} disabled={move.isPending} onClick={() => { setReport(p.id, ''); move.mutate(null) }}>Desligar do projeto principal</button>}
       {dest && (
         <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
@@ -454,19 +457,14 @@ function ProjectRow({ p, projects, nCards, child, report, setReport }: { p: Proj
 function Projects({ projects }: { projects: Project[] }) {
   const qc = useQueryClient()
   const cards = useCards().data ?? []
-  const [name, setName] = useState('')
-  const [path, setPath] = useState('')
-  const [adding, setAdding] = useState(false)
+  // adding: painel Adicionar projeto; path preenchido = Varrer de novo (abre no resultado).
+  const [adding, setAdding] = useState<{ path?: string; n: number } | null>(null)
   // O relatório de "Mover para…" fica aqui: a linha remonta quando muda de pai.
   const [reports, setReports] = useState<Record<number, string>>({})
   const setReport = (id: number, text: string) => setReports((r) => ({ ...r, [id]: text }))
   const [groupOpen, setGroupOpen] = useState(false)
   const [group, setGroup] = useState('')
   const refresh = () => qc.invalidateQueries({ queryKey: ['projects'] })
-  const add = useMutation({
-    mutationFn: () => post('/api/projects', { name: name.trim(), path: path.trim() }),
-    onSuccess: async () => { await refresh(); setName(''); setPath(''); setAdding(false) },
-  })
   const addGroup = useMutation({
     mutationFn: () => post('/api/projects', { name: group.trim() }),
     onSuccess: async () => { await refresh(); setGroup(''); setGroupOpen(false) },
@@ -480,7 +478,7 @@ function Projects({ projects }: { projects: Project[] }) {
       action={!adding && !groupOpen && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" style={btn} onClick={() => { addGroup.reset(); setGroupOpen(true) }}>Novo grupo</button>
-          <button type="button" style={btn} onClick={() => { add.reset(); setAdding(true) }}>Adicionar repositório</button>
+          <button type="button" style={btn} onClick={() => setAdding({ n: Date.now() })}>Adicionar projeto</button>
         </div>
       )}
     >
@@ -494,26 +492,11 @@ function Projects({ projects }: { projects: Project[] }) {
           <div style={{ flexBasis: '100%' }}><ErrorLine error={addGroup.error} /></div>
         </form>
       )}
-      {adding && (
-        <form
-          onSubmit={(e) => { e.preventDefault(); add.mutate() }}
-          style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}
-        >
-          <label style={field}>Nome (opcional)
-            <input style={input} value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label style={{ ...field, flex: 1, minWidth: 260 }}>Caminho absoluto
-            <input style={{ ...input, fontFamily: 'var(--mono)' }} placeholder="/home/você/workspace/projeto" value={path} onChange={(e) => setPath(e.target.value)} />
-          </label>
-          <button type="submit" style={btnPrimary} disabled={add.isPending || path.trim() === ''}>Adicionar</button>
-          <button type="button" style={btn} onClick={() => setAdding(false)}>Cancelar</button>
-          <div style={{ flexBasis: '100%' }}><ErrorLine error={add.error} /></div>
-        </form>
-      )}
+      {adding && <AddProject key={adding.n} initialPath={adding.path} onClose={() => setAdding(null)} />}
       {projects.length === 0 && <p style={muted}>Nenhum repositório cadastrado.</p>}
       {roots.map((p) => (
         <div key={p.id}>
-          <ProjectRow p={p} projects={projects} nCards={cards.filter((c) => c.project_id === p.id).length} child={false} report={reports[p.id] ?? ''} setReport={setReport} />
+          <ProjectRow p={p} projects={projects} nCards={cards.filter((c) => c.project_id === p.id).length} child={false} report={reports[p.id] ?? ''} setReport={setReport} onRescan={(path) => setAdding({ path, n: Date.now() })} />
           {projects.filter((k) => k.parent_id === p.id).map((k) => (
             <ProjectRow key={k.id} p={k} projects={projects} nCards={cards.filter((c) => c.project_id === k.id).length} child report={reports[k.id] ?? ''} setReport={setReport} />
           ))}

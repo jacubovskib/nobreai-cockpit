@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
 // registeredPhrase abre o contexto do SessionStart quando a sessão é
@@ -119,14 +121,23 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		if sess.ProjectID != nil {
 			return adapter.HookReply{}, nil
 		}
-		root := a.unregisteredRoot(sess.Cwd)
+		root, folder := a.unregisteredRoot(sess.Cwd)
 		if root == "" {
 			return adapter.HookReply{}, nil
 		}
+		phrase := unregisteredPhrase
+		todo := "Antes de seguir com o pedido do usuário, cadastre com nobre project add " + root +
+			" e faça o levantamento com nobre project scan; " + scanCardsStep(set) + " (veja a skill nobre-cockpit); se o cadastro listar sub-projetos sugeridos, liste-os ao usuário sem cadastrar. O cadastro liga esta sessão ao board."
+		if folder {
+			// Pasta de repositórios: vira grupo com pasta, que não tem
+			// levantamento, e só com o aval do usuário.
+			phrase = unregisteredFolderPhrase
+			todo = "Pergunte ao usuário se quer cadastrar esta pasta como grupo com nobre project add " + root +
+				"; só cadastre se ele aceitar. O comando lista os sub-projetos sugeridos, que você mostra ao usuário sem cadastrar. O cadastro liga esta sessão ao board."
+		}
 		return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName": "SessionStart",
-			"additionalContext": unregisteredPhrase + " (" + root + ").\nAntes de seguir com o pedido do usuário, cadastre com nobre project add " + root +
-				" e faça o levantamento com nobre project scan; " + scanCardsStep(set) + " (veja a skill nobre-cockpit); se o cadastro listar sub-projetos sugeridos, liste-os ao usuário sem cadastrar. O cadastro liga esta sessão ao board.\n\n" + guidanceFor(set),
+			"hookEventName":     "SessionStart",
+			"additionalContext": phrase + " (" + root + ").\n" + todo + "\n\n" + guidanceFor(set),
 		}})
 	}
 
@@ -174,6 +185,9 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 			}
 		}
 	}
+	if sess.FullCapture {
+		b.WriteString(a.unregisteredInGroup(sess))
+	}
 	if resumed != nil {
 		fmt.Fprintf(&b, "\n\nEsta sessão foi ligada ao card %s. Continue a partir do pacote de retomada; não pergunte o que já está nele.\n\n%s", resumed.Key, pkg)
 	}
@@ -183,30 +197,118 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	}})
 }
 
-// unregisteredRoot devolve a raiz do repositório git de cwd quando vale
-// avisar que ele não está cadastrado; "" quando não há repositório, a raiz é o
-// HOME ou já existe projeto para ela (mesmo com captura desligada, que funciona
-// como "ignorar").
-func (a *Adapter) unregisteredRoot(cwd string) string {
-	wr, ok := a.deps.Git.(gitinfo.WorktreeReader)
-	if !ok || cwd == "" {
-		return ""
+// unregisteredFolderPhrase abre o aviso numa pasta que não é git mas tem
+// repositórios no primeiro nível.
+const unregisteredFolderPhrase = "NobreAI Cockpit: esta pasta não está cadastrada no board"
+
+// unregisteredRoot devolve a raiz a cadastrar quando vale avisar, e se é uma
+// pasta de repositórios (true) em vez de um repositório git; "" quando não há o
+// que avisar: a raiz é o HOME (ou o contém), já existe projeto para ela
+// (mesmo com captura desligada, que funciona como "ignorar") ou, numa pasta de
+// repositórios, ela já contém um projeto ou grupo cadastrado (como
+// ~/workspace). Numa pasta que não é git só lê o primeiro nível do próprio
+// cwd, sem git.
+func (a *Adapter) unregisteredRoot(cwd string) (string, bool) {
+	if cwd == "" {
+		return "", false
 	}
-	root := wr.Locate(cwd).Main
-	if root == "" {
-		return ""
+	root := ""
+	if wr, ok := a.deps.Git.(gitinfo.WorktreeReader); ok {
+		root = wr.Locate(cwd).Main
 	}
-	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == filepath.Clean(root) {
-		return ""
+	folder := root == ""
+	if folder {
+		root = filepath.Clean(cwd)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		home = filepath.Clean(home)
+		if home == filepath.Clean(root) || (folder && strings.HasPrefix(home, strings.TrimRight(root, "/")+"/")) {
+			return "", false
+		}
 	}
 	if p, err := a.st.ProjectForPath(root); err != nil || p != nil {
+		return "", false
+	}
+	if folder && a.containsProject(root) {
+		return "", false
+	}
+	if folder && !hasRepoChild(root) {
+		return "", false
+	}
+	return root, folder
+}
+
+// containsProject diz se algum projeto ou grupo cadastrado fica dentro de dir
+// (erro de leitura conta como sim: na dúvida, não avisa).
+func (a *Adapter) containsProject(dir string) bool {
+	ps, err := a.st.ListProjects()
+	if err != nil {
+		return true
+	}
+	prefix := strings.TrimRight(dir, "/") + "/"
+	for _, p := range ps {
+		if strings.HasPrefix(filepath.Clean(p.Path), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRepoChild diz se alguma pasta do primeiro nível de dir é um repositório
+// (.git como pasta ou arquivo); não segue symlinks nem lê pastas ocultas.
+func hasRepoChild(dir string) bool {
+	es, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range es {
+		n := e.Name()
+		if !e.IsDir() || workspaces.SkipDir(n) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, n, ".git")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// unregisteredInGroup é o aviso (com o "\n\n" na frente) de que a sessão está
+// num repositório ainda não cadastrado dentro de um grupo com pasta, ou ""
+// quando não é o caso ou o usuário já recusou a sugestão. Usa só o que a sessão
+// guardou: nenhuma chamada ao git.
+func (a *Adapter) unregisteredInGroup(sess domain.Session) string {
+	if sess.ProjectID == nil || sess.Worktree == "" || sess.WorktreeLinked {
 		return ""
 	}
-	return root
+	root := filepath.Clean(sess.Worktree)
+	g, err := a.st.ProjectForPath(root)
+	if err != nil || g == nil || !g.IsGroup() || g.ID != *sess.ProjectID || filepath.Clean(g.Path) == root {
+		return ""
+	}
+	// Mesma regra da varredura: o que a tela nunca sugere (pasta oculta, de
+	// dependências/build ou abaixo de 2 níveis) também não vira aviso.
+	rel, err := filepath.Rel(filepath.Clean(g.Path), root)
+	if err != nil || !workspaces.InScan(rel) {
+		return ""
+	}
+	rel = filepath.ToSlash(rel)
+	dismissed := map[string][]string{}
+	if _, err := a.st.GetKV("subproject_dismissed", &dismissed); err != nil {
+		dismissed = map[string][]string{}
+	}
+	for _, d := range dismissed[strconv.FormatInt(g.ID, 10)] {
+		if d == rel {
+			return ""
+		}
+	}
+	return fmt.Sprintf("\n\nNobreAI Cockpit: o repositório %s fica dentro do grupo %s e não está cadastrado. Liste ao usuário a opção de cadastrá-lo com nobre project add %s --pai %d; não cadastre sem ele pedir.",
+		root, g.Name, root, g.ID)
 }
 
 // appsGuidance lista os apps (sub-projetos) da família do projeto da sessão e
-// ensina o nobre app; "" quando o projeto não tem sub-projetos.
+// ensina o nobre app; "" quando o projeto não tem sub-projetos ou a família é
+// um grupo (apps e nobre app são só de monorepo).
 func (a *Adapter) appsGuidance(sess domain.Session) (string, error) {
 	if sess.ProjectID == nil {
 		return "", nil
@@ -220,7 +322,7 @@ func (a *Adapter) appsGuidance(sess domain.Session) (string, error) {
 			continue
 		}
 		repo, err := a.st.RepoProject(p)
-		if err != nil {
+		if err != nil || repo.IsGroup() {
 			return "", err
 		}
 		kids, err := a.st.Children(repo.ID)
@@ -263,7 +365,8 @@ func (a *Adapter) pausedCards(sess domain.Session, except *domain.Card) ([]domai
 		if err != nil {
 			return nil, err
 		}
-		if !onBase {
+		// Grupo não tem base: o git nunca roda na pasta dele.
+		if !onBase && !repo.IsGroup() {
 			onBase = board.ProjectBase(br, repo) == sess.Branch
 		}
 		if family, err = a.st.FamilyIDs(repo.ID); err != nil {
