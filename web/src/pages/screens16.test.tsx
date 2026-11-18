@@ -182,13 +182,12 @@ describe('Config', () => {
     expect(screen.getByLabelText('Preço de cache (leitura) de gpt-x')).toHaveValue('0,3')
   })
 
-  it('adiciona projeto com caminho', async () => {
-    const fn = mock(routes)
+  it('adicionar projeto abre o seletor de pastas', async () => {
+    mock({ ...routes, '/api/fs/dirs': { path: '/h', parent: '', dirs: [{ name: 'w', path: '/h/w', git: false, registered: false }] } })
     wrap(<Config />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Adicionar repositório' }))
-    fireEvent.change(screen.getByLabelText('Caminho absoluto'), { target: { value: '/w/novo' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Adicionar' }))
-    await waitFor(() => expect(calls(fn, 'POST', '/api/projects')).toEqual([{ name: '', path: '/w/novo' }]))
+    fireEvent.click(await screen.findByRole('button', { name: 'Adicionar projeto' }))
+    expect(await screen.findByRole('button', { name: /^w\// })).toBeInTheDocument()
+    expect(screen.getByLabelText('Colar caminho')).toBeInTheDocument()
   })
 })
 

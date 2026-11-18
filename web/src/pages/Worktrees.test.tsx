@@ -117,7 +117,7 @@ describe('Worktrees · família', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
   it('com um app selecionado mostra a seção do repositório do pai', async () => {
-    const pai: ProjectWorktrees = { project: { id: 20, name: 'mono', path: '/w/mono', capture: true, base_branch: '', parent_id: null }, error: '', worktrees: [{ ...wt, path: '/w/mono', branch: 'main', main: true, cards: [], sessions: [] }], orphans: [] }
+    const pai: ProjectWorktrees = { project: { id: 20, name: 'mono', path: '/w/mono', capture: true, base_branch: '', parent_id: null, kind: 'repo' }, error: '', worktrees: [{ ...wt, path: '/w/mono', branch: 'main', main: true, cards: [], sessions: [] }], orphans: [] }
     const app = { id: 21, name: 'web', path: '/w/mono/web', capture: true, base_branch: '', parent_id: 20 }
     mockApi({ '/api/worktrees': [pai], '/api/projects': [pai.project, app] })
     wrap('/worktrees?projeto=21')
