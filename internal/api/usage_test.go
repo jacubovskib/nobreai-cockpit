@@ -37,8 +37,8 @@ func TestUsageTotalsExpandsFamily(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sum := func(project int64) int64 {
-		rec := a.do(t, "GET", "/api/usage/totals?project="+strconv.FormatInt(project, 10), nil, 0)
+	sumQ := func(project int64, extra string) int64 {
+		rec := a.do(t, "GET", "/api/usage/totals?project="+strconv.FormatInt(project, 10)+extra, nil, 0)
 		if rec.Code != 200 {
 			t.Fatalf("totals = %d %s", rec.Code, rec.Body)
 		}
@@ -47,6 +47,10 @@ func TestUsageTotalsExpandsFamily(t *testing.T) {
 			n += x.Input
 		}
 		return n
+	}
+	sum := func(project int64) int64 { return sumQ(project, "") }
+	if got := sumQ(pai.ID, "&exact=1"); got != 100 {
+		t.Fatalf("pai exact = %d", got)
 	}
 	if got := sum(pai.ID); got != 300 {
 		t.Fatalf("pai = %d", got)

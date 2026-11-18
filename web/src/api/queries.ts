@@ -31,14 +31,15 @@ export const usePrices = () =>
   useQuery({ queryKey: ['prices'], queryFn: () => get<Price[]>('/api/prices') })
 
 // group: agent | card | session | day_agent | model | project. from/to: AAAA-MM-DD locais, [from, to).
-export const useTotals = (group: string, from?: string, to?: string, project?: number | null) =>
+export const useTotals = (group: string, from?: string, to?: string, project?: number | null, exact = false) =>
   useQuery({
-    queryKey: ['usage', 'totals', group, from ?? '', to ?? '', project ?? null],
+    queryKey: ['usage', 'totals', group, from ?? '', to ?? '', project ?? null, exact],
     queryFn: () => {
       const q = new URLSearchParams({ group })
       if (from) q.set('from', from)
       if (to) q.set('to', to)
       if (project != null) q.set('project', String(project))
+      if (project != null && exact) q.set('exact', '1')
       return get<Total[]>(`/api/usage/totals?${q}`)
     },
   })

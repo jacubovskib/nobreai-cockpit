@@ -74,22 +74,21 @@ function DaemonStatus() {
   )
 }
 
-// Raízes por id, cada uma seguida dos filhos por nome (indentados no seletor).
-function projectTree(list: Project[]): { project: Project; child: boolean }[] {
+// Primeiro select: principais e soltos, por nome. Os sub-projetos ficam no segundo select.
+function rootProjects(list: Project[]): Project[] {
   const ids = new Set(list.map((p) => p.id))
-  const roots = list.filter((p) => p.parent_id == null || !ids.has(p.parent_id)).sort((a, b) => a.id - b.id)
-  return roots.flatMap((r) => [
-    { project: r, child: false },
-    ...list.filter((p) => p.parent_id === r.id).sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({ project: p, child: true })),
-  ])
+  return list.filter((p) => p.parent_id == null || !ids.has(p.parent_id)).sort((a, b) => a.name.localeCompare(b.name))
 }
+
+const selectStyle = { width: '100%', minHeight: 44, padding: '0 10px', borderRadius: 8, border: '1px solid #2E333E', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' } as const
 
 export function Layout() {
   useStream()
   const settings = useSettings()
   // Toda tela abaixo mostra custo na moeda configurada (Money/useMoney).
   const projects = useProjects()
-  const { projectId, setProjectId } = useProjectFilter()
+  const { root, app, setProjectId, setApp } = useProjectFilter()
+  const children = root ? (projects.data ?? []).filter((p) => p.parent_id === root.id).sort((a, b) => a.name.localeCompare(b.name)) : []
   const currency = { currency: settings.data?.currency, rate: settings.data?.brl_rate }
   return (
     <CurrencyContext.Provider value={currency}>
@@ -109,19 +108,33 @@ export function Layout() {
         <div style={{ padding: '0 12px 12px' }}>
           <select
             aria-label="Projeto"
-            value={projectId ?? ''}
+            value={root?.id ?? ''}
             onChange={(e) => setProjectId(e.target.value === '' ? null : Number(e.target.value))}
-            style={{ width: '100%', minHeight: 44, padding: '0 10px', borderRadius: 8, border: '1px solid #2E333E', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' }}
+            style={selectStyle}
           >
             <option value="">Todos os projetos</option>
-            {projectTree(projects.data ?? []).map(({ project: p, child }) => (
-              <option key={p.id} value={p.id}>{child ? `\u00a0\u00a0\u00a0${p.name}` : p.name}</option>
+            {rootProjects(projects.data ?? []).map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
+          {children.length > 0 && (
+            <select
+              aria-label="App"
+              value={app ?? ''}
+              onChange={(e) => setApp(e.target.value === '' ? null : e.target.value === 'geral' ? 'geral' : Number(e.target.value))}
+              style={{ ...selectStyle, marginTop: 8 }}
+            >
+              <option value="">Todos</option>
+              <option value="geral">geral (raiz)</option>
+              {children.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          )}
         </div>
         <div className="nav">
           {NAV.map((n) => (
-            <NavLink key={n.to} to={withProject(n.to, projectId)} end={n.end} className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink key={n.to} to={withProject(n.to, root ? root.id : null, app)} end={n.end} className={({ isActive }) => (isActive ? 'active' : '')}>
               {n.icon}
               {n.label}
             </NavLink>
