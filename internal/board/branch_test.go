@@ -76,10 +76,18 @@ func TestRepoBaseUsesParent(t *testing.T) {
 	}
 	app.BaseBranch = "x"
 	g := fakeBranches{base: "develop"}
-	if got := RepoBase(st, g, app); got != "main" {
+	base := func(p domain.Project) string {
+		t.Helper()
+		b, err := RepoBase(st, g, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	if got := base(app); got != "main" {
 		t.Fatalf("RepoBase(app) = %q, want main", got)
 	}
-	if got := RepoBase(st, g, parent); got != "main" {
+	if got := base(parent); got != "main" {
 		t.Fatalf("RepoBase(parent) = %q, want main", got)
 	}
 	// Um filho de grupo tem repositório próprio: usa a própria base.
@@ -88,7 +96,20 @@ func TestRepoBaseUsesParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := RepoBase(st, g, kid); got != "develop" {
+	if got := base(kid); got != "develop" {
 		t.Fatalf("RepoBase(filho de grupo) = %q, want develop", got)
+	}
+}
+
+func TestRepoBaseReturnsParentLookupError(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	gone := int64(999)
+	app := domain.Project{ID: 5, Name: "web", Path: "/w/x/web", BaseBranch: "x", ParentID: &gone}
+	if b, err := RepoBase(st, fakeBranches{}, app); err == nil || b != "" {
+		t.Fatalf("RepoBase = %q, %v; quer erro", b, err)
 	}
 }

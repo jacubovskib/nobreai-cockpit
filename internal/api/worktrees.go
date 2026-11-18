@@ -91,10 +91,12 @@ func (s *server) listWorktrees(w http.ResponseWriter, r *http.Request) {
 	out := make([]ProjectWorktrees, 0, len(projects))
 	for _, p := range projects {
 		// App de monorepo: o repositório aparece uma vez, no item do pai.
-		if repo, err := s.st.RepoProject(p); err != nil {
+		repo, err := s.st.RepoProject(p)
+		if err != nil {
 			writeStoreError(w, err, "")
 			return
-		} else if repo.ID != p.ID {
+		}
+		if repo.ID != p.ID {
 			continue
 		}
 		pw, err := s.projectWorktrees(p)

@@ -280,10 +280,13 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	oldBase := p.BaseBranch
-	isApp := false
-	if repo, err := s.st.RepoProject(*p); err == nil && repo.ID != p.ID {
-		isApp = true
+	var isApp bool
+	repo, err := s.st.RepoProject(*p)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
 	}
+	isApp = repo.ID != p.ID
 	if !readJSON(w, r, p) {
 		return
 	}

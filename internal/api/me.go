@@ -303,7 +303,7 @@ func (s *server) projectBase(id int64) (string, error) {
 	}
 	for _, p := range ps {
 		if p.ID == id {
-			return board.RepoBase(s.st, s.branchReader(), p), nil
+			return board.RepoBase(s.st, s.branchReader(), p)
 		}
 	}
 	return "", nil

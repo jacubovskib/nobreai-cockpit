@@ -39,7 +39,7 @@ func CheckIntegrations(st *store.Store, git gitinfo.BranchReader, now time.Time)
 		if !ok {
 			continue
 		}
-		// App de monorepo: o repositório é o do pai, que cobre os cards da família.
+		// App de monorepo (pai lido do mapa já carregado, sem uma consulta por card): o repositório é o do pai, que cobre os cards da família.
 		if p.ParentID != nil {
 			if parent, ok := projects[*p.ParentID]; ok && parent.Path != "" {
 				p = parent

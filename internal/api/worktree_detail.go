@@ -88,12 +88,12 @@ func (s *server) worktreeDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return
 	}
-	if repo, err := s.st.RepoProject(*p); err != nil {
+	repo, err := s.st.RepoProject(*p)
+	if err != nil {
 		writeStoreError(w, err, "")
 		return
-	} else {
-		p = &repo // o worktree de um app é o do repositório do pai
 	}
+	p = &repo // o worktree de um app é o do repositório do pai
 	pw, err := s.projectWorktrees(*p)
 	if err != nil {
 		writeStoreError(w, err, "")
