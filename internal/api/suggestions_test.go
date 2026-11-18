@@ -134,3 +134,39 @@ func TestScanOfASubprojectHasNoSuggestions(t *testing.T) {
 		t.Fatalf("sugestões do app = %s", rec.Body)
 	}
 }
+
+func TestGroupWithFolderSuggestsAndDismissesByGroupID(t *testing.T) {
+	a := newTestAPI(t)
+	g := groupWithFolder(t, a)
+	for _, d := range []string{"a", "b", "docs"} {
+		if err := os.MkdirAll(filepath.Join(g.Path, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(g.Path, d, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := "/api/projects/" + strconv.FormatInt(g.ID, 10) + "/suggestions"
+	rec := a.do(t, "GET", base, nil, 0)
+	if got := decode[[]workspaces.Suggestion](t, rec); rec.Code != http.StatusOK || len(got) != 2 {
+		t.Fatalf("sugestões do grupo = %d %s", rec.Code, rec.Body)
+	}
+	if rec := a.do(t, "POST", base+"/dismiss", map[string]any{"rels": []string{"b"}}, 0); rec.Code != http.StatusNoContent {
+		t.Fatalf("dismiss = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "GET", base, nil, 0)
+	if got := decode[[]workspaces.Suggestion](t, rec); len(got) != 1 || got[0].Rel != "a" {
+		t.Fatalf("depois de recusar = %s", rec.Body)
+	}
+}
+
+func TestPathlessGroupSuggestionsStay400(t *testing.T) {
+	a := newTestAPI(t)
+	rec := a.do(t, "POST", "/api/projects", map[string]string{"name": "g"}, 0)
+	g := decode[struct{ ID int64 }](t, rec)
+	if rec := a.do(t, "GET", "/api/projects/"+strconv.FormatInt(g.ID, 10)+"/suggestions", nil, 0); rec.Code != http.StatusBadRequest {
+		t.Fatalf("grupo sem pasta = %d", rec.Code)
+	}
+}

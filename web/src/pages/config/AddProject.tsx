@@ -36,11 +36,14 @@ function Result({ path, onClose }: { path: string; onClose: () => void }) {
   const reg = useMutation({
     mutationFn: async (v: { body: object; rels: string[] }) => {
       const r = await post<BatchResult>('/api/projects/batch', v.body)
-      // O cadastro já foi gravado; recusar as pastas desmarcadas vem depois.
-      if (v.rels.length > 0) await post(`/api/projects/${r.project.id}/suggestions/dismiss`, { rels: v.rels })
-      return r
+      // O cadastro já foi gravado; recusar as pastas desmarcadas é o que dá para falhar sem desfazer.
+      let dismissFailed = false
+      if (v.rels.length > 0) {
+        try { await post(`/api/projects/${r.project.id}/suggestions/dismiss`, { rels: v.rels }) } catch { dismissFailed = true }
+      }
+      return { ...r, dismissFailed }
     },
-    onSettled: () => Promise.all(['projects', 'cards', 'suggestions'].map((k) => qc.invalidateQueries({ queryKey: [k] }))),
+    onSettled: () => Promise.all(['projects', 'cards', 'suggestions', 'fs-scan', 'fs-dirs'].map((k) => qc.invalidateQueries({ queryKey: [k] }))),
   })
   const data = scan.data
   const self = data?.registered ?? null
@@ -48,6 +51,7 @@ function Result({ path, onClose }: { path: string; onClose: () => void }) {
     return (
       <div role="status" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {registeredText(reg.data.project.name, reg.data.children.length, reg.data.moved).map((t) => <span key={t} style={{ color: 'var(--ok)' }}>{t}</span>)}
+        {reg.data.dismissFailed && <span style={muted}>Cadastrado, mas não consegui recusar as pastas desmarcadas.</span>}
         <div><button type="button" style={btn} onClick={onClose}>Fechar</button></div>
       </div>
     )

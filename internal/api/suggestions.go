@@ -33,6 +33,10 @@ func (s *server) repoFor(w http.ResponseWriter, r *http.Request) *domain.Project
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return nil
 	}
+	if p.IsGroup() && p.Path != "" {
+		// Grupo com pasta: as sugestões são os repositórios da pasta dele.
+		return p
+	}
 	if p.IsGroup() {
 		writeError(w, http.StatusBadRequest, "grupo não tem repositório; veja os sub-projetos de cada pasta")
 		return nil
@@ -48,7 +52,13 @@ func (s *server) repoFor(w http.ResponseWriter, r *http.Request) *domain.Project
 // openSuggestions são os sub-projetos que o repositório declara e que ainda
 // não foram cadastrados nem recusados (nunca nil).
 func (s *server) openSuggestions(repo domain.Project) ([]workspaces.Suggestion, error) {
-	found, err := workspaces.Detect(repo.Path)
+	var found []workspaces.Suggestion
+	var err error
+	if repo.IsGroup() {
+		found, err = workspaces.ScanRepos(repo.Path)
+	} else {
+		found, err = workspaces.Detect(repo.Path)
+	}
 	if err != nil {
 		return nil, err
 	}

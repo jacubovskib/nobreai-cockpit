@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '../../api/client'
 import type { FsDirs } from '../../api/types'
@@ -22,7 +22,11 @@ export function FolderPicker({ start, onUse, onCancel }: { start?: string; onUse
     queryFn: () => get<FsDirs>(path === '' ? '/api/fs/dirs' : `/api/fs/dirs?path=${encodeURIComponent(path)}`),
     retry: false,
   })
-  const here = q.data?.path
+  // Um caminho que falha (colado ou clicado) não apaga a última pasta boa.
+  const [good, setGood] = useState<FsDirs | null>(null)
+  useEffect(() => { if (q.data) setGood(q.data) }, [q.data])
+  const data = q.data ?? good
+  const here = data?.path
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <nav aria-label="Caminho da pasta" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2 }}>
@@ -39,13 +43,13 @@ export function FolderPicker({ start, onUse, onCancel }: { start?: string; onUse
         </label>
         <button type="submit" style={{ ...btn, alignSelf: 'flex-end' }} disabled={paste.trim() === ''}>Ir</button>
       </form>
-      {q.isPending && <p style={muted}>Lendo a pasta…</p>}
+      {q.isPending && !data && <p style={muted}>Lendo a pasta…</p>}
       <ErrorLine error={q.error} />
-      {q.data && q.data.dirs.length === 0 && <p style={muted}>Nenhuma subpasta.</p>}
-      {q.data && q.data.dirs.length > 0 && (
+      {data && data.dirs.length === 0 && <p style={muted}>Nenhuma subpasta.</p>}
+      {data && data.dirs.length > 0 && (
         <ul aria-label="Subpastas" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 4 }}>
-          {q.data.parent !== '' && <li><button type="button" style={{ ...btn, width: '100%' }} onClick={() => setPath(q.data.parent)}>.. (pasta acima)</button></li>}
-          {q.data.dirs.map((d) => (
+          {data.parent !== '' && <li><button type="button" style={{ ...btn, width: '100%' }} onClick={() => setPath(data.parent)}>.. (pasta acima)</button></li>}
+          {data.dirs.map((d) => (
             <li key={d.path}>
               <button type="button" style={{ ...btn, width: '100%', justifyContent: 'flex-start' }} onClick={() => setPath(d.path)}>
                 {d.name}/

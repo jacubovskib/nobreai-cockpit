@@ -399,7 +399,7 @@ function Suggestions({ project }: { project: Project }) {
   )
 }
 
-function ProjectRow({ p, projects, nCards, child, report, setReport, onRescan }: { p: Project; projects: Project[]; nCards: number; child: boolean; report: string; setReport: (id: number, text: string) => void; onRescan: (path: string) => void }) {
+function ProjectRow({ p, projects, nCards, child, report, setReport, onRescan }: { p: Project; projects: Project[]; nCards: number; child: boolean; report: string; setReport: (id: number, text: string) => void; onRescan?: (path: string) => void }) {
   const qc = useQueryClient()
   const parent = p.parent_id == null ? undefined : projects.find((x) => x.id === p.parent_id)
   const hasKids = projects.some((x) => x.parent_id === p.id)
@@ -437,7 +437,7 @@ function ProjectRow({ p, projects, nCards, child, report, setReport, onRescan }:
           {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
         </select>
       )}
-      {!child && p.path !== '' && <button type="button" style={btn} aria-label={`Varrer de novo ${p.name}`} onClick={() => onRescan(p.path)}>Varrer de novo</button>}
+      {!child && p.path !== '' && onRescan && <button type="button" style={btn} aria-label={`Varrer de novo ${p.name}`} onClick={() => onRescan(p.path)}>Varrer de novo</button>}
       {child && <button type="button" style={btn} disabled={move.isPending} onClick={() => { setReport(p.id, ''); move.mutate(null) }}>Desligar do projeto principal</button>}
       {dest && (
         <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
@@ -497,7 +497,7 @@ function Projects({ projects }: { projects: Project[] }) {
         <div key={p.id}>
           <ProjectRow p={p} projects={projects} nCards={cards.filter((c) => c.project_id === p.id).length} child={false} report={reports[p.id] ?? ''} setReport={setReport} onRescan={(path) => setAdding({ path, n: Date.now() })} />
           {projects.filter((k) => k.parent_id === p.id).map((k) => (
-            <ProjectRow key={k.id} p={k} projects={projects} nCards={cards.filter((c) => c.project_id === k.id).length} child report={reports[k.id] ?? ''} setReport={setReport} onRescan={() => {}} />
+            <ProjectRow key={k.id} p={k} projects={projects} nCards={cards.filter((c) => c.project_id === k.id).length} child report={reports[k.id] ?? ''} setReport={setReport} />
           ))}
         </div>
       ))}

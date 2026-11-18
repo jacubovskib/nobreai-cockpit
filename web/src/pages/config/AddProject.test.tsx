@@ -104,4 +104,44 @@ describe('AddProject', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cadastrar' }))
     await waitFor(() => expect(bodies(fn, 'POST', '/api/projects/batch')[0].children).toEqual([{ path: '/h/w/bravonix/a', name: 'a' }]))
   })
+
+  it('keeps the success text and notes it when dismissing fails', async () => {
+    mock({
+      'GET /api/fs/scan?path=%2Fh%2Fw%2Fbravonix': scan(),
+      'POST /api/projects/batch': { project: proj({ id: 9, name: 'bravonix' }), children: [{}], moved: { sessions: 0, cards: 0 } },
+    })
+    open('/h/w/bravonix')
+    await screen.findByLabelText(/portal/)
+    fireEvent.click(screen.getByLabelText(/docs-center/))
+    fireEvent.click(screen.getByLabelText('não sugerir as pastas desmarcadas'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cadastrar' }))
+    expect(await screen.findByText('bravonix cadastrado com 1 sub-projeto.')).toBeInTheDocument()
+    expect(screen.getByText('Cadastrado, mas não consegui recusar as pastas desmarcadas.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cadastrar' })).not.toBeInTheDocument()
+  })
+
+  it('rescan of a registered group shows only new suggestions', async () => {
+    const group = proj({ id: 9, name: 'bravonix', path: '/h/w/bravonix', kind: 'group' })
+    mock({
+      'GET /api/fs/scan?path=%2Fh%2Fw%2Fbravonix': scan({
+        registered: group,
+        suggestions: [sug('turing-back', { registered: proj({ id: 5, parent_id: 9 }) }), sug('novo')],
+      }),
+    })
+    open('/h/w/bravonix')
+    expect(await screen.findByLabelText(/novo/)).toBeChecked()
+    expect(screen.queryByLabelText(/turing-back/)).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Nome')).toBeDisabled()
+  })
+
+  it('keeps the last folder when a pasted path fails', async () => {
+    mock({ 'GET /api/fs/dirs': home })
+    open()
+    await screen.findByRole('button', { name: /bravonix/ })
+    fireEvent.change(screen.getByLabelText('Colar caminho'), { target: { value: '/fora' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ir' }))
+    expect(await screen.findByText(/erro|x/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /bravonix/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Usar esta pasta' })).toBeEnabled()
+  })
 })
