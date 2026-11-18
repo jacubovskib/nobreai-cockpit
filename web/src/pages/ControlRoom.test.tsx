@@ -305,12 +305,25 @@ describe('ControlRoom · projeto', () => {
     const fn = mock({
       '/api/overview': integ('statusline', 'statusline', 'A status line do Cockpit foi trocada por outro comando.'),
       '/api/settings': {},
+      'POST /api/agents/claude/statusline': {},
       'POST /api/integration/statusline/ignore': {},
     })
     wrap(<ControlRoom />)
-    expect(await screen.findByRole('button', { name: 'Restaurar a do Cockpit' })).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: 'Restaurar a do Cockpit' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/agents/claude/statusline')).toEqual([{ action: 'install' }]))
     fireEvent.click(screen.getByRole('button', { name: 'Manter a atual' }))
     await waitFor(() => expect(calls(fn, 'POST', '/api/integration/statusline/ignore')).toHaveLength(1))
+  })
+
+  it('ignore posts to the item key', async () => {
+    const fn = mock({
+      '/api/overview': integ('hooks', 'reinstall', 'Os hooks do Cockpit sumiram.'),
+      '/api/settings': {},
+      'POST /api/integration/hooks/ignore': {},
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Ignorar' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/integration/hooks/ignore')).toHaveLength(1))
   })
 
   it('restart alert has no buttons', async () => {

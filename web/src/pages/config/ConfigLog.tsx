@@ -11,7 +11,7 @@ const str = (v: unknown) => (typeof v === 'string' ? v : '')
 function items(d: Record<string, unknown>): string {
   const keys = Array.isArray(d.keys) ? d.keys.map(str).filter(Boolean) : []
   if (keys.length > 0) return keys.join(', ')
-  return str(d.key) || str(d.item) || 'integração'
+  return str(d.key) || 'integração'
 }
 
 export function logPhrase(e: ConfigLogEntry, projects: Project[]): string {
@@ -32,7 +32,7 @@ export function logPhrase(e: ConfigLogEntry, projects: Project[]): string {
     case 'integration_removed':
       return `${items(d)} removido por você`
     case 'agent_notified':
-      return `Sessão ${str(d.session).slice(0, 8)} avisada`
+      return `Sessão ${str(d.session).replace(/^[^:]+:/, '').slice(0, 8)} avisada`
     default:
       return e.kind
   }

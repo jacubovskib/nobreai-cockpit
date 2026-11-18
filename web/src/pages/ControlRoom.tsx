@@ -56,7 +56,7 @@ function IntegrationActions({ alert, onInstalled }: { alert: Alert; onInstalled:
     onSuccess: async (r) => { setPlan(null); onInstalled(r); await refresh() },
   })
   const statusline = useMutation({ mutationFn: () => post('/api/agents/claude/statusline', { action: 'install' }), onSuccess: refresh })
-  const ignore = useMutation({ mutationFn: () => post(`/api/integration/${info.key}/ignore`), onSuccess: refresh })
+  const ignore = useMutation({ mutationFn: () => post(`/api/integration/${encodeURIComponent(info.key)}/ignore`), onSuccess: refresh })
   const busy = preview.isPending || install.isPending || statusline.isPending || ignore.isPending
   const canIgnore = info.action !== 'restart' && info.action !== 'make_install'
   return (

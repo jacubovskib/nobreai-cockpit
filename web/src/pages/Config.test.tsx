@@ -180,6 +180,20 @@ describe('Config sessões avisadas e histórico', () => {
     wrap(<Config />)
     expect(await screen.findByText(/hooks corrigido por você/)).toBeInTheDocument()
   })
+  it('config log shortens a prefixed session id', async () => {
+    mock({ ...routes(), '/api/config-log?limit=50': [{ id: 2, at: '2026-11-17T10:30:00Z', kind: 'agent_notified', data: { session: 'claude:abcdef12-3456-7890-abcd-ef1234567890', text: 'x' } }] })
+    wrap(<Config />)
+    expect(await screen.findByText(/Sessão abcdef12 avisada/)).toBeInTheDocument()
+  })
+  it('capture toggle shows notified sessions', async () => {
+    const loja = { id: 1, name: 'loja', path: '/w/loja', capture: true, base_branch: 'main', parent_id: null }
+    const fn = mock({ ...routes(), '/api/projects': [loja], '/api/projects/1/suggestions': [], 'PATCH /api/projects/1': { ...loja, capture: false, notified_sessions: 2 } })
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Projetos' })
+    fireEvent.click(await within(sec).findByLabelText('Capturar sessões de loja'))
+    expect(await within(sec).findByText('2 sessões abertas vão receber o aviso no próximo passo.')).toBeInTheDocument()
+    expect(calls(fn, 'PATCH', '/api/projects/1')).toEqual([{ capture: false }])
+  })
   it('config log empty', async () => {
     mock({ ...routes(), '/api/config-log?limit=50': [] })
     wrap(<Config />)
