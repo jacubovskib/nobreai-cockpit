@@ -162,6 +162,14 @@ func run(dbPath string, seedDemo bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// A porta é ocupada antes de qualquer trabalho em segundo plano: um segundo
+	// nobred (com o daemon real no ar) falha aqui, sem iniciar o backfill nem
+	// disputar os cursores do daemon real.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+
 	// Histórico: mede o contexto dos transcripts já existentes (para entre
 	// sessões quando o ctx termina; o Wait do adaptador espera).
 	claudeAdapter.StartBackfill(ctx)
@@ -198,7 +206,7 @@ func run(dbPath string, seedDemo bool) error {
 	errc := make(chan error, 1)
 	go func() {
 		log.Printf("nobred ouvindo em http://%s (banco: %s)", addr, dbPath)
-		errc <- srv.ListenAndServe()
+		errc <- srv.Serve(ln)
 	}()
 
 	select {
