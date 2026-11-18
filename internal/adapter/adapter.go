@@ -68,6 +68,9 @@ type Check struct {
 	Label  string `json:"label"`
 	Detail string `json:"detail"`
 	OK     bool   `json:"ok"`
+	// Code explica a falha: "missing", "outdated", "dead_binary", "unreadable"
+	// ou "not_found". Vazio quando OK.
+	Code string `json:"code,omitempty"`
 }
 
 // InstallReport resume o que Install alterou.

@@ -180,6 +180,11 @@ func containsEntry(entries []any, want map[string]any) bool {
 	return false
 }
 
+// settingsMissingError distingue "settings.json não existe" de JSON inválido.
+type settingsMissingError struct{ path string }
+
+func (e *settingsMissingError) Error() string { return e.path + " não existe" }
+
 // installedHooks lista os eventos sem hook nosso em settingsPath e os
 // binários (sem repetição, na ordem) que os hooks nossos chamam.
 func installedHooks(settingsPath string) (missing, bins []string, err error) {
@@ -188,7 +193,7 @@ func installedHooks(settingsPath string) (missing, bins []string, err error) {
 		return nil, nil, err
 	}
 	if !exists {
-		return nil, nil, fmt.Errorf("%s não existe", settingsPath)
+		return nil, nil, &settingsMissingError{settingsPath}
 	}
 	hooks, _ := root["hooks"].(map[string]any)
 	seen := map[string]bool{}

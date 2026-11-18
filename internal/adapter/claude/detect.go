@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -128,8 +129,8 @@ func binaryExists(b string) bool {
 	return err == nil && !st.IsDir()
 }
 
-// Detect monta o checklist de saúde do Claude Code: CLI, hooks, skill e
-// eventos recebidos.
+// Detect monta o checklist de saúde do Claude Code: CLI (com versão), hooks,
+// status line, skill e eventos recebidos.
 func (a *Adapter) Detect() adapter.Detection {
 	d := adapter.Detection{Checks: []adapter.Check{}}
 	if a.paths.SettingsPath == "" && a.paths.SkillsDir == "" {
@@ -139,27 +140,76 @@ func (a *Adapter) Detect() adapter.Detection {
 	cli := a.cliPath()
 	d.Found = cli != ""
 	d.Path = cli
-	cliCheck := adapter.Check{Key: "cli", Label: "CLI encontrado", OK: d.Found, Detail: "claude não está no PATH nem em ~/.local/bin"}
-	if d.Found {
-		if a.paths.Version != nil {
-			d.Version = a.paths.Version(cli)
+	if d.Found && a.paths.Version != nil {
+		d.Version = a.paths.Version(cli)
+	}
+	cs := a.checks(true)
+	events := adapter.Check{Key: "events", Label: "Recebendo eventos", Detail: "nenhum evento recebido ainda"}
+	if last, ok := a.lastEvent(); ok {
+		events.OK = true
+		events.Detail = "último " + ago(a.deps.Now().Sub(last))
+	}
+	d.Checks = append(cs, events)
+	return d
+}
+
+// Health é o checklist barato do monitor: os checks de Detect sem consultar a
+// versão do CLI (que executa um processo) e sem os eventos.
+func (a *Adapter) Health() []adapter.Check {
+	if a.paths.SettingsPath == "" && a.paths.SkillsDir == "" {
+		return nil
+	}
+	return a.checks(false)
+}
+
+// WatchedFiles são os arquivos cuja mudança pede uma conferência completa.
+func (a *Adapter) WatchedFiles() []string {
+	var fs []string
+	if a.paths.SettingsPath != "" {
+		fs = append(fs, a.paths.SettingsPath)
+	}
+	if a.paths.SkillsDir != "" {
+		fs = append(fs, SkillFile(a.paths.SkillsDir))
+	}
+	if a.paths.NobreBin != "" {
+		fs = append(fs, a.paths.NobreBin)
+	}
+	return fs
+}
+
+func (a *Adapter) checks(withVersion bool) []adapter.Check {
+	cli := a.cliPath()
+	cliCheck := adapter.Check{Key: "cli", Label: "CLI encontrado", OK: cli != "", Detail: "claude não está no PATH nem em ~/.local/bin"}
+	if cli == "" {
+		cliCheck.Code = "not_found"
+	} else {
+		version := ""
+		if withVersion && a.paths.Version != nil {
+			version = a.paths.Version(cli)
 		}
-		cliCheck.Detail = strings.TrimSpace(cli + " " + d.Version)
+		cliCheck.Detail = strings.TrimSpace(cli + " " + version)
 	}
 
 	hooks := adapter.Check{Key: "hooks", Label: "Hooks instalados"}
 	missing, bins, err := installedHooks(a.paths.SettingsPath)
+	var absent *settingsMissingError
 	switch {
+	case errors.As(err, &absent):
+		hooks.Detail = err.Error()
+		hooks.Code = "missing"
 	case err != nil:
 		hooks.Detail = err.Error()
+		hooks.Code = "unreadable"
 	case len(missing) > 0:
 		hooks.Detail = "faltam: " + strings.Join(missing, ", ")
+		hooks.Code = "missing"
 	default:
 		hooks.OK = true
 		hooks.Detail = strings.Join(hookEvents, ", ")
 		for _, b := range bins {
 			if !binaryExists(b) {
 				hooks.OK = false
+				hooks.Code = "dead_binary"
 				hooks.Detail = "aponta para um binário que não existe: " + b
 				break
 			}
@@ -169,33 +219,32 @@ func (a *Adapter) Detect() adapter.Detection {
 	sline := adapter.Check{Key: statusLineCheckKey, Label: "Status line integrada"}
 	if b, detail := statusLineState(a.paths.SettingsPath); b == "" {
 		sline.Detail = detail
+		sline.Code = "missing"
+		if _, _, _, lerr := loadSettings(a.paths.SettingsPath); lerr != nil {
+			sline.Code = "unreadable"
+		}
 	} else if !binaryExists(b) {
 		sline.Detail = "aponta para um binário que não existe: " + b
+		sline.Code = "dead_binary"
 	} else {
 		sline.OK = true
 		sline.Detail = b + " statusline"
 	}
 
 	skill := adapter.Check{Key: "skill", Label: "Skill do Cockpit instalada"}
-	skillFile := filepath.Join(a.paths.SkillsDir, skillName, "SKILL.md")
+	skillFile := SkillFile(a.paths.SkillsDir)
 	if b, err := os.ReadFile(skillFile); err == nil {
 		skill.OK = true
 		skill.Detail = skillFile
 		if string(b) != skillContent {
 			skill.Detail = skillFile + " (desatualizada: rode nobre setup)"
+			skill.Code = "outdated"
 		}
 	} else {
 		skill.Detail = "não encontrada em " + skillFile
+		skill.Code = "missing"
 	}
-
-	events := adapter.Check{Key: "events", Label: "Recebendo eventos", Detail: "nenhum evento recebido ainda"}
-	if last, ok := a.lastEvent(); ok {
-		events.OK = true
-		events.Detail = "último " + ago(a.deps.Now().Sub(last))
-	}
-
-	d.Checks = []adapter.Check{cliCheck, hooks, sline, skill, events}
-	return d
+	return []adapter.Check{cliCheck, hooks, sline, skill}
 }
 
 func (a *Adapter) lastEvent() (time.Time, bool) {
