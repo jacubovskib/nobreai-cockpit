@@ -1,0 +1,249 @@
+package api
+
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
+)
+
+type batchResp struct {
+	Project  domain.Project   `json:"project"`
+	Children []domain.Project `json:"children"`
+	Moved    store.Moved      `json:"moved"`
+}
+
+// repoDirs cria dir/<nome>/.git para cada nome e devolve dir.
+func repoDirs(t *testing.T, names ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, n := range names {
+		if err := os.MkdirAll(filepath.Join(dir, n, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func projectCount(t *testing.T, a *testAPI) int {
+	t.Helper()
+	ps, err := a.st.ListProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(ps)
+}
+
+func TestBatchCreatesGroupFolderWithChildren(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "a", "b")
+	rec := a.do(t, "POST", "/api/projects/batch", map[string]any{
+		"path": dir, "name": "turing",
+		"children": []map[string]string{{"path": dir + "/a"}, {"path": dir + "/b", "name": "bee"}},
+	}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[batchResp](t, rec)
+	if got.Project.Kind != "group" || got.Project.Path != dir || got.Project.Name != "turing" {
+		t.Fatalf("project = %+v", got.Project)
+	}
+	if len(got.Children) != 2 || got.Children[0].Name != "a" || got.Children[1].Name != "bee" {
+		t.Fatalf("children = %+v", got.Children)
+	}
+	for _, c := range got.Children {
+		if c.ParentID == nil || *c.ParentID != got.Project.ID || c.Kind != "repo" {
+			t.Fatalf("filho = %+v", c)
+		}
+	}
+}
+
+func TestBatchRepoFolderAddsChildrenToExisting(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "apps")
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/projects/batch", map[string]any{"path": dir, "children": []map[string]string{{"path": dir + "/apps"}}}, 0)
+	got := decode[batchResp](t, rec)
+	if rec.Code != http.StatusCreated || got.Project.Kind != "repo" || len(got.Children) != 1 {
+		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
+	}
+	// Segunda chamada: o principal já existe, só entram os filhos novos.
+	if err := os.MkdirAll(filepath.Join(dir, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec = a.do(t, "POST", "/api/projects/batch", map[string]any{"path": dir, "children": []map[string]string{{"path": dir + "/web"}}}, 0)
+	if rec.Code != http.StatusOK || decode[batchResp](t, rec).Project.ID != got.Project.ID {
+		t.Fatalf("batch 2 = %d %s", rec.Code, rec.Body)
+	}
+	if n := projectCount(t, a); n != 3 {
+		t.Fatalf("projetos = %d", n)
+	}
+}
+
+func TestBatchLinksExistingStandalone(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "turing-back")
+	back, err := a.st.CreateProject("turing-back", dir+"/turing-back")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.startSess(t, "claude:s1", dir+"/turing-back/src", &back.ID, true)
+	rec := a.do(t, "POST", "/api/projects/batch", map[string]any{
+		"path": dir, "name": "turing", "children": []map[string]string{{"path": dir + "/turing-back"}},
+	}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[batchResp](t, rec)
+	if len(got.Children) != 1 || got.Children[0].ID != back.ID || got.Children[0].ParentID == nil || *got.Children[0].ParentID != got.Project.ID {
+		t.Fatalf("children = %+v", got.Children)
+	}
+	x, err := a.st.GetSession("claude:s1")
+	if err != nil || x.ProjectID == nil || *x.ProjectID != back.ID {
+		t.Fatalf("sessão = %+v %v", x, err)
+	}
+}
+
+func TestBatchAtomicOnBlockedChild(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "a", "b")
+	other, err := a.st.CreateGroup("outro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.st.CreateChild("a", dir+"/a", other.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := projectCount(t, a)
+	rec := a.do(t, "POST", "/api/projects/batch", map[string]any{
+		"path": dir, "children": []map[string]string{{"path": dir + "/b"}, {"path": dir + "/a"}},
+	}, 0)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "pertence a outro") {
+		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
+	}
+	if n := projectCount(t, a); n != before {
+		t.Fatalf("projetos = %d, antes %d: o lote não é tudo ou nada", n, before)
+	}
+}
+
+func TestBatchRefusesChildOutsideFolderAndDuplicateName(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "a", "b")
+	other := repoDirs(t, "z")
+	for name, body := range map[string]map[string]any{
+		"fora": {"path": dir, "children": []map[string]string{{"path": other + "/z"}}},
+		"nome": {"path": dir, "children": []map[string]string{{"path": dir + "/a", "name": "x"}, {"path": dir + "/b", "name": "X"}}},
+	} {
+		if rec := a.do(t, "POST", "/api/projects/batch", body, 0); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s = %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	if n := projectCount(t, a); n != 0 {
+		t.Fatalf("projetos = %d", n)
+	}
+}
+
+func TestBatchAdoptsRootSessions(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "a")
+	a.startSess(t, "claude:docs", dir+"/docs", nil, true)
+	a.startSess(t, "claude:src", dir+"/a/src", nil, true)
+	a.startSess(t, "claude:far", t.TempDir(), nil, true)
+	rec := a.do(t, "POST", "/api/projects/batch", map[string]any{
+		"path": dir, "children": []map[string]string{{"path": dir + "/a"}},
+	}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[batchResp](t, rec)
+	if got.Moved.Sessions != 2 {
+		t.Fatalf("moved = %+v", got.Moved)
+	}
+	docs, _ := a.st.GetSession("claude:docs")
+	src, _ := a.st.GetSession("claude:src")
+	far, _ := a.st.GetSession("claude:far")
+	if docs.ProjectID == nil || *docs.ProjectID != got.Project.ID {
+		t.Fatalf("docs = %+v", docs.ProjectID)
+	}
+	if src.ProjectID == nil || *src.ProjectID != got.Children[0].ID {
+		t.Fatalf("src = %+v", src.ProjectID)
+	}
+	if far.ProjectID != nil {
+		t.Fatalf("far = %+v", far.ProjectID)
+	}
+}
+
+func TestPatchGroupGainsFolder(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "a")
+	g, err := a.st.CreateGroup("turing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.startSess(t, "claude:docs", dir+"/docs", nil, true)
+	rec := a.do(t, "PATCH", "/api/projects/"+strconv.FormatInt(g.ID, 10), map[string]any{"name": "turing", "path": dir}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[struct {
+		domain.Project
+		Moved store.Moved `json:"moved"`
+	}](t, rec)
+	if got.Path != dir || got.Kind != "group" || got.Moved.Sessions != 1 {
+		t.Fatalf("patch = %+v", got)
+	}
+	if x, _ := a.st.GetSession("claude:docs"); x.ProjectID == nil || *x.ProjectID != g.ID {
+		t.Fatalf("sessão = %+v", x.ProjectID)
+	}
+}
+
+func groupWithFolder(t *testing.T, a *testAPI) domain.Project {
+	t.Helper()
+	g, err := a.st.CreateGroupAt("turing", repoDirs(t, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+func TestGroupFolderAcceptsCards(t *testing.T) {
+	a := newTestAPI(t)
+	g := groupWithFolder(t, a)
+	rec := a.do(t, "POST", "/api/cards", map[string]any{"title": "x", "project_id": g.ID}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("card = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPathlessGroupStillRefusesCards(t *testing.T) {
+	a := newTestAPI(t)
+	g, err := a.st.CreateGroup("loja")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/cards", map[string]any{"title": "x", "project_id": g.ID}, 0)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != msgGroupNoCards {
+		t.Fatalf("card = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestBranchRefusedOnGroupCard(t *testing.T) {
+	a := newTestAPI(t)
+	g := groupWithFolder(t, a)
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: g.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/branch", map[string]string{"branch": "feat/x"}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "grupo não tem branch" {
+		t.Fatalf("branch = %d %s", rec.Code, rec.Body)
+	}
+}

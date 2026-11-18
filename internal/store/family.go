@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
@@ -391,4 +392,129 @@ func DisplayName(p domain.Project, parent *domain.Project) string {
 		return p.Name
 	}
 	return parent.Name + " › " + p.Name
+}
+
+// ChildSpec é um sub-projeto a cadastrar ou ligar em CreateFamily.
+type ChildSpec struct {
+	Name string
+	Path string
+}
+
+func projectAtTx(q querier, path string) (*domain.Project, error) {
+	var id int64
+	err := q.QueryRow(`SELECT id FROM projects WHERE path=?`, path).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	p, err := getProjectTx(q, id)
+	return &p, err
+}
+
+func insertProjectTx(q querier, name, path, kind string, capture bool, parentID *int64) (domain.Project, error) {
+	res, err := q.Exec(`INSERT INTO projects(name, path, kind, capture, parent_id) VALUES (?, NULLIF(?, ''), ?, ?, ?)`,
+		name, path, kind, capture, parentID)
+	if err != nil {
+		return domain.Project{}, fmt.Errorf("criar projeto: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return domain.Project{}, err
+	}
+	return getProjectTx(q, id)
+}
+
+// CreateFamily cadastra, numa transação só, o projeto principal (parent.ID 0
+// cria: grupo com pasta se parent.Kind é "group", repositório senão) e liga
+// os filhos: um projeto solto já cadastrado na pasta é ligado, os demais são
+// criados. Qualquer item inválido desfaz tudo. Os filhos voltam na ordem dada.
+func (s *Store) CreateFamily(parent domain.Project, children []ChildSpec) (domain.Project, []domain.Project, Moved, error) {
+	var total Moved
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return domain.Project{}, nil, total, err
+	}
+	defer tx.Rollback()
+	if parent.ID != 0 {
+		if parent, err = getProjectTx(tx, parent.ID); err != nil {
+			return domain.Project{}, nil, total, err
+		}
+	} else if parent.IsGroup() {
+		path, err := checkGroupFolder(tx, parent.Path, 0)
+		if err != nil {
+			return domain.Project{}, nil, total, err
+		}
+		if parent, err = insertProjectTx(tx, parent.Name, path, "group", true, nil); err != nil {
+			return domain.Project{}, nil, total, err
+		}
+	} else if parent, err = insertProjectTx(tx, parent.Name, parent.Path, "repo", true, nil); err != nil {
+		return domain.Project{}, nil, total, err
+	}
+	kids := make([]domain.Project, 0, len(children))
+	for _, c := range children {
+		cur, err := projectAtTx(tx, c.Path)
+		if err != nil {
+			return domain.Project{}, nil, total, err
+		}
+		switch {
+		case cur == nil:
+			child := domain.Project{Name: c.Name, Path: c.Path, Capture: parent.Capture, ParentID: &parent.ID}
+			if err := checkAttach(tx, child, parent); err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			if child, err = insertProjectTx(tx, c.Name, c.Path, "repo", parent.Capture, &parent.ID); err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			m, err := moveHistory(tx, parent, child)
+			if err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			total.Sessions += m.Sessions
+			total.Cards += m.Cards
+			kids = append(kids, child)
+		case cur.ParentID != nil && *cur.ParentID == parent.ID:
+			kids = append(kids, *cur) // já é filho deste principal
+		case cur.ParentID != nil:
+			owner, err := getProjectTx(tx, *cur.ParentID)
+			if err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			return domain.Project{}, nil, total, familyErr(cur.Name + " pertence a " + owner.Name)
+		default:
+			sub, err := childrenTx(tx, cur.ID)
+			if err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			if len(sub) > 0 {
+				return domain.Project{}, nil, total, familyErr(cur.Name + " tem sub-projetos")
+			}
+			if err := checkAttach(tx, *cur, parent); err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			if _, err := tx.Exec(`UPDATE projects SET parent_id=?, capture=? WHERE id=?`, parent.ID, parent.Capture, cur.ID); err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			m, err := moveHistory(tx, parent, *cur)
+			if err != nil {
+				return domain.Project{}, nil, total, err
+			}
+			total.Sessions += m.Sessions
+			total.Cards += m.Cards
+			cur.ParentID, cur.Capture = &parent.ID, parent.Capture
+			kids = append(kids, *cur)
+		}
+	}
+	return parent, kids, total, tx.Commit()
+}
+
+// UnassignedSessionsUnder lista as sessões sem projeto (vivas e encerradas)
+// cujo cwd é root ou fica dentro dele.
+func (s *Store) UnassignedSessionsUnder(root string) ([]domain.Session, error) {
+	root = strings.TrimRight(root, "/")
+	prefix := root + "/"
+	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
+		WHERE project_id IS NULL AND (cwd=? OR substr(cwd, 1, ?)=?) ORDER BY julianday(started_at), id`,
+		root, utf8.RuneCountInString(prefix), prefix)
 }

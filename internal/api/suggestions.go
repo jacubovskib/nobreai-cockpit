@@ -33,7 +33,7 @@ func (s *server) repoFor(w http.ResponseWriter, r *http.Request) *domain.Project
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return nil
 	}
-	if p.Path == "" {
+	if p.IsGroup() {
 		writeError(w, http.StatusBadRequest, "grupo não tem repositório; veja os sub-projetos de cada pasta")
 		return nil
 	}

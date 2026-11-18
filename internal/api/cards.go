@@ -42,7 +42,7 @@ func validColumn(c domain.Column) bool {
 	return false
 }
 
-// msgGroupNoCards recusa um grupo (projeto sem pasta) como destino de card.
+// msgGroupNoCards recusa um grupo sem pasta como destino de card.
 const msgGroupNoCards = "um grupo não recebe cards; escolha um dos repositórios"
 
 func (s *server) projectByID(id int64) (*domain.Project, error) {
@@ -137,7 +137,7 @@ func (s *server) createCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "projeto não encontrado")
 		return
 	}
-	if p.Path == "" {
+	if p.IsGroup() && p.Path == "" {
 		writeError(w, http.StatusBadRequest, msgGroupNoCards)
 		return
 	}
@@ -251,7 +251,7 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		if dest, err := s.projectByID(*in.ProjectID); err != nil {
 			writeStoreError(w, err, "")
 			return
-		} else if dest != nil && dest.Path == "" {
+		} else if dest != nil && dest.IsGroup() && dest.Path == "" {
 			writeError(w, http.StatusBadRequest, msgGroupNoCards)
 			return
 		}

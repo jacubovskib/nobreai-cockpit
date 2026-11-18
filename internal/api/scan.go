@@ -51,7 +51,7 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return
 	}
-	if p.Path == "" {
+	if p.IsGroup() {
 		writeError(w, http.StatusBadRequest, "grupo não tem repositório; rode o levantamento em cada sub-projeto")
 		return
 	}

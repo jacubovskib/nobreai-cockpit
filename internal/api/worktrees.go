@@ -111,7 +111,7 @@ func (s *server) listWorktrees(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) projectWorktrees(p domain.Project) (ProjectWorktrees, error) {
 	pw := ProjectWorktrees{Project: p, Worktrees: []WorktreeView{}, Orphans: []WorktreeSession{}}
-	if p.Path == "" {
+	if p.IsGroup() {
 		return pw, nil // grupo: não tem repositório; os filhos têm o seu item
 	}
 	wr, ok := s.deps.Git.(gitinfo.WorktreeReader)
