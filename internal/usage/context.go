@@ -336,17 +336,77 @@ var (
 	wrappers = map[string]bool{"sudo": true, "env": true, "time": true, "nice": true, "nohup": true, "rtk": true}
 )
 
-// firstSegment corta no primeiro |, ;, quebra de linha, && ou || e devolve o trecho e o resto.
+// firstSegment corta no primeiro |, ;, quebra de linha, && ou || fora de
+// aspas e devolve o trecho e o resto.
 func firstSegment(s string) (seg, rest string, cut bool) {
+	var quote byte
 	for i := 0; i < len(s); i++ {
+		c := s[i]
 		switch {
+		case quote != 0:
+			if c == '\\' && quote == '"' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '\\':
+			i++
+		case c == '\'' || c == '"':
+			quote = c
 		case strings.HasPrefix(s[i:], "&&"), strings.HasPrefix(s[i:], "||"):
 			return s[:i], s[i+2:], true
-		case s[i] == '|' || s[i] == ';' || s[i] == '\n':
+		case c == '|' || c == ';' || c == '\n':
 			return s[:i], s[i+1:], true
 		}
 	}
 	return s, "", false
+}
+
+// shellWords separa em palavras respeitando aspas simples e duplas (uma
+// atribuição A="x y" é uma palavra só).
+func shellWords(s string) []string {
+	var words []string
+	var cur strings.Builder
+	var quote byte
+	in := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			cur.WriteByte(c)
+			if c == '\\' && quote == '"' && i+1 < len(s) {
+				i++
+				cur.WriteByte(s[i])
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote, in = c, true
+			cur.WriteByte(c)
+		case c == ' ' || c == '\t' || c == '\r':
+			if in {
+				words = append(words, cur.String())
+				cur.Reset()
+				in = false
+			}
+		default:
+			in = true
+			cur.WriteByte(c)
+		}
+	}
+	if in {
+		words = append(words, cur.String())
+	}
+	return words
+}
+
+func allAssignments(f []string) bool {
+	for _, w := range f {
+		if !reAssign.MatchString(w) {
+			return false
+		}
+	}
+	return len(f) > 0
 }
 
 // BashKey reduz um comando Bash a programa (e subcomando conhecido), sem
@@ -355,17 +415,19 @@ func BashKey(command string) string {
 	s := strings.TrimSpace(command)
 	var seg string
 	for {
+		// Subshell ou grupo na frente: ( cd x && make ) e { ...; }
+		s = strings.TrimLeft(s, "({ \t")
 		var rest string
 		var cut bool
 		seg, rest, cut = firstSegment(s)
-		f := strings.Fields(seg)
-		if cut && len(f) > 0 && (f[0] == "cd" || f[0] == "export") {
+		f := shellWords(seg)
+		if cut && len(f) > 0 && (f[0] == "cd" || f[0] == "export" || allAssignments(f)) {
 			s = strings.TrimSpace(rest)
 			continue
 		}
 		break
 	}
-	toks := strings.Fields(seg)
+	toks := shellWords(seg)
 	// skipFlags pula flags (-x); os de valueFlags levam o valor junto.
 	skipFlags := func(valueFlags ...string) {
 		for len(toks) > 0 && strings.HasPrefix(toks[0], "-") {

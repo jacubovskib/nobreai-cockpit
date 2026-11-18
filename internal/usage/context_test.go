@@ -263,6 +263,13 @@ func TestBashKey(t *testing.T) {
 		"env -i A=1 go build":                           "go build",
 		"env -u HOME go build":                          "go build",
 		"-x foo":                                        "outro",
+		"S=/tmp/x && go test ./...":                     "go test",
+		"cd /x && W=a && git status":                    "git status",
+		"D=origin/devel\ngit log":                       "git log",
+		`GIT_SSH_COMMAND="ssh -i k" git push`:           "git push",
+		"( cd x && make test )":                         "make test",
+		"echo 'a;b' | wc":                               "echo",
+		"A=1":                                           "outro",
 	}
 	for in, want := range cases {
 		if got := BashKey(in); got != want {
