@@ -17,6 +17,12 @@ import (
 // temporárias: nunca toca o ~/.claude real.
 func agentsAPI(t *testing.T) (*testAPI, string, string) {
 	t.Helper()
+	return agentsAPIWith(t, nil)
+}
+
+// agentsAPIWith é agentsAPI com um monitor de integração (nil = sem monitor).
+func agentsAPIWith(t *testing.T, src IntegrationSource) (*testAPI, string, string) {
+	t.Helper()
 	st, err := store.Open(t.TempDir() + "/cockpit.db")
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +42,7 @@ func agentsAPI(t *testing.T) (*testAPI, string, string) {
 	ad.SetPaths(claude.Paths{SettingsPath: settings, SkillsDir: skills, NobreBin: nobre, ClaudeBin: "/nao/existe"})
 	hub := NewHub()
 	t.Cleanup(hub.Close)
-	h := New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Adapters: map[string]adapter.Adapter{"claude": ad}})
+	h := New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Adapters: map[string]adapter.Adapter{"claude": ad}, Integration: srcOrNil(src)})
 	return &testAPI{st: st, h: h, hub: hub}, settings, skills
 }
 
@@ -159,4 +165,12 @@ func TestAgentInstallInvalidSettingsAndUnknown(t *testing.T) {
 	if rec := a.do(t, "POST", "/api/agents/xyz/install", map[string]any{}, 0); rec.Code != http.StatusNotFound {
 		t.Fatalf("%d", rec.Code)
 	}
+}
+
+// srcOrNil evita um IntegrationSource não nulo embrulhando um ponteiro nil.
+func srcOrNil(src IntegrationSource) IntegrationSource {
+	if f, ok := src.(*fakeIntegration); ok && f == nil {
+		return nil
+	}
+	return src
 }

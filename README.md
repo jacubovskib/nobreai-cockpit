@@ -457,6 +457,16 @@ um shell que não seja bash nem zsh, o daemon usa o `PATH` de reserva da
 unidade: rode `make setup` num terminal onde o `claude` funciona. Se a consulta
 ao shell falhar, o motivo aparece em `make logs`.
 
+**A Sala de controle mostra um alerta de integração.** O Cockpit confere
+os hooks, a skill e a status line do Claude Code e avisa quando algo que já
+funcionou parou (por exemplo, hooks removidos do `~/.claude/settings.json`).
+O botão **Reinstalar** mostra antes o que vai mudar e só altera o arquivo
+depois de **Confirmar**. **Ignorar** silencia o alerta enquanto aquele item
+continuar como estava: ele só volta se o próprio item mudar de novo (outro
+comando na status line, a skill reescrita, outros hooks faltando). Mexer em
+outras partes do `~/.claude/settings.json` não traz o alerta de volta. O
+histórico fica em **Configuração → Histórico de mudanças**.
+
 **O "Continuar" não abre o terminal.** Confira em **Configuração** o comando do
 terminal. O daemon o procura no `PATH` do seu shell de login.
 

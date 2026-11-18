@@ -319,6 +319,21 @@ func uninstallStatusLine(settingsPath string, now time.Time, write bool) (adapte
 
 // statusLineState descreve a status line para o Detect: o binário que o
 // wrapper chama ("" = não integrada) e o motivo quando não está.
+// statusLineCommand é o comando atual da status line em settingsPath ("" se
+// não há, ou se o arquivo não pôde ser lido).
+func statusLineCommand(settingsPath string) string {
+	root, _, _, err := loadSettings(settingsPath)
+	if err != nil {
+		return ""
+	}
+	sl, err := statusLineOf(root)
+	if err != nil {
+		return ""
+	}
+	cur, _ := sl["command"].(string)
+	return cur
+}
+
 func statusLineState(settingsPath string) (bin, detail string) {
 	root, _, exists, err := loadSettings(settingsPath)
 	if err != nil {

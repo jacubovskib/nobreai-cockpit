@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { ErrorLine } from './card/shared'
 import { useOverview, useProjects, useSettings } from '../api/queries'
 import { forCard, isLive, useTerminals, type TerminalInfo } from '../api/terminals'
-import { patch, post } from '../api/client'
-import type { ActiveSession, AgentSpend, Alert, Card, DomainEvent, SessionWithUsage, Total } from '../api/types'
+import { get, patch, post } from '../api/client'
+import type { ActiveSession, AgentSpend, Alert, Card, DomainEvent, InstallReport, SessionWithUsage, Total } from '../api/types'
 import { useWithProject } from '../app/project'
 import { ProjectTag } from '../ui/ProjectTag'
 import type { Project } from '../api/types'
@@ -35,7 +36,62 @@ function Metric({ label, value, sub, subColor }: { label: string; value: React.R
   )
 }
 
-function AlertRow({ alert, onPause, pausing }: { alert: Alert; onPause: (key: string) => void; pausing: boolean }) {
+// Comandos citados no texto do alerta saem em fonte mono.
+function withCommands(text: string) {
+  return text.split(/(make [a-z-]+)/).map((part, i) => (/^make [a-z-]+$/.test(part) ? <span key={i} className="mono">{part}</span> : part))
+}
+
+const LOST_SESSIONS = 'Sessões abertas enquanto os hooks estavam fora não são registradas; reinicie-as.'
+
+// O relatório lista os eventos de hook que mudaram, mais "skill" e "statusLine".
+const hooksChanged = (r: InstallReport) => r.changed.some((c) => c !== 'skill' && c !== 'statusLine')
+
+// Ações de um alerta de integração. Reinstalar mostra antes o que vai mudar.
+function IntegrationActions({ alert, onInstalled }: { alert: Alert; onInstalled: (r: InstallReport) => void }) {
+  const qc = useQueryClient()
+  const withP = useWithProject()
+  const info = alert.integration!
+  const [plan, setPlan] = useState<InstallReport | null>(null)
+  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['overview'] }), qc.invalidateQueries({ queryKey: ['agents'] }), qc.invalidateQueries({ queryKey: ['config-log'] })])
+  const preview = useMutation({ mutationFn: () => get<InstallReport>('/api/agents/claude/install/plan'), onSuccess: setPlan })
+  const install = useMutation({
+    mutationFn: () => post<InstallReport>('/api/agents/claude/install'),
+    onSuccess: async (r) => { setPlan(null); onInstalled(r); await refresh() },
+  })
+  const statusline = useMutation({ mutationFn: () => post('/api/agents/claude/statusline', { action: 'install' }), onSuccess: refresh })
+  const ignore = useMutation({ mutationFn: () => post(`/api/integration/${encodeURIComponent(info.key)}/ignore`), onSuccess: refresh })
+  const busy = preview.isPending || install.isPending || statusline.isPending || ignore.isPending
+  const canIgnore = info.action !== 'restart' && info.action !== 'make_install'
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {info.action === 'reinstall' && !plan && (
+          <button type="button" style={btnPrimary} disabled={busy} onClick={() => preview.mutate()}>Reinstalar</button>
+        )}
+        {info.action === 'statusline' && (
+          <>
+            <button type="button" style={btnPrimary} disabled={busy} onClick={() => statusline.mutate()}>Restaurar a do Cockpit</button>
+            <button type="button" style={btn} disabled={busy} onClick={() => ignore.mutate()}>Manter a atual</button>
+          </>
+        )}
+        {info.action === 'config' && <Link to={withP('/config')} style={btn}>Ver Configuração</Link>}
+        {canIgnore && (
+          <button type="button" style={btn} disabled={busy} onClick={() => ignore.mutate()}>Ignorar</button>
+        )}
+      </div>
+      {plan && (
+        <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 13 }}>{plan.changed.length === 0 ? 'Nada a alterar.' : `Vai alterar: ${plan.changed.join(', ')}. O resto do arquivo não muda.`}</span>
+          <button type="button" style={btnPrimary} disabled={busy} onClick={() => install.mutate()}>Confirmar</button>
+          <button type="button" style={btn} onClick={() => setPlan(null)}>Cancelar</button>
+        </div>
+      )}
+      <div style={{ flexBasis: '100%' }}><ErrorLine error={preview.error ?? install.error ?? statusline.error ?? ignore.error} /></div>
+    </>
+  )
+}
+
+function AlertRow({ alert, onPause, pausing, onInstalled }: { alert: Alert; onPause: (key: string) => void; pausing: boolean; onInstalled: (r: InstallReport) => void }) {
   const withP = useWithProject()
   const red = alert.kind === 'incomplete'
   return (
@@ -46,7 +102,8 @@ function AlertRow({ alert, onPause, pausing }: { alert: Alert; onPause: (key: st
       }}
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={red ? 'var(--err)' : 'var(--warn)'} strokeWidth="2" aria-hidden="true"><path d="M12 3 2 21h20z" /><path d="M12 10v5M12 18v.5" /></svg>
-      <div style={{ flex: '1 1 320px', minWidth: 0 }}><strong style={{ fontWeight: 600 }}>{alert.text}</strong></div>
+      <div style={{ flex: '1 1 320px', minWidth: 0 }}><strong style={{ fontWeight: 600 }}>{alert.kind === 'integration' ? withCommands(alert.text) : alert.text}</strong></div>
+      {alert.kind === 'integration' && alert.integration && <IntegrationActions alert={alert} onInstalled={onInstalled} />}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {alert.kind === 'stale' && alert.card_key && (
           <button type="button" style={btn} disabled={pausing} onClick={() => onPause(alert.card_key)}>Mover para Pausado</button>
@@ -248,6 +305,8 @@ export function ControlRoom() {
     const t = setInterval(() => setNow(Date.now()), 30000)
     return () => clearInterval(t)
   }, [])
+  // O relatório da reinstalação fica aqui: o alerta some assim que o problema é corrigido.
+  const [installed, setInstalled] = useState<InstallReport | null>(null)
   const settings = useSettings().data
   const terminals = useTerminals().data
   const projects = useProjects().data ?? []
@@ -309,10 +368,17 @@ export function ControlRoom() {
       <section aria-labelledby="alertas-t" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <h2 id="alertas-t" style={h2}>Precisa de atenção</h2>
         {error && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>{error}</p>}
+        {installed && (
+          <div role="status" style={{ ...panel, gap: 6, fontSize: 13 }}>
+            {installed.messages.map((m) => <div key={m}>{m}</div>)}
+            {hooksChanged(installed) && <div>{LOST_SESSIONS}</div>}
+            <div><button type="button" style={btn} onClick={() => setInstalled(null)}>Entendi</button></div>
+          </div>
+        )}
         {alerts.length === 0 && <p style={{ margin: 0, color: 'var(--text-2)' }}>Nada precisa de atenção agora.</p>}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {alerts.map((a, i) => (
-            <AlertRow key={`${a.kind}-${a.card_key}-${a.agent}-${i}`} alert={a} onPause={(k) => pause.mutate(k)} pausing={pause.isPending} />
+            <AlertRow key={`${a.kind}-${a.card_key}-${a.agent}-${i}`} alert={a} onPause={(k) => pause.mutate(k)} pausing={pause.isPending} onInstalled={setInstalled} />
           ))}
         </div>
       </section>

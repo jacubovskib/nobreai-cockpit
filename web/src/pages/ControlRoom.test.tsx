@@ -279,4 +279,84 @@ describe('ControlRoom · projeto', () => {
     wrap(<ControlRoom />, '/')
     expect(await screen.findByText('api')).toBeInTheDocument()
   })
+
+  const integ = (key: string, action: string, text: string) => ({
+    ...overview, alerts: [{ kind: 'integration', card_key: '', agent: 'claude', text, integration: { key, text, action, again: false } }],
+  })
+
+  it('integration alert asks before reinstalling', async () => {
+    const fn = mock({
+      '/api/overview': integ('hooks', 'reinstall', 'Os hooks do Cockpit sumiram do ~/.claude/settings.json.'),
+      '/api/settings': {},
+      '/api/agents/claude/install/plan': { changed: ['Stop', 'SessionEnd'], backup: '', messages: [] },
+      'POST /api/agents/claude/install': { changed: ['Stop', 'SessionEnd'], backup: '/b', messages: ['Hooks instalados.'] },
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reinstalar' }))
+    expect(await screen.findByText('Vai alterar: Stop, SessionEnd. O resto do arquivo não muda.')).toBeInTheDocument()
+    expect(calls(fn, 'POST', '/api/agents/claude/install')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/agents/claude/install')).toHaveLength(1))
+    expect(await screen.findByText('Hooks instalados.')).toBeInTheDocument()
+    expect(screen.getByText(/reinicie-as/)).toBeInTheDocument()
+  })
+
+  it('reinstalling only the skill does not ask to restart sessions', async () => {
+    mock({
+      '/api/overview': integ('skill', 'reinstall', 'A skill do Cockpit está desatualizada.'),
+      '/api/settings': {},
+      '/api/agents/claude/install/plan': { changed: ['skill'], backup: '', messages: [] },
+      'POST /api/agents/claude/install': { changed: ['skill'], backup: '', messages: ['Skill instalada.'] },
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reinstalar' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }))
+    expect(await screen.findByText('Skill instalada.')).toBeInTheDocument()
+    expect(screen.queryByText(/reinicie-as/)).not.toBeInTheDocument()
+  })
+
+  it('empty install plan says nothing to change', async () => {
+    mock({
+      '/api/overview': integ('hooks', 'reinstall', 'Os hooks do Cockpit sumiram do ~/.claude/settings.json.'),
+      '/api/settings': {},
+      '/api/agents/claude/install/plan': { changed: [], backup: '', messages: [] },
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reinstalar' }))
+    expect(await screen.findByText('Nada a alterar.')).toBeInTheDocument()
+    expect(screen.queryByText(/Vai alterar/)).not.toBeInTheDocument()
+  })
+
+  it('statusline alert offers keep current', async () => {
+    const fn = mock({
+      '/api/overview': integ('statusline', 'statusline', 'A status line do Cockpit foi trocada por outro comando.'),
+      '/api/settings': {},
+      'POST /api/agents/claude/statusline': {},
+      'POST /api/integration/statusline/ignore': {},
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Restaurar a do Cockpit' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/agents/claude/statusline')).toEqual([{ action: 'install' }]))
+    fireEvent.click(screen.getByRole('button', { name: 'Manter a atual' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/integration/statusline/ignore')).toHaveLength(1))
+  })
+
+  it('ignore posts to the item key', async () => {
+    const fn = mock({
+      '/api/overview': integ('hooks', 'reinstall', 'Os hooks do Cockpit sumiram.'),
+      '/api/settings': {},
+      'POST /api/integration/hooks/ignore': {},
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Ignorar' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/integration/hooks/ignore')).toHaveLength(1))
+  })
+
+  it('restart alert has no buttons', async () => {
+    mock({ '/api/overview': integ('daemon', 'restart', 'O Cockpit foi atualizado; reinicie o daemon (make restart).'), '/api/settings': {} })
+    wrap(<ControlRoom />)
+    expect(await screen.findByText('make restart')).toHaveClass('mono')
+    expect(screen.queryByRole('button', { name: 'Reinstalar' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ignorar' })).not.toBeInTheDocument()
+  })
 })

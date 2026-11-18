@@ -5,6 +5,7 @@ import { useAgents, useCards, useLimits, usePrices, useProjects, useSettings, us
 import type { AgentDetection, InstallReport, Limit, Price, Project, Settings } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
+import { ConfigLog } from './config/ConfigLog'
 import { ErrorLine, btn, btnPrimary, h2, input, muted, panel } from './card/shared'
 
 const AGENT_IDS = ['claude', 'codex', 'kiro']
@@ -18,7 +19,7 @@ const RULES: [string, string][] = [
 ]
 const NAV = [
   ['agentes', 'Agentes e setup'], ['limites', 'Limites de custo'], ['cards', 'Criação de cards'],
-  ['handoff', 'Pronto para handoff'], ['projetos', 'Projetos'], ['precos', 'Preços e moeda'],
+  ['handoff', 'Pronto para handoff'], ['projetos', 'Projetos'], ['precos', 'Preços e moeda'], ['historico', 'Histórico'],
 ]
 
 const th: CSSProperties = { padding: '8px 12px', fontWeight: 500 }
@@ -48,11 +49,17 @@ function Section({ id, title, hint, children, action }: { id: string; title: str
   )
 }
 
-function SaveRow({ pending, error, saved, label = 'Salvar', onSave }: { pending: boolean; error: unknown; saved: boolean; label?: string; onSave: () => void }) {
+// Texto das sessões abertas que vão receber o aviso da mudança.
+export function notifiedText(n: number): string {
+  return `${n} ${n === 1 ? 'sessão aberta vai' : 'sessões abertas vão'} receber o aviso no próximo passo.`
+}
+
+function SaveRow({ pending, error, saved, label = 'Salvar', onSave, notified }: { pending: boolean; error: unknown; saved: boolean; label?: string; onSave: () => void; notified?: number }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
       <button type="button" style={btnPrimary} disabled={pending} onClick={onSave}>{pending ? 'Salvando…' : label}</button>
       {saved && !pending && !error && <span role="status" style={{ ...muted, color: 'var(--ok)' }}>Salvo.</span>}
+      {saved && !pending && !error && notified != null && notified > 0 && <span style={muted}>{notifiedText(notified)}</span>}
       <ErrorLine error={error} />
     </div>
   )
@@ -63,7 +70,7 @@ function SaveRow({ pending, error, saved, label = 'Salvar', onSave }: { pending:
 function useSaveSettings(settings: Settings) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (p: Partial<Settings>) => put<Settings>('/api/settings', { ...p, rules: { ...settings.rules, ...(p.rules ?? {}) } }),
+    mutationFn: (p: Partial<Settings>) => put<Settings & { notified_sessions?: number }>('/api/settings', { ...p, rules: { ...settings.rules, ...(p.rules ?? {}) } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
   })
 }
@@ -275,7 +282,7 @@ function CardCreation({ settings }: { settings: Settings }) {
         <input type="checkbox" checked={inject} onChange={(e) => setInject(e.target.checked)} />
         <span>Mostrar cards pausados no início da sessão<br /><span style={muted}>O agente recebe os cards pausados do mesmo repositório e branch e pode retomar um deles em vez de criar outro.</span></span>
       </label>
-      <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} onSave={submit} />
+      <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} onSave={submit} notified={save.data?.notified_sessions} />
     </Section>
   )
 }
@@ -399,7 +406,7 @@ function ProjectRow({ p, projects, nCards, child, report, setReport }: { p: Proj
   const options = loose ? validParents(p, projects) : []
   const [target, setTarget] = useState<number | null>(null)
   const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['projects'] }), qc.invalidateQueries({ queryKey: ['cards'] })])
-  const toggle = useMutation({ mutationFn: () => patch(`/api/projects/${p.id}`, { capture: !p.capture }), onSuccess: refresh })
+  const toggle = useMutation({ mutationFn: () => patch<{ notified_sessions?: number }>(`/api/projects/${p.id}`, { capture: !p.capture }), onSuccess: refresh })
   const move = useMutation({
     mutationFn: (parentId: number | null) => patch<Moved>(`/api/projects/${p.id}`, { parent_id: parentId }),
     onSuccess: async (r) => {
@@ -422,6 +429,7 @@ function ProjectRow({ p, projects, nCards, child, report, setReport }: { p: Proj
           Capturar sessões
         </label>
       )}
+      {!child && toggle.isSuccess && (toggle.data?.notified_sessions ?? 0) > 0 && <span role="status" style={muted}>{notifiedText(toggle.data!.notified_sessions!)}</span>}
       {loose && options.length > 0 && target == null && (
         <select style={{ ...input, minHeight: 36 }} aria-label={`Mover ${p.name} para…`} value="" onChange={(e) => { setReport(p.id, ''); setTarget(Number(e.target.value)) }}>
           <option value="" disabled>Mover para…</option>
@@ -662,6 +670,7 @@ export function Config() {
       {settings.data && <Handoff settings={settings.data} />}
       {projects.data && <Projects projects={projects.data} />}
       {settings.data && <Prices settings={settings.data} />}
+      <ConfigLog />
     </div>
   )
 }

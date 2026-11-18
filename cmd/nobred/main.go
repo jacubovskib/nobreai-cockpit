@@ -21,6 +21,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/demo"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/integration"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/resources"
@@ -127,16 +128,32 @@ func run(dbPath string, seedDemo bool) error {
 	// e por fim o banco.
 	terms := pty.NewManager(pty.Options{})
 	defer terms.Close()
+	// Monitor da integração com o Claude Code; o daemon de demonstração não o roda.
+	var integ api.IntegrationSource
+	var mon *integration.Monitor
+	if !seedDemo {
+		mon = &integration.Monitor{
+			Health:      claudeAdapter.Health,
+			Files:       claudeAdapter.WatchedFiles,
+			NobreBin:    claudeAdapter.NobreBinary,
+			Store:       st,
+			DaemonStart: time.Now(),
+			Publish:     hub.Publish,
+			Logf:        log.Printf,
+		}
+		integ = mon
+	}
 	handler := api.New(st, api.Deps{
-		Now:       time.Now,
-		ProcRoot:  "/proc",
-		Git:       git,
-		Launcher:  launch.Exec{},
-		Hub:       hub,
-		Adapters:  map[string]adapter.Adapter{"claude": claudeAdapter},
-		UserPATH:  userPATH,
-		Resources: monitor,
-		Terminals: terms,
+		Integration: integ,
+		Now:         time.Now,
+		ProcRoot:    "/proc",
+		Git:         git,
+		Launcher:    launch.Exec{},
+		Hub:         hub,
+		Adapters:    map[string]adapter.Adapter{"claude": claudeAdapter},
+		UserPATH:    userPATH,
+		Resources:   monitor,
+		Terminals:   terms,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.
@@ -163,6 +180,14 @@ func run(dbPath string, seedDemo bool) error {
 			func() { hub.Publish("cards") }, log.Printf)
 	}()
 	defer func() { stop(); <-intDone }()
+	if mon != nil {
+		monDone := make(chan struct{})
+		go func() {
+			defer close(monDone)
+			mon.Run(ctx, 30*time.Second, 5*time.Minute)
+		}()
+		defer func() { stop(); <-monDone }()
+	}
 	go monitor.Sampler.Run(ctx, 5*time.Second)
 	go monitor.Meter.Run(ctx)
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -444,5 +445,107 @@ func TestUnitPATHFallbackOrder(t *testing.T) {
 	}
 	if got := unitPATH("/usr/bin", "/usr/bin"); got != "/usr/bin:/usr/local/bin:/bin" {
 		t.Fatalf("sem repetir: %q", got)
+	}
+}
+
+func TestRemoverStopsServiceFirst(t *testing.T) {
+	e := newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir()); r.code != 0 {
+		t.Fatalf("setup: %+v", r)
+	}
+	var order []string
+	e.d.Run = func(name string, args ...string) error {
+		cmd := name + " " + strings.Join(args, " ")
+		order = append(order, cmd)
+		if cmd == "systemctl --user disable --now nobred" {
+			if b, _ := os.ReadFile(e.settings); !strings.Contains(string(b), "hook claude Stop") {
+				t.Errorf("settings.json já tinha sido escrito ao parar o serviço: %s", b)
+			}
+		}
+		return nil
+	}
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover"); r.code != 0 {
+		t.Fatalf("remover: %+v", r)
+	}
+	if len(order) == 0 || order[0] != "systemctl --user disable --now nobred" {
+		t.Fatalf("ordem = %v", order)
+	}
+	if b, _ := os.ReadFile(e.settings); strings.Contains(string(b), "hook claude Stop") {
+		t.Fatalf("hooks ficaram: %s", b)
+	}
+}
+
+func TestRemoverStatusLineTellsDaemon(t *testing.T) {
+	e := newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	os.WriteFile(e.settings, []byte(`{"statusLine":{"type":"command","command":"echo hi"}}`), 0o600)
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir()); r.code != 0 {
+		t.Fatalf("setup: %+v", r)
+	}
+	var body string
+	var integrated bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := os.ReadFile(e.settings)
+		integrated = strings.Contains(string(b), "statusline || cat")
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(r.Body)
+		body = r.Method + " " + r.URL.Path + " " + strings.TrimSpace(buf.String())
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	r := e.run(t, srv.Listener.Addr().String(), "", t.TempDir(), "--remover-statusline")
+	if r.code != 0 || body != `POST /api/integration/removed {"keys":["statusline"],"origin":"cli"}` || !integrated {
+		t.Fatalf("%+v body=%q integrated(no POST)=%v", r, body, integrated)
+	}
+
+	// Daemon fora do ar: a remoção segue e não marca "!".
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir()); r.code != 0 {
+		t.Fatalf("setup: %+v", r)
+	}
+	r = e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover-statusline")
+	if r.code != 0 || strings.Contains(r.stdout, "!") || !strings.Contains(r.stdout, "Status line restaurada") {
+		t.Fatalf("daemon fora: %+v", r)
+	}
+}
+
+// O --remover avisa o daemon (hooks, status line e skill saem de propósito)
+// antes de parar o serviço: senão a linha de base fica e o próximo setup
+// alerta uma remoção que o usuário pediu.
+func TestRemoverTellsDaemonBeforeStoppingService(t *testing.T) {
+	e := newSetupEnv(t)
+	os.MkdirAll(filepath.Dir(e.settings), 0o755)
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir()); r.code != 0 {
+		t.Fatalf("setup: %+v", r)
+	}
+	var order []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(r.Body)
+		order = append(order, r.Method+" "+r.URL.Path+" "+strings.TrimSpace(buf.String()))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	e.d.Run = func(name string, args ...string) error {
+		order = append(order, name+" "+strings.Join(args, " "))
+		return nil
+	}
+	if r := e.run(t, srv.Listener.Addr().String(), "", t.TempDir(), "--remover"); r.code != 0 {
+		t.Fatalf("remover: %+v", r)
+	}
+	want := `POST /api/integration/removed {"keys":["hooks","statusline","skill"],"origin":"cli"}`
+	if len(order) < 2 || order[0] != want || order[1] != "systemctl --user disable --now nobred" {
+		t.Fatalf("ordem = %q", order)
+	}
+
+	// Dry-run não mexe na linha de base.
+	order = nil
+	if r := e.run(t, srv.Listener.Addr().String(), "", t.TempDir(), "--remover", "--dry-run"); r.code != 0 {
+		t.Fatalf("dry-run: %+v", r)
+	}
+	for _, o := range order {
+		if strings.HasPrefix(o, "POST ") {
+			t.Fatalf("dry-run avisou o daemon: %q", order)
+		}
 	}
 }

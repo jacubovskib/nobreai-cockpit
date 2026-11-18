@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
 
@@ -329,5 +330,56 @@ func TestCLIPathUsesSearchPATH(t *testing.T) {
 	}
 	if d := e.a.Detect(); !d.Found || d.Path != exe {
 		t.Fatalf("Detect = %+v", d)
+	}
+}
+
+func TestInstallReResolvesNobre(t *testing.T) {
+	dir := t.TempDir()
+	newBin := filepath.Join(dir, "bin", "nobre")
+	if err := os.MkdirAll(filepath.Dir(newBin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(dir, "settings.json")
+	a := New(nil, adapter.Deps{Now: time.Now})
+	a.SetPaths(Paths{SettingsPath: settings, SkillsDir: filepath.Join(dir, "skills"),
+		NobreBin:   filepath.Join(dir, "apagado", "nobre"),
+		SearchPATH: func() string { return filepath.Dir(newBin) }})
+	if _, err := a.Install(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(settings)
+	want, _ := filepath.EvalSymlinks(newBin)
+	if !strings.Contains(string(b), want+" hook claude Stop") {
+		t.Fatalf("hook com o caminho antigo: %s", b)
+	}
+}
+
+// Sem nenhum nobre em disco (o caminho antigo sumiu e não há outro), instalar
+// falha com msgNoNobre e não grava o caminho morto no settings.json.
+func TestInstallWithoutNobreWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	skills := filepath.Join(dir, "skills")
+	empty := t.TempDir()
+	a := New(nil, adapter.Deps{Now: time.Now})
+	a.SetPaths(Paths{SettingsPath: settings, SkillsDir: skills,
+		NobreBin:   filepath.Join(dir, "apagado", "nobre"),
+		SearchPATH: func() string { return empty }})
+	for name, f := range map[string]func() (adapter.InstallReport, error){
+		"Install": a.Install, "InstallStatusLine": a.InstallStatusLine, "PlanInstall": a.PlanInstall,
+	} {
+		if _, err := f(); err == nil || err.Error() != msgNoNobre {
+			t.Fatalf("%s: err = %v", name, err)
+		}
+	}
+	if _, err := os.Stat(settings); !os.IsNotExist(err) {
+		b, _ := os.ReadFile(settings)
+		t.Fatalf("settings.json escrito: %s", b)
+	}
+	if _, err := os.Stat(SkillFile(skills)); !os.IsNotExist(err) {
+		t.Fatalf("skill escrita: %v", err)
 	}
 }

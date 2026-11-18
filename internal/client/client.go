@@ -196,6 +196,12 @@ func (c *Client) Block(ctx context.Context, key, why string) (domain.Card, error
 	return card, err
 }
 
+// IntegrationRemoved avisa o daemon de que a integração foi removida de
+// propósito (o monitor não deve alertar).
+func (c *Client) IntegrationRemoved(ctx context.Context, keys []string, origin string) error {
+	return c.Do(ctx, "POST", "/api/integration/removed", map[string]any{"keys": keys, "origin": origin}, nil)
+}
+
 // SetBranch informa o branch de trabalho do card da sessão.
 func (c *Client) SetBranch(ctx context.Context, branch string) error {
 	return c.Do(ctx, "POST", "/api/me/branch", map[string]string{"branch": branch}, nil)

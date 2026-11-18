@@ -157,3 +157,46 @@ describe('Config sub-projetos', () => {
     expect(screen.getByRole('button', { name: 'Desligar do projeto principal' })).toBeInTheDocument()
   })
 })
+
+describe('Config sessões avisadas e histórico', () => {
+  const save = async (reply: object) => {
+    mock({ ...routes(), 'PUT /api/settings': reply, '/api/config-log': [] })
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Criação de cards' })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    await within(sec).findByText('Salvo.')
+    return sec
+  }
+  it('shows notified sessions after save', async () => {
+    const sec = await save({ ...settings, notified_sessions: 2 })
+    expect(within(sec).getByText('2 sessões abertas vão receber o aviso no próximo passo.')).toBeInTheDocument()
+  })
+  it('zero notified shows only Salvo', async () => {
+    const sec = await save({ ...settings, notified_sessions: 0 })
+    expect(within(sec).queryByText(/receber o aviso/)).not.toBeInTheDocument()
+  })
+  it('config log lists entries', async () => {
+    mock({ ...routes(), '/api/config-log?limit=50': [{ id: 1, at: '2026-11-17T10:30:00Z', kind: 'integration_fixed', data: { keys: ['hooks'], changed: [] } }] })
+    wrap(<Config />)
+    expect(await screen.findByText(/hooks corrigido por você/)).toBeInTheDocument()
+  })
+  it('config log shortens a prefixed session id', async () => {
+    mock({ ...routes(), '/api/config-log?limit=50': [{ id: 2, at: '2026-11-17T10:30:00Z', kind: 'agent_notified', data: { session: 'claude:abcdef12-3456-7890-abcd-ef1234567890', text: 'x' } }] })
+    wrap(<Config />)
+    expect(await screen.findByText(/Sessão abcdef12 avisada/)).toBeInTheDocument()
+  })
+  it('capture toggle shows notified sessions', async () => {
+    const loja = { id: 1, name: 'loja', path: '/w/loja', capture: true, base_branch: 'main', parent_id: null }
+    const fn = mock({ ...routes(), '/api/projects': [loja], '/api/projects/1/suggestions': [], 'PATCH /api/projects/1': { ...loja, capture: false, notified_sessions: 2 } })
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Projetos' })
+    fireEvent.click(await within(sec).findByLabelText('Capturar sessões de loja'))
+    expect(await within(sec).findByText('2 sessões abertas vão receber o aviso no próximo passo.')).toBeInTheDocument()
+    expect(calls(fn, 'PATCH', '/api/projects/1')).toEqual([{ capture: false }])
+  })
+  it('config log empty', async () => {
+    mock({ ...routes(), '/api/config-log?limit=50': [] })
+    wrap(<Config />)
+    expect(await screen.findByText('Nenhuma mudança registrada.')).toBeInTheDocument()
+  })
+})

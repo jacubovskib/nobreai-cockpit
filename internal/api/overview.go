@@ -10,6 +10,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/integration"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -70,7 +71,7 @@ type TodayTotals struct {
 }
 
 // Alert é um item de "Precisa de atenção". Kind: stale, limit_warn,
-// incomplete, unpriced ou plan_limit.
+// incomplete, unpriced, plan_limit ou integration.
 type Alert struct {
 	Kind    string `json:"kind"`
 	CardKey string `json:"card_key"`
@@ -79,6 +80,8 @@ type Alert struct {
 	// ResetsAt (só plan_limit): quando a janela reinicia; a UI esconde o
 	// alerta quando o relógio do cliente passa dele.
 	ResetsAt *time.Time `json:"resets_at,omitempty"`
+	// Integration (só integration): o problema e a ação que o conserta.
+	Integration *integration.Problem `json:"integration,omitempty"`
 }
 
 func (s *server) overviewRoutes(mux *http.ServeMux) {
@@ -336,6 +339,12 @@ func (s *server) buildOverview() (Overview, error) {
 		return o, err
 	}
 	o.Alerts = append(o.Alerts, planAlerts...)
+	if s.deps.Integration != nil {
+		for _, p := range s.deps.Integration.Problems() {
+			p := p
+			o.Alerts = append(o.Alerts, Alert{Kind: "integration", Agent: "claude", Text: p.Text, Integration: &p})
+		}
+	}
 
 	if o.Events, err = s.st.RecentEvents(30); err != nil {
 		return o, err
