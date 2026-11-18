@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -40,13 +41,14 @@ func (s *server) getConfigLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, nonNil(es))
 }
 
-// logConfig grava uma linha no registro e avisa o stream.
-func (s *server) logConfig(kind string, data any) error {
+// logConfig grava uma linha no registro e avisa o stream. O registro é só
+// histórico: falhar aqui não desfaz a mudança já aplicada.
+func (s *server) logConfig(kind string, data any) {
 	if err := s.st.AddConfigLog(kind, data, s.now()); err != nil {
-		return err
+		log.Printf("config_log: gravar %s: %v", kind, err)
+		return
 	}
 	s.publish("config_log")
-	return nil
 }
 
 // changedSettings lista, por chave do JSON, o que mudou de old para next.
@@ -105,10 +107,6 @@ func (s *server) countStaleCardsRule(now bool) (int, error) {
 // as vivas sem projeto que rodam na pasta de algum membro (ou num worktree
 // ligado do repositório dele), no membro mais específico.
 func (s *server) applyProjectCapture(projectID int64, on bool) (int, error) {
-	if !on {
-		ids, err := s.st.SetProjectSessionsCapture(projectID, false)
-		return len(ids), err
-	}
 	fam, err := s.st.FamilyIDs(projectID)
 	if err != nil {
 		return 0, err
@@ -121,21 +119,25 @@ func (s *server) applyProjectCapture(projectID int64, on bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	off := map[string]bool{}
+	// Só conta quem muda de fato: com captura ligada ao desligar, desligada ao ligar.
+	was := map[string]bool{}
 	for _, x := range live {
-		if x.Live() && x.ProjectID != nil && inFam[*x.ProjectID] && !x.FullCapture {
-			off[x.ID] = true
+		if x.Live() && x.ProjectID != nil && inFam[*x.ProjectID] && x.FullCapture != on {
+			was[x.ID] = true
 		}
 	}
-	ids, err := s.st.SetProjectSessionsCapture(projectID, true)
+	ids, err := s.st.SetProjectSessionsCapture(projectID, on)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, id := range ids {
-		if off[id] {
+		if was[id] {
 			n++
 		}
+	}
+	if !on {
+		return n, nil
 	}
 	all, err := s.st.ListProjects()
 	if err != nil {
@@ -178,11 +180,11 @@ func familyOwner(members []domain.Project, wr gitinfo.WorktreeReader, x domain.S
 		}
 		return best, found
 	}
-	cwd := strings.TrimRight(x.Cwd, "/")
+	cwd := filepath.Clean(x.Cwd)
 	var best int64
 	bestLen := -1
 	for _, m := range members {
-		root := strings.TrimRight(m.Path, "/")
+		root := filepath.Clean(m.Path)
 		if (cwd == root || strings.HasPrefix(cwd, root+"/")) && len(root) > bestLen {
 			best, bestLen = m.ID, len(root)
 		}
@@ -196,14 +198,14 @@ func familyOwner(members []domain.Project, wr gitinfo.WorktreeReader, x domain.S
 	main := filepath.Clean(wr.Locate(x.Worktree).Main)
 	var repo *domain.Project
 	for i := range members {
-		if members[i].Path == main {
+		if filepath.Clean(members[i].Path) == main {
 			repo = &members[i]
 		}
 	}
 	if repo == nil {
 		return 0, false
 	}
-	wt := strings.TrimRight(x.Worktree, "/")
+	wt := filepath.Clean(x.Worktree)
 	rel := ""
 	if r, ok := strings.CutPrefix(cwd, wt+"/"); ok {
 		rel = r
@@ -212,8 +214,8 @@ func familyOwner(members []domain.Project, wr gitinfo.WorktreeReader, x domain.S
 		if p.ID == repo.ID {
 			return "", false
 		}
-		r := strings.TrimPrefix(strings.TrimRight(p.Path, "/"), main+"/")
-		return r, strings.HasPrefix(p.Path, main+"/")
+		r := strings.TrimPrefix(filepath.Clean(p.Path), main+"/")
+		return r, strings.HasPrefix(filepath.Clean(p.Path), main+"/")
 	}); ok && rel != "" {
 		return id, true
 	}

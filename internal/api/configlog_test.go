@@ -188,3 +188,38 @@ func TestConfigLogRoute(t *testing.T) {
 		t.Fatalf("limit inválido = %d", rec.Code)
 	}
 }
+
+func TestPutSettingsLogsRulesAndSameLengthTerminalCmd(t *testing.T) {
+	a := newTestAPI(t)
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"rules": map[string]bool{"goal": false}}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"terminal_cmd": []string{"xterm", "-e"}}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"terminal_cmd": []string{"kitty", "-e"}}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	got := map[string]int{}
+	for _, e := range a.logKinds(t) {
+		var d map[string]any
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		got[d["key"].(string)]++
+	}
+	if got["rules"] != 1 || got["terminal_cmd"] != 2 {
+		t.Fatalf("log por chave = %v", got)
+	}
+}
+
+func TestPatchProjectCaptureOffCountsOnlyCapturing(t *testing.T) {
+	a := newTestAPI(t)
+	p, _ := a.st.CreateProject("api", "/w/api")
+	a.startSess(t, "claude:on", "/w/api", &p.ID, true)
+	a.startSess(t, "claude:off", "/w/api", &p.ID, false)
+	rec := a.do(t, "PATCH", fmt.Sprintf("/api/projects/%d", p.ID), map[string]any{"name": "api", "path": "/w/api", "capture": false}, 0)
+	if n := decode[map[string]any](t, rec)["notified_sessions"]; n != float64(1) {
+		t.Fatalf("notified = %v (%s)", n, rec.Body)
+	}
+}

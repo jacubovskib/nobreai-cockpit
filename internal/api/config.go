@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -70,8 +72,11 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "")
 		return
 	}
+	// Cópia funda: readJSON decodifica sobre os mapas e fatias existentes.
 	old := st
-	keepCmd := st.TerminalCmd
+	old.Rules = maps.Clone(st.Rules)
+	old.TerminalCmd = slices.Clone(st.TerminalCmd)
+	keepCmd := old.TerminalCmd
 	if !readJSON(w, r, &st) {
 		return
 	}
@@ -107,10 +112,7 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	notified := 0
 	for _, c := range changes {
-		if err := s.logConfig(domain.LogSettingChanged, c); err != nil {
-			writeStoreError(w, err, "")
-			return
-		}
+		s.logConfig(domain.LogSettingChanged, c)
 		if string(c["key"]) == `"agent_creates_cards"` {
 			if notified, err = s.countStaleCardsRule(st.AgentCreatesCards); err != nil {
 				writeStoreError(w, err, "")
@@ -459,12 +461,9 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, err, "")
 			return
 		}
-		if err := s.logConfig(domain.LogProjectCapture, map[string]any{
+		s.logConfig(domain.LogProjectCapture, map[string]any{
 			"project_id": id, "project": fresh.Name, "capture": fresh.Capture, "notified_sessions": notified,
-		}); err != nil {
-			writeStoreError(w, err, "")
-			return
-		}
+		})
 	}
 	s.publish("config", "sessions", "cards")
 	writeJSON(w, http.StatusOK, struct {
