@@ -171,8 +171,11 @@ func (a *Adapter) WatchedFiles() []string {
 	if a.paths.SkillsDir != "" {
 		fs = append(fs, SkillFile(a.paths.SkillsDir))
 	}
-	if a.paths.NobreBin != "" {
-		fs = append(fs, a.paths.NobreBin)
+	a.nobreMu.Lock()
+	nobre := a.paths.NobreBin
+	a.nobreMu.Unlock()
+	if nobre != "" {
+		fs = append(fs, nobre)
 	}
 	return fs
 }

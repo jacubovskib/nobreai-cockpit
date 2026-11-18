@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
 
@@ -329,5 +330,29 @@ func TestCLIPathUsesSearchPATH(t *testing.T) {
 	}
 	if d := e.a.Detect(); !d.Found || d.Path != exe {
 		t.Fatalf("Detect = %+v", d)
+	}
+}
+
+func TestInstallReResolvesNobre(t *testing.T) {
+	dir := t.TempDir()
+	newBin := filepath.Join(dir, "bin", "nobre")
+	if err := os.MkdirAll(filepath.Dir(newBin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(dir, "settings.json")
+	a := New(nil, adapter.Deps{Now: time.Now})
+	a.SetPaths(Paths{SettingsPath: settings, SkillsDir: filepath.Join(dir, "skills"),
+		NobreBin:   filepath.Join(dir, "apagado", "nobre"),
+		SearchPATH: func() string { return filepath.Dir(newBin) }})
+	if _, err := a.Install(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(settings)
+	want, _ := filepath.EvalSymlinks(newBin)
+	if !strings.Contains(string(b), want+" hook claude Stop") {
+		t.Fatalf("hook com o caminho antigo: %s", b)
 	}
 }

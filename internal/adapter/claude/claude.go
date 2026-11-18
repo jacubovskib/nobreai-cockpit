@@ -16,7 +16,8 @@ type Adapter struct {
 	st   *store.Store
 	deps adapter.Deps
 	// paths são os arquivos que Detect e Install leem e escrevem.
-	paths Paths
+	paths   Paths
+	nobreMu sync.Mutex // protege paths.NobreBin, re-resolvido a cada instalação
 
 	// ingest serializa a leitura do transcript por sessão (chave: ID da
 	// sessão, valor: *sync.Mutex); wg acompanha as leituras em andamento.

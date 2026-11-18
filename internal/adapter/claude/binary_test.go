@@ -73,7 +73,8 @@ func TestDetectHooksPointingToMissingBinary(t *testing.T) {
 	p := writeSettings(t, "")
 	skills := t.TempDir()
 	gone := filepath.Join(t.TempDir(), "sumiu", "nobre")
-	e.a.SetPaths(Paths{SettingsPath: p, SkillsDir: skills, NobreBin: gone, ClaudeBin: "/nao/existe"})
+	empty := t.TempDir() // nenhum nobre para re-resolver
+	e.a.SetPaths(Paths{SettingsPath: p, SkillsDir: skills, NobreBin: gone, ClaudeBin: "/nao/existe", SearchPATH: func() string { return empty }})
 	if _, err := e.a.Install(); err != nil {
 		t.Fatal(err)
 	}

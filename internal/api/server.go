@@ -45,6 +45,8 @@ type Deps struct {
 	Hub *Hub
 	// Terminals gerencia os terminais (PTY) da plataforma; nil = rotas respondem 503.
 	Terminals *pty.Manager
+	// Integration é o monitor da integração com o agente; nil = rotas 503.
+	Integration IntegrationSource
 }
 
 type server struct {
@@ -80,6 +82,7 @@ func New(st *store.Store, deps Deps) http.Handler {
 	s.overviewRoutes(mux)
 	s.hookRoutes(mux)
 	s.agentRoutes(mux)
+	s.integrationRoutes(mux)
 	s.worktreeRoutes(mux)
 	s.terminalRoutes(mux)
 	s.planLimitsRoutes(mux)

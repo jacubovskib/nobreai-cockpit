@@ -19,6 +19,7 @@ type agentInfo struct {
 func (s *server) agentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", s.listAgents)
 	mux.HandleFunc("POST /api/agents/{agent}/install", s.installAgent)
+	mux.HandleFunc("GET /api/agents/{agent}/install/plan", s.installPlan)
 	mux.HandleFunc("POST /api/agents/{agent}/statusline", s.agentStatusLine)
 }
 
@@ -83,6 +84,9 @@ func (s *server) installAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rep, err := ad.Install()
+	if err == nil && s.deps.Integration != nil {
+		s.deps.Integration.Fixed([]string{"hooks", "skill"}, rep.Changed)
+	}
 	s.writeInstallReport(w, rep, err)
 }
 
@@ -112,7 +116,15 @@ func (s *server) agentStatusLine(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if in.Action == "install" {
 		rep, err = sl.InstallStatusLine()
+		if err == nil && s.deps.Integration != nil {
+			s.deps.Integration.Fixed([]string{"statusline"}, rep.Changed)
+		}
 	} else {
+		// A marca de remoção deliberada vem antes de o arquivo mudar, para o
+		// monitor não alertar a remoção que o usuário acabou de pedir.
+		if s.deps.Integration != nil {
+			s.deps.Integration.Removed([]string{"statusline"}, "config")
+		}
 		rep, err = sl.UninstallStatusLine()
 	}
 	s.writeInstallReport(w, rep, err)

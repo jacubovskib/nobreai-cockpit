@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/launch"
 )
 
 // skillContent é o SKILL.md instalado em ~/.claude/skills/nobre-cockpit.
@@ -393,10 +394,85 @@ func InstallSkill(dir string) error {
 
 const msgNoNobre = "não achei o binário nobre (coloque-o ao lado do nobred ou no PATH)"
 
+// resolveNobre acha o nobre agora (ao lado do nobred, depois no PATH do
+// usuário), porque o caminho de quando o daemon subiu pode ter sumido num
+// make install. Atualiza paths.NobreBin quando acha; "" = não achou (e mantém
+// o último caminho conhecido). Um caminho que ainda existe vale como está.
+func (a *Adapter) resolveNobre() string {
+	a.nobreMu.Lock()
+	defer a.nobreMu.Unlock()
+	if cur := a.paths.NobreBin; cur != "" {
+		if st, err := os.Stat(cur); err == nil && !st.IsDir() {
+			return cur
+		}
+	}
+	found := ""
+	if exe, err := os.Executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
+		sib := filepath.Join(filepath.Dir(exe), "nobre")
+		if st, err := os.Stat(sib); err == nil && !st.IsDir() {
+			found = resolveLinks(sib)
+		}
+	}
+	if found == "" {
+		path := os.Getenv("PATH")
+		if a.paths.SearchPATH != nil {
+			path = a.paths.SearchPATH()
+		}
+		if lp := launch.LookPathIn("nobre", path); lp != "" {
+			if abs, err := filepath.Abs(lp); err == nil {
+				found = resolveLinks(abs)
+			}
+		}
+	}
+	if found != "" {
+		a.paths.NobreBin = found
+	}
+	return found
+}
+
+// NobreBinary é o nobre atual em disco ("" = não achou), para o monitor.
+func (a *Adapter) NobreBinary() string { return a.resolveNobre() }
+
+// currentPaths devolve uma cópia dos caminhos, com o nobre re-resolvido: o
+// caminho antigo só vale se ainda existir.
+func (a *Adapter) currentPaths() Paths {
+	a.resolveNobre()
+	a.nobreMu.Lock()
+	defer a.nobreMu.Unlock()
+	return a.paths
+}
+
+// PlanInstall calcula o que Install mudaria, sem escrever nada.
+func (a *Adapter) PlanInstall() (adapter.InstallReport, error) {
+	p := a.currentPaths()
+	if p.SettingsPath == "" || p.SkillsDir == "" {
+		return adapter.InstallReport{}, errors.New(msgNoPaths)
+	}
+	if p.NobreBin == "" {
+		return adapter.InstallReport{}, errors.New(msgNoNobre)
+	}
+	rep, err := PlanHooks(p.SettingsPath, p.NobreBin)
+	if err != nil {
+		return rep, err
+	}
+	need, err := PlanSkill(p.SkillsDir)
+	if err != nil {
+		return rep, err
+	}
+	if need {
+		rep.Changed = append(rep.Changed, "skill")
+		rep.Messages = append(rep.Messages, "Skill seria instalada em "+SkillFile(p.SkillsDir)+".")
+	}
+	return rep, nil
+}
+
 // Install instala hooks e skill com os caminhos do adaptador. A status line
 // não entra: é a ação explícita InstallStatusLine.
 func (a *Adapter) Install() (adapter.InstallReport, error) {
-	p := a.paths
+	p := a.currentPaths()
 	if p.SettingsPath == "" || p.SkillsDir == "" {
 		return adapter.InstallReport{}, errors.New(msgNoPaths)
 	}
@@ -425,7 +501,7 @@ func (a *Adapter) Install() (adapter.InstallReport, error) {
 
 // InstallStatusLine integra a status line com os caminhos do adaptador.
 func (a *Adapter) InstallStatusLine() (adapter.InstallReport, error) {
-	p := a.paths
+	p := a.currentPaths()
 	if p.SettingsPath == "" {
 		return adapter.InstallReport{}, errors.New(msgNoPaths)
 	}
@@ -440,5 +516,8 @@ func (a *Adapter) UninstallStatusLine() (adapter.InstallReport, error) {
 	if a.paths.SettingsPath == "" {
 		return adapter.InstallReport{}, errors.New(msgNoPaths)
 	}
-	return UninstallStatusLine(a.paths.SettingsPath, a.paths.NobreBin)
+	a.nobreMu.Lock()
+	p := a.paths
+	a.nobreMu.Unlock()
+	return UninstallStatusLine(p.SettingsPath, p.NobreBin)
 }

@@ -33,6 +33,11 @@ type StatusLiner interface {
 	UninstallStatusLine() (InstallReport, error)
 }
 
+// InstallPlanner é opcional: calcula o que Install mudaria, sem escrever.
+type InstallPlanner interface {
+	PlanInstall() (InstallReport, error)
+}
+
 // HookCall é a chamada de hook repassada pelo `nobre hook`.
 type HookCall struct {
 	Event    string            `json:"event"`

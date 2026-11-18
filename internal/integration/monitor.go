@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -239,7 +240,36 @@ func (m *Monitor) problemFor(c adapter.Check) Problem {
 	if t, ok := m.fixedAt[c.Key]; ok && m.now().Sub(t) < againWindow {
 		p.Again = true
 	}
+	p.Text = problemText(c, p)
 	return p
+}
+
+// problemText é o texto ao usuário de cada problema conhecido; o que o
+// adaptador não nomeia mantém o detalhe do próprio check.
+func problemText(c adapter.Check, p Problem) string {
+	const deadPrefix = "aponta para um binário que não existe: "
+	bin := strings.TrimPrefix(c.Detail, deadPrefix)
+	switch {
+	case p.Action == ActionMakeInstall:
+		return "O nobre não foi encontrado; rode make install."
+	case p.Action == ActionRestart:
+		return "O Cockpit foi atualizado; reinicie o daemon (make restart)."
+	case c.Key == "hooks" && c.Code == "dead_binary":
+		return "Os hooks apontam para um nobre que não existe mais (" + bin + ")."
+	case c.Key == "hooks" && c.Code == "missing" && p.Again:
+		return "Os hooks do Cockpit foram removidos de novo logo depois de reinstalados: outra ferramenta pode estar reescrevendo o ~/.claude/settings.json."
+	case c.Key == "hooks" && c.Code == "missing":
+		return "Os hooks do Cockpit sumiram do ~/.claude/settings.json. As sessões novas do Claude Code não serão registradas."
+	case c.Key == "skill":
+		return "A skill do Cockpit está desatualizada."
+	case c.Key == "statusline" && c.Code == "dead_binary":
+		return "A status line do Cockpit aponta para um nobre que não existe mais (" + bin + ")."
+	case c.Key == "statusline":
+		return "A status line do Cockpit foi trocada por outro comando."
+	case c.Key == "cli":
+		return "O claude não foi encontrado no PATH."
+	}
+	return p.Text
 }
 
 func (m *Monitor) binaryNewerThanDaemon() bool {
