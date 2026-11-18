@@ -1,13 +1,9 @@
 import { useState, type CSSProperties } from 'react'
 import { useContextSession, useContextTop, useProjects } from '../../api/queries'
-import { h2, muted, panel } from '../card/shared'
+import { h2, muted, num, panel, td, th, thead } from '../card/shared'
 import { ContextCurve } from './ContextCurve'
 import { tokens } from './data'
 
-const th: CSSProperties = { padding: '8px 12px', fontWeight: 500 }
-const td: CSSProperties = { padding: '10px 12px' }
-const thead: CSSProperties = { textAlign: 'left', color: 'var(--text-2)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em' }
-const num: CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
 const right: CSSProperties = { ...th, textAlign: 'right' }
 const table: CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 14 }
 const startFmt = new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })

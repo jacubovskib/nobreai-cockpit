@@ -18,3 +18,8 @@ export function ErrorLine({ error }: { error: unknown }) {
     </p>
   )
 }
+
+export const th: CSSProperties = { padding: '8px 12px', fontWeight: 500 }
+export const td: CSSProperties = { padding: '10px 12px' }
+export const thead: CSSProperties = { textAlign: 'left', color: 'var(--text-2)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em' }
+export const num: CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }

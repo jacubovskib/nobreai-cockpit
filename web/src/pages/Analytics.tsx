@@ -10,7 +10,7 @@ import { formatAmount, formatMoney, moneySymbol, useCurrency } from '../ui/money
 import { ContextSection } from './analytics/ContextSection'
 import { DailyChart } from './analytics/DailyChart'
 import { buildDays, range, tokens, ymd } from './analytics/data'
-import { btn, h2, muted, panel } from './card/shared'
+import { btn, h2, muted, num, panel, td, th, thead } from './card/shared'
 import { useWithProject } from '../app/project'
 
 const PERIODS = [
@@ -19,10 +19,6 @@ const PERIODS = [
   { id: 30, label: '30 dias', long: '30 dias' },
 ]
 const ORDER = ['claude', 'codex', 'kiro']
-const th: CSSProperties = { padding: '8px 12px', fontWeight: 500 }
-const td: CSSProperties = { padding: '10px 12px' }
-const thead: CSSProperties = { textAlign: 'left', color: 'var(--text-2)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em' }
-const num: CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
 
 const sum = (ts: Total[], f: (t: Total) => number) => ts.reduce((s, t) => s + f(t), 0)
 
