@@ -391,3 +391,24 @@ func TestUpdateGroupWithChildrenCannotGainPath(t *testing.T) {
 		t.Fatalf("grupo virando monorepo: %v", err)
 	}
 }
+
+func TestAssignSessionsInWorktreeRespectsApps(t *testing.T) {
+	s := newTestStore(t)
+	loja := mustProject(t, s, "loja", "/r/loja")
+	web := mustChild(t, s, "web", "/r/loja/apps/web", loja.ID)
+	wt := "/r/loja/.worktrees/x"
+	for id, cwd := range map[string]string{"claude:w": wt + "/apps/web/src", "claude:r": wt} {
+		x := newSession(id, len(id))
+		x.Cwd, x.Worktree, x.WorktreeLinked = cwd, wt, true
+		if err := s.StartSession(x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := s.AssignSessionsInWorktree(loja.ID, wt)
+	if err != nil || n != 2 {
+		t.Fatalf("n = %d, %v", n, err)
+	}
+	if projectOf(t, s, "claude:w") != web.ID || projectOf(t, s, "claude:r") != loja.ID {
+		t.Fatal("worktree mal atribuído")
+	}
+}

@@ -1356,3 +1356,45 @@ func TestPausedCardsIncludeFamily(t *testing.T) {
 		t.Fatalf("contexto sem o pausado do app:\n%s", ctx)
 	}
 }
+
+func newMonorepoWorktreeEnv(t *testing.T) (*env, domain.Project, domain.Project) {
+	t.Helper()
+	e := newEnv(t)
+	e.a.deps.Git = wtGit{fakeGit: fakeGit{branch: "feat/x"}, locs: map[string]string{
+		"/r/loja":              "/r/loja",
+		"/r/loja/.worktrees/x": "/r/loja",
+	}}
+	loja, err := e.st.CreateProject("loja", "/r/loja")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web, _, err := e.st.CreateChild("web", "/r/loja/apps/web", loja.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, loja, web
+}
+
+func TestWorktreeSessionLandsInApp(t *testing.T) {
+	e, _, web := newMonorepoWorktreeEnv(t)
+	e.call(t, "session_start", with("cwd", "/r/loja/.worktrees/x/apps/web/src"))
+	s, err := e.st.GetSession(sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ProjectID == nil || *s.ProjectID != web.ID {
+		t.Fatalf("sessão deveria cair no app: %+v", s)
+	}
+}
+
+func TestWorktreeRootSessionLandsInParent(t *testing.T) {
+	e, loja, _ := newMonorepoWorktreeEnv(t)
+	e.call(t, "session_start", with("cwd", "/r/loja/.worktrees/x"))
+	s, err := e.st.GetSession(sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ProjectID == nil || *s.ProjectID != loja.ID {
+		t.Fatalf("sessão na raiz deveria cair no pai: %+v", s)
+	}
+}

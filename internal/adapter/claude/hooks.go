@@ -219,22 +219,47 @@ func (a *Adapter) locate(cwd string) store.SessionLocation {
 // projeto, cwd é traduzido para o mesmo lugar no checkout principal.
 func (a *Adapter) projectFor(cwd string) (*domain.Project, error) {
 	proj, err := a.st.ProjectForPath(cwd)
-	if proj != nil || err != nil || cwd == "" {
+	if err != nil || cwd == "" {
 		return proj, err
 	}
-	wr, ok := a.deps.Git.(gitinfo.WorktreeReader)
+	if proj != nil {
+		// Um cwd dentro de um worktree guardado na pasta do próprio projeto
+		// casa com o pai; se o pai tem apps, o caminho relativo à raiz do
+		// worktree pode apontar para um deles.
+		kids, err := a.st.Children(proj.ID)
+		if err != nil || len(kids) == 0 {
+			return proj, err
+		}
+		if main, rel, ok := a.worktreeRel(cwd); ok {
+			if app, err := a.st.ProjectForPath(filepath.Join(main, rel)); err == nil && app != nil {
+				return app, nil
+			}
+		}
+		return proj, nil
+	}
+	main, rel, ok := a.worktreeRel(cwd)
 	if !ok {
 		return nil, nil
 	}
+	return a.st.ProjectForPath(filepath.Join(main, rel))
+}
+
+// worktreeRel devolve, para um cwd num worktree ligado, o checkout principal e
+// o caminho do cwd relativo à raiz do worktree.
+func (a *Adapter) worktreeRel(cwd string) (main, rel string, ok bool) {
+	wr, isWR := a.deps.Git.(gitinfo.WorktreeReader)
+	if !isWR {
+		return "", "", false
+	}
 	loc := wr.Locate(cwd)
 	if !loc.Linked {
-		return nil, nil
+		return "", "", false
 	}
 	rel, err := filepath.Rel(loc.Root, cwd)
 	if err != nil || strings.HasPrefix(rel, "..") {
-		return nil, nil
+		return "", "", false
 	}
-	return a.st.ProjectForPath(filepath.Join(loc.Main, rel))
+	return loc.Main, rel, true
 }
 
 // projectRoot é a raiz do projeto vista pela sessão: num worktree ligado, o

@@ -183,11 +183,65 @@ func (s *Store) UnassignedLinkedWorktrees() ([]string, error) {
 // AssignSessionsInWorktree liga ao projeto as sessões sem projeto que rodam
 // no worktree e liga a captura completa. Devolve quantas mudaram.
 func (s *Store) AssignSessionsInWorktree(projectID int64, worktree string) (int, error) {
-	res, err := s.DB.Exec(`UPDATE sessions SET project_id=?, full_capture=1
-		WHERE project_id IS NULL AND worktree_linked=1 AND worktree=?`, projectID, worktree)
+	kids, err := s.Children(projectID)
+	if err != nil {
+		return 0, err
+	}
+	parent, err := getProjectTx(s.DB, projectID)
+	if err != nil {
+		return 0, err
+	}
+	type target struct {
+		rel string
+		id  int64
+	}
+	var apps []target
+	for _, k := range kids {
+		if r, ok := relUnder(parent.Path, k.Path); ok {
+			apps = append(apps, target{r, k.ID})
+		}
+	}
+	base := strings.TrimRight(worktree, "/")
+	rows, err := s.DB.Query(`SELECT id, cwd FROM sessions
+		WHERE project_id IS NULL AND worktree_linked=1 AND worktree=?`, worktree)
 	if err != nil {
 		return 0, fmt.Errorf("religar sessões do worktree: %w", err)
 	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	owner := map[string]int64{}
+	for rows.Next() {
+		var id, cwd string
+		if err := rows.Scan(&id, &cwd); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		pid, best := projectID, -1
+		if r, ok := relUnder(base, cwd); ok {
+			for _, a := range apps {
+				if (r == a.rel || strings.HasPrefix(r, a.rel+"/")) && len(a.rel) > best {
+					pid, best = a.id, len(a.rel)
+				}
+			}
+		}
+		owner[id] = pid
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	for id, pid := range owner {
+		if _, err := s.DB.Exec(`UPDATE sessions SET project_id=?, full_capture=1 WHERE id=?`, pid, id); err != nil {
+			return 0, fmt.Errorf("religar sessões do worktree: %w", err)
+		}
+	}
+	return len(owner), nil
+}
+
+// relUnder devolve path relativo a base, se path está dentro de base.
+func relUnder(base, path string) (string, bool) {
+	base, path = strings.TrimRight(base, "/"), strings.TrimRight(path, "/")
+	if base == "" || !strings.HasPrefix(path, base+"/") {
+		return "", false
+	}
+	return strings.TrimPrefix(path, base+"/"), true
 }
