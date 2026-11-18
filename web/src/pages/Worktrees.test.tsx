@@ -20,7 +20,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 const data: ProjectWorktrees[] = [
   {
-    project: { id: 1, name: 'api', path: '/w/api', capture: true, base_branch: '', parent_id: null },
+    project: { id: 1, name: 'api', path: '/w/api', capture: true, base_branch: '', parent_id: null, kind: 'repo' },
     error: '',
     worktrees: [
       { ...wt, path: '/w/api', branch: 'main', main: true, cards: [],
@@ -35,7 +35,7 @@ const data: ProjectWorktrees[] = [
     ],
     orphans: [session({ id: 'claude:orfa', worktree: '/w/api-sumiu', worktree_linked: true, pid_dead_at: ago(5), live: false })],
   },
-  { project: { id: 2, name: 'solto', path: '/w/solto', capture: true, base_branch: '', parent_id: null }, error: 'não consegui listar os worktrees de /w/solto: não é um repositório git?', worktrees: [], orphans: [] },
+  { project: { id: 2, name: 'solto', path: '/w/solto', capture: true, base_branch: '', parent_id: null, kind: 'repo' }, error: 'não consegui listar os worktrees de /w/solto: não é um repositório git?', worktrees: [], orphans: [] },
 ]
 
 describe('Worktrees · projeto', () => {
@@ -105,8 +105,8 @@ describe('Worktrees', () => {
 })
 
 describe('Worktrees · família', () => {
-  const grupo: ProjectWorktrees = { project: { id: 10, name: 'loja', path: '', capture: true, base_branch: '', parent_id: null }, error: '', worktrees: [], orphans: [] }
-  const filho: ProjectWorktrees = { project: { id: 11, name: 'web', path: '/w/web', capture: true, base_branch: '', parent_id: 10 }, error: '', worktrees: [], orphans: [] }
+  const grupo: ProjectWorktrees = { project: { id: 10, name: 'loja', path: '', capture: true, base_branch: '', parent_id: null, kind: 'repo' }, error: '', worktrees: [], orphans: [] }
+  const filho: ProjectWorktrees = { project: { id: 11, name: 'web', path: '/w/web', capture: true, base_branch: '', parent_id: 10, kind: 'repo' }, error: '', worktrees: [], orphans: [] }
   it('grupo vira cabeçalho com os repositórios dos filhos abaixo', async () => {
     mockApi({ '/api/worktrees': [grupo, filho], '/api/projects': [grupo.project, filho.project] })
     wrap('/worktrees')
@@ -118,7 +118,7 @@ describe('Worktrees · família', () => {
   })
   it('com um app selecionado mostra a seção do repositório do pai', async () => {
     const pai: ProjectWorktrees = { project: { id: 20, name: 'mono', path: '/w/mono', capture: true, base_branch: '', parent_id: null, kind: 'repo' }, error: '', worktrees: [{ ...wt, path: '/w/mono', branch: 'main', main: true, cards: [], sessions: [] }], orphans: [] }
-    const app = { id: 21, name: 'web', path: '/w/mono/web', capture: true, base_branch: '', parent_id: 20 }
+    const app = { id: 21, name: 'web', path: '/w/mono/web', capture: true, base_branch: '', parent_id: 20, kind: 'repo' }
     mockApi({ '/api/worktrees': [pai], '/api/projects': [pai.project, app] })
     wrap('/worktrees?projeto=21')
     expect(await screen.findByRole('heading', { name: 'mono' })).toBeInTheDocument()
