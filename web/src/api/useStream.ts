@@ -11,6 +11,8 @@ const KIND_KEYS: Record<string, string[]> = {
   prompts: ['prompts', 'continue-preview'],
   terminals: ['terminals'],
   plan: ['plan', 'overview'],
+  integration: ['overview', 'config-log', 'agents'],
+  config_log: ['config-log'],
 }
 
 export function invalidateForKind(qc: QueryClient, kind: string) {

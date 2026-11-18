@@ -279,4 +279,45 @@ describe('ControlRoom · projeto', () => {
     wrap(<ControlRoom />, '/')
     expect(await screen.findByText('api')).toBeInTheDocument()
   })
+
+  const integ = (key: string, action: string, text: string) => ({
+    ...overview, alerts: [{ kind: 'integration', card_key: '', agent: 'claude', text, integration: { key, text, action, again: false } }],
+  })
+
+  it('integration alert asks before reinstalling', async () => {
+    const fn = mock({
+      '/api/overview': integ('hooks', 'reinstall', 'Os hooks do Cockpit sumiram do ~/.claude/settings.json.'),
+      '/api/settings': {},
+      '/api/agents/claude/install/plan': { changed: ['hooks'], backup: '', messages: [] },
+      'POST /api/agents/claude/install': { changed: ['hooks'], backup: '/b', messages: ['Hooks instalados.'] },
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reinstalar' }))
+    expect(await screen.findByText('Vai alterar: hooks. O resto do arquivo não muda.')).toBeInTheDocument()
+    expect(calls(fn, 'POST', '/api/agents/claude/install')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/agents/claude/install')).toHaveLength(1))
+    expect(await screen.findByText('Hooks instalados.')).toBeInTheDocument()
+    expect(screen.getByText(/reinicie-as/)).toBeInTheDocument()
+  })
+
+  it('statusline alert offers keep current', async () => {
+    const fn = mock({
+      '/api/overview': integ('statusline', 'statusline', 'A status line do Cockpit foi trocada por outro comando.'),
+      '/api/settings': {},
+      'POST /api/integration/statusline/ignore': {},
+    })
+    wrap(<ControlRoom />)
+    expect(await screen.findByRole('button', { name: 'Restaurar a do Cockpit' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Manter a atual' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/integration/statusline/ignore')).toHaveLength(1))
+  })
+
+  it('restart alert has no buttons', async () => {
+    mock({ '/api/overview': integ('daemon', 'restart', 'O Cockpit foi atualizado; reinicie o daemon (make restart).'), '/api/settings': {} })
+    wrap(<ControlRoom />)
+    expect(await screen.findByText('make restart')).toHaveClass('mono')
+    expect(screen.queryByRole('button', { name: 'Reinstalar' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ignorar' })).not.toBeInTheDocument()
+  })
 })

@@ -123,6 +123,15 @@ Branch `feat/sub-projetos` (spec `docs/superpowers/specs/2026-11-17-sub-projetos
 - **CLI:** `nobre project add --pai`, `nobre project pai`, `nobre project grupo`, `nobre project scan [--nao-sugerir]`, `nobre app`.
 - **Soma e filtro:** escolher um principal filtra e soma pela família; a página de Worktrees mostra o grupo como cabeçalho.
 
+## Mudanças de configuração e saúde da integração (NAC-6, 2026-11-17)
+
+Branch `feat/config-saude` (spec `docs/superpowers/specs/2026-11-17-mudancas-de-configuracao-design.md`).
+
+- **Monitor da integração:** guarda uma linha de base do que já funcionou (hooks, skill, status line, CLI) e alerta quando algo some ou é trocado. Remover de propósito (pela Configuração ou pela CLI) não alerta.
+- **Alerta com ação:** `GET /api/overview` traz `kind: "integration"` com `{key, text, action, again}`. Reinstalar pede confirmação ("Vai alterar: ... O resto do arquivo não muda."), a status line oferece "Restaurar a do Cockpit" ou "Manter a atual", e "Ignorar" vale até o item voltar ao normal (`POST /api/integration/{key}/ignore`).
+- **Sessões avisadas:** `PUT /api/settings` e `PATCH /api/projects/{id}` devolvem `notified_sessions`; a Configuração mostra "N sessões abertas vão receber o aviso no próximo passo." ao lado do que mudou.
+- **Histórico:** `GET /api/config-log?limit=50` e a seção "Histórico de mudanças" na Configuração. O stream publica os kinds `integration` e `config_log`.
+
 ## Plano 2 (fora do piloto)
 Adaptadores Codex e Kiro, modos tmux e segundo plano, "bloquear novas sessões", limites mensais, linha do tempo das sessões e último prompt no pacote, indicador "Retomadas sem perguntas", MCP, times.
 

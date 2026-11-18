@@ -211,13 +211,21 @@ export interface TodayTotals {
 }
 
 export interface Alert {
-  kind: 'stale' | 'limit_warn' | 'incomplete' | 'unpriced' | 'plan_limit' | string
+  kind: 'stale' | 'limit_warn' | 'incomplete' | 'unpriced' | 'plan_limit' | 'integration' | string
   card_key: string
   agent: string
   text: string
   // Só plan_limit: quando a janela reinicia (o alerta some depois disso).
   resets_at?: string | null
+  // Só kind 'integration': item da integração e a ação oferecida.
+  integration?: IntegrationAlert
 }
+
+export type IntegrationAction = 'reinstall' | 'statusline' | 'restart' | 'make_install' | 'config'
+export interface IntegrationAlert { key: string; text: string; action: IntegrationAction | string; again: boolean }
+
+// GET /api/config-log
+export interface ConfigLogEntry { id: number; at: string; kind: string; data: Record<string, unknown> }
 
 // GET /api/overview
 export interface Overview {
