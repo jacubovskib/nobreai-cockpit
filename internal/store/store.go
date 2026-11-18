@@ -2,9 +2,11 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,6 +46,19 @@ func dataDir(file string) string {
 
 // Open cria o diretório, abre o banco e aplica as migrações pendentes.
 func Open(path string) (*Store, error) {
+	s, err := openUpTo(path, math.MaxInt)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.seedPrompts(); err != nil {
+		s.DB.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// openUpTo abre o banco e aplica as migrações até a versão limit (inclusive).
+func openUpTo(path string, limit int) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("criar diretório do banco: %w", err)
 	}
@@ -56,11 +71,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("abrir banco: %w", err)
 	}
 	s := &Store{DB: db}
-	if err := s.migrate(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := s.seedPrompts(); err != nil {
+	if err := s.migrateUpTo(limit); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -75,7 +86,11 @@ type migration struct {
 	name    string
 }
 
-func (s *Store) migrate() error {
+// noForeignKeysMarker na primeira linha pede que a migração rode sem FK
+// (reconstrução de tabela referenciada por outras).
+const noForeignKeysMarker = "-- nobre:foreign_keys=off"
+
+func (s *Store) migrateUpTo(limit int) error {
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		return err
@@ -100,12 +115,18 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("ler user_version: %w", err)
 	}
 	for _, m := range ms {
-		if m.version <= current {
+		if m.version <= current || m.version > limit {
 			continue
 		}
 		body, err := migrationsFS.ReadFile("migrations/" + m.name)
 		if err != nil {
 			return err
+		}
+		if strings.HasPrefix(string(body), noForeignKeysMarker) {
+			if err := s.applyWithoutFK(m, string(body)); err != nil {
+				return err
+			}
+			continue
 		}
 		tx, err := s.DB.Begin()
 		if err != nil {
@@ -123,5 +144,55 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("migração %s: %w", m.name, err)
 		}
 	}
+	return nil
+}
+
+// applyWithoutFK aplica uma migração com foreign_keys=OFF. O PRAGMA só vale
+// fora de transação, então tudo roda numa conexão dedicada: PRAGMA, BEGIN, o
+// corpo, foreign_key_check e COMMIT. Se a checagem achar violações, aborta.
+func (s *Store) applyWithoutFK(m migration, body string) (err error) {
+	ctx := context.Background()
+	conn, err := s.DB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("migração %s: desligar FK: %w", m.name, err)
+	}
+	// Religa a FK em qualquer saída: a conexão volta ao pool.
+	defer func() {
+		if _, e := conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`); e != nil && err == nil {
+			err = fmt.Errorf("migração %s: religar FK: %w", m.name, e)
+		}
+	}()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("migração %s: %w", m.name, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+	if _, err := conn.ExecContext(ctx, body); err != nil {
+		return fmt.Errorf("migração %s: %w", m.name, err)
+	}
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", m.version)); err != nil {
+		return fmt.Errorf("migração %s: user_version: %w", m.name, err)
+	}
+	rows, err := conn.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("migração %s: foreign_key_check: %w", m.name, err)
+	}
+	violations := rows.Next()
+	rows.Close()
+	if violations {
+		return fmt.Errorf("migração %s: foreign_key_check encontrou violações", m.name)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("migração %s: %w", m.name, err)
+	}
+	committed = true
 	return nil
 }

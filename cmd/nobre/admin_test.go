@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -251,5 +252,143 @@ func TestCLIProjectScanAndBaseFindProjectFromSubdirAndWorktree(t *testing.T) {
 		if !slices.Contains(paths, "PATCH /api/projects/3") {
 			t.Fatalf("base em %s não chamou o projeto 3: %v", cwd, paths)
 		}
+	}
+}
+
+func TestProjectScanPrintsSuggestions(t *testing.T) {
+	var dismissed []string
+	var order []string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		order = append(order, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":3,"name":"api","path":"/w/api"}]`))
+		case r.URL.Path == "/api/projects/3/suggestions/dismiss":
+			b, _ := io.ReadAll(r.Body)
+			dismissed = append(dismissed, string(b))
+			w.WriteHeader(204)
+		case r.URL.Path == "/api/projects/3/scan":
+			w.Write([]byte(`{"repo":"/w/api","base":"main","branches":[],"plans":[],"sessions":[],"cards":[],
+			 "suggestions":[{"path":"/w/api/apps/web","rel":"apps/web","name":"web","source":"pnpm-workspace.yaml"}]}`))
+		default:
+			t.Errorf("path = %s", r.URL.Path)
+		}
+	})
+	r := runCLI(t, addr, "", nil, "project", "scan", "/w/api")
+	if r.code != 0 || !strings.Contains(r.stdout, "Sub-projetos sugeridos (1)") || !strings.Contains(r.stdout, "apps/web") || len(dismissed) != 0 {
+		t.Fatalf("%+v", r)
+	}
+	r = runCLI(t, addr, "", nil, "project", "scan", "/w/api", "--nao-sugerir", "apps/web, apps/api")
+	if r.code != 0 || len(dismissed) != 1 || dismissed[0] != `{"rels":["apps/web","apps/api"]}` {
+		t.Fatalf("%+v dismissed=%q", r, dismissed)
+	}
+}
+
+func TestProjectAddListsAtMostFiveSuggestions(t *testing.T) {
+	var sg []string
+	for i := 0; i < 7; i++ {
+		sg = append(sg, fmt.Sprintf(`{"rel":"apps/a%d","name":"a%d","source":"go.work"}`, i, i))
+	}
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":3,"name":"api","path":"/w/api","suggestions":[` + strings.Join(sg, ",") + `]}`))
+	})
+	r := runCLI(t, addr, "", nil, "project", "add")
+	if r.code != 0 || !strings.Contains(r.stdout, "Sub-projetos sugeridos") || !strings.Contains(r.stdout, "apps/a4") ||
+		strings.Contains(r.stdout, "apps/a5") || !strings.Contains(r.stdout, "mais 2 na Configuração → Projetos") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCLIProjectPaiWarnsCapture(t *testing.T) {
+	var patched string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":1,"name":"loja","path":"/r/loja","capture":true},{"id":2,"name":"web","path":"/r/loja/web","capture":false}]`))
+		case r.Method == "PATCH" && r.URL.Path == "/api/projects/2":
+			b, _ := io.ReadAll(r.Body)
+			patched = string(b)
+			w.Write([]byte(`{"id":2,"moved":{"sessions":3,"cards":1}}`))
+		default:
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+	})
+	r := runProjectCLI(t, addr, "/r", testRepos, "project", "pai", "2", "1")
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	if patched != `{"parent_id":1}` {
+		t.Fatalf("corpo = %s", patched)
+	}
+	for _, want := range []string{
+		"3 sessões e 1 card passaram para loja › web.",
+		"A captura de web passa a seguir a de loja (ligada).",
+	} {
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("faltou %q em %q", want, r.stdout)
+		}
+	}
+	if r := runProjectCLI(t, addr, "/r", testRepos, "project", "pai", "2", "--nenhum"); r.code != 0 || patched != `{"parent_id":null}` {
+		t.Fatalf("--nenhum: %+v corpo=%s", r, patched)
+	}
+}
+
+func TestCLIProjectGrupoAndAddPai(t *testing.T) {
+	var bodies []string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/projects":
+			bodies = append(bodies, string(b))
+			w.WriteHeader(201)
+			w.Write([]byte(`{"id":7,"name":"loja","path":"","moved":{"sessions":2,"cards":0}}`))
+		case r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":7,"name":"loja","path":"","capture":true}]`))
+		default:
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+	})
+	if r := runProjectCLI(t, addr, "/r", testRepos, "project", "grupo", "loja"); r.code != 0 || !strings.Contains(r.stdout, "Grupo loja cadastrado (id 7)") {
+		t.Fatalf("grupo: %+v", r)
+	}
+	r := runProjectCLI(t, addr, "/w/api", testRepos, "project", "add", "--pai", "loja")
+	if r.code != 0 || !strings.Contains(r.stdout, "2 sessões e 0 cards passaram para") {
+		t.Fatalf("add --pai: %+v", r)
+	}
+	if len(bodies) != 2 || bodies[0] != `{"name":"loja"}` || !strings.Contains(bodies[1], `"parent_id":7`) {
+		t.Fatalf("corpos = %v", bodies)
+	}
+}
+
+func TestCLIProjectBaseOnAppPrintsServerRefusal(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":1,"name":"loja","path":"/r/loja","capture":true},{"id":2,"name":"web","path":"/r/loja/web","capture":true,"parent_id":1}]`))
+		case r.Method == "PATCH" && r.URL.Path == "/api/projects/2":
+			w.WriteHeader(400)
+			w.Write([]byte(`{"error":"a base de um app é a do projeto principal loja"}`))
+		default:
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+	})
+	r := runProjectCLI(t, addr, "/r/loja/web", testRepos, "project", "base", "develop")
+	if r.code == 0 || !strings.Contains(r.err, "a base de um app é a do projeto principal loja") || strings.Contains(r.stdout, "Base do projeto") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCLIProjectPaiUnknownNumericIDIsNotAPath(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/projects" {
+			w.Write([]byte(`[{"id":1,"name":"loja","path":"/r/loja","capture":true}]`))
+			return
+		}
+		t.Errorf("%s %s", r.Method, r.URL.Path)
+	})
+	r := runProjectCLI(t, addr, "/r", testRepos, "project", "pai", "99", "1")
+	if r.code == 0 || !strings.Contains(r.err, "projeto 99 não encontrado") {
+		t.Fatalf("%+v", r)
 	}
 }

@@ -21,7 +21,8 @@ Quando o contexto trouxer a frase "NobreAI Cockpit: este repositório não está
 2. `nobre project scan`: levanta o branch base, os branches com trabalho fora da base (`(recente)` = últimos 14 dias), os planos com tarefas abertas, as sessões recentes com custo e os cards que já existem.
 3. Escolha até 5 cards: entregas com branch recente (14 dias) ou worktree ativo, e planos com tarefas abertas. Agrupe branches da mesma entrega num só card. Não duplique cards que já existem. Ignore o que está parado há mais de 30 dias.
 4. Crie cada um com `nobre card add "<título>" --goal "<objetivo>" --done-when "<critério>" --branch <branch>`. Informe `--branch` sempre que houver branch. Se o trabalho já começou (branch com commits), acrescente `--column pausado --where "<onde parei>"`; o resto fica no Backlog (padrão). O comando não liga esta sessão ao card.
-5. Diga ao usuário, em poucas linhas, o que cadastrou e quais cards criou, e siga com o pedido dele.
+5. Se o `nobre project add` ou o `nobre project scan` imprimir "Sub-projetos sugeridos", liste-os ao usuário (até 5; o resto fica na Configuração → Projetos) e não os cadastre: quem decide é ele. Para parar de sugerir uma pasta, use `nobre project scan --nao-sugerir apps/web`.
+6. Diga ao usuário, em poucas linhas, o que cadastrou e quais cards criou, e siga com o pedido dele.
 
 Se o usuário não quiser o repositório no board, ele desliga a captura do projeto na Configuração. Se o `nobre project add` falhar, avise o usuário e siga sem card.
 
@@ -46,10 +47,11 @@ Se o usuário não quiser o repositório no board, ele desliga a captura do proj
 - `nobre answer 4 "cookie httpOnly"`: responde a pergunta 4 do card (os ids aparecem em `nobre ask`, `nobre status` e no pacote de retomada como `- [4] <texto>`).
 - `nobre block NAC-4 --why "precisa do merge do NAC-4"`: marca que este card só continua depois do NAC-4 (o board mostra "bloqueado por NAC-4"); `nobre block --clear` remove.
 - `nobre branch feat/oauth`: informa o branch de trabalho do card; rode ao criar ou entrar no branch ou worktree do card. Recusa o branch base do projeto.
+- `nobre app web`: põe o card no app (sub-projeto) certo do monorepo; `nobre app --geral` devolve ao projeto principal.
 - `nobre test "go test ./auth/..."`: registra como testar.
 - `nobre done`: marca o card como pronto para revisão. Recusa se "Como testar" estiver vazio ou mais antigo que a última edição de arquivo, ou se houver pergunta sem resposta. `nobre done --force` ignora essas recusas; use só depois de registrar o motivo com `nobre note`.
 - `nobre card add "Migrar sessões" --goal "..." --done-when "..." --branch feat/sessoes --where "parei na migration 3" --column pausado`: cria um card sem ligar esta sessão (`--column` aceita `backlog` ou `pausado`).
-- `nobre project scan`: levantamento só de leitura do projeto; `nobre project base main`: define o branch base (`nobre project base <branch> [path]`).
+- `nobre project scan`: levantamento só de leitura do projeto (inclui os sub-projetos sugeridos; `--nao-sugerir rel,rel` recusa); `nobre project base main`: define o branch base (`nobre project base <branch> [path]`).
 - `nobre status`: mostra o card, "Onde parei" e o que falta para o handoff.
 
 ## Como manter o card útil
@@ -59,6 +61,7 @@ Se o usuário não quiser o repositório no board, ele desliga a captura do proj
 - Registre decisões com o porquê, e perguntas em aberto com `nobre ask`; assim que uma pergunta for decidida, responda com `nobre answer <id> "<resposta>"`.
 - Se o card só puder continuar depois de outro, rode `nobre block <KEY> --why "<motivo>"` antes de parar; o board passa a mostrar "bloqueado por <KEY>" e, quando o outro concluir, "pronto para retomar".
 - Rode `nobre branch <nome>` ao criar ou entrar no branch ou worktree do card, para o card acompanhar o trabalho.
+- Quando o card for de um app só, rode `nobre app <nome>` ao criar o card ou ao começar a mexer nele; `nobre app --geral` devolve ao projeto principal (o contexto da sessão lista os apps do projeto).
 - Atualize "Como testar" (`nobre test`) depois da última mudança de código e antes de `nobre done`; um "Como testar" mais antigo que a última edição bloqueia o `done`.
 - Antes de `nobre done`, confira `nobre status`: objetivo, como testar, arquivo essencial e pendências.
 - Não pergunte ao usuário o que já está no card: leia o pacote de retomada e continue a partir dele.

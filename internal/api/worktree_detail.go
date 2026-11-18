@@ -88,6 +88,12 @@ func (s *server) worktreeDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return
 	}
+	repo, err := s.st.RepoProject(*p)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	p = &repo // o worktree de um app é o do repositório do pai
 	pw, err := s.projectWorktrees(*p)
 	if err != nil {
 		writeStoreError(w, err, "")
@@ -121,12 +127,17 @@ func (s *server) worktreeDetail(w http.ResponseWriter, r *http.Request) {
 	d.Git = s.worktreeGit(pw.Worktrees, v)
 
 	// Sessões de qualquer época, do projeto, que rodam neste worktree.
-	all, err := s.st.ProjectSessionsSince(p.ID, time.Time{})
+	family, err := s.st.FamilyIDs(p.ID)
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
 	}
-	cards, err := s.st.ListCards(store.CardFilter{ProjectID: p.ID})
+	all, err := s.st.ProjectsSessionsSince(family, time.Time{})
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	cards, err := s.st.ListCards(store.CardFilter{ProjectIDs: family})
 	if err != nil {
 		writeStoreError(w, err, "")
 		return

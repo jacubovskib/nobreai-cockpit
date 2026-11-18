@@ -1335,3 +1335,126 @@ func TestCardWithoutBranchFollowsOutsideSwitchOnBash(t *testing.T) {
 		t.Fatalf("card vazio deveria ir para feat/y: %q", got.Branch)
 	}
 }
+
+// Numa sessão na raiz do monorepo, o pausado de um app no mesmo branch entra no contexto.
+func TestPausedCardsIncludeFamily(t *testing.T) {
+	e := newEnv(t)
+	e.a.deps.Git = fakeGit{branch: "feat/x"}
+	p := e.project(t)
+	if err := e.st.SetProjectBase(p.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	web, _, err := e.st.CreateChild("web", "/w/api/web", p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.CreateCard(domain.Card{Title: "Tela do app", ProjectID: web.ID, Branch: "feat/x", Column: domain.Pausado}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if !strings.Contains(ctx, "NAC-1 · Tela do app") {
+		t.Fatalf("contexto sem o pausado do app:\n%s", ctx)
+	}
+}
+
+func newMonorepoWorktreeEnv(t *testing.T) (*env, domain.Project, domain.Project) {
+	t.Helper()
+	e := newEnv(t)
+	e.a.deps.Git = wtGit{fakeGit: fakeGit{branch: "feat/x"}, locs: map[string]string{
+		"/r/loja":              "/r/loja",
+		"/r/loja/.worktrees/x": "/r/loja",
+	}}
+	loja, err := e.st.CreateProject("loja", "/r/loja")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web, _, err := e.st.CreateChild("web", "/r/loja/apps/web", loja.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, loja, web
+}
+
+func TestWorktreeSessionLandsInApp(t *testing.T) {
+	e, _, web := newMonorepoWorktreeEnv(t)
+	e.call(t, "session_start", with("cwd", "/r/loja/.worktrees/x/apps/web/src"))
+	s, err := e.st.GetSession(sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ProjectID == nil || *s.ProjectID != web.ID {
+		t.Fatalf("sessão deveria cair no app: %+v", s)
+	}
+}
+
+func TestWorktreeRootSessionLandsInParent(t *testing.T) {
+	e, loja, _ := newMonorepoWorktreeEnv(t)
+	e.call(t, "session_start", with("cwd", "/r/loja/.worktrees/x"))
+	s, err := e.st.GetSession(sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ProjectID == nil || *s.ProjectID != loja.ID {
+		t.Fatalf("sessão na raiz deveria cair no pai: %+v", s)
+	}
+}
+
+// countGit conta as chamadas a Locate.
+type countGit struct {
+	wtGit
+	n *int
+}
+
+func (g countGit) Locate(dir string) gitinfo.Location {
+	*g.n++
+	return g.wtGit.Locate(dir)
+}
+
+func TestMonorepoSessionLocatesOncePerHook(t *testing.T) {
+	cases := []struct{ name, cwd, root string }{
+		{"app no checkout principal", "/r/loja/apps/web/src", "web"},
+		{"raiz no checkout principal", "/r/loja", "loja"},
+		{"app no worktree", "/r/loja/.worktrees/x/apps/web", "web"},
+		{"raiz no worktree", "/r/loja/.worktrees/x", "loja"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e, loja, web := newMonorepoWorktreeEnv(t)
+			n := 0
+			e.a.deps.Git = countGit{wtGit: e.a.deps.Git.(wtGit), n: &n}
+			e.call(t, "session_start", with("cwd", c.cwd))
+			s, err := e.st.GetSession(sessID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := loja.ID
+			if c.root == "web" {
+				want = web.ID
+			}
+			if s.ProjectID == nil || *s.ProjectID != want {
+				t.Fatalf("projeto = %v, quer %d", s.ProjectID, want)
+			}
+			if n != 1 {
+				t.Fatalf("Locate chamado %d vezes, quer 1", n)
+			}
+		})
+	}
+}
+
+func TestSessionStartListsApps(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if strings.Contains(ctx, "Apps deste projeto") {
+		t.Fatalf("projeto solto lista apps:\n%s", ctx)
+	}
+	if _, _, err := e.st.CreateChild("web", "/w/api/apps/web", p.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx = additionalContext(t, e.call(t, "session_start"))
+	for _, want := range []string{"Apps deste projeto: web (apps/web).", "nobre app <nome>", "nobre app --geral"} {
+		if !strings.Contains(ctx, want) {
+			t.Fatalf("contexto sem %q:\n%s", want, ctx)
+		}
+	}
+}

@@ -704,3 +704,83 @@ func TestMeBlockNormalizesKey(t *testing.T) {
 		t.Fatalf("própria em minúsculas = %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestMeAppMovesCard(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	web, _, err := a.st.CreateChild("web", "/w/api/apps/web", c.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/app", map[string]any{"app": "web"}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.ProjectID != web.ID {
+		t.Fatalf("project_id = %d, quer %d", got.ProjectID, web.ID)
+	}
+	// Dentro do app, --geral volta ao pai.
+	rec = a.do(t, "POST", "/api/me/app", map[string]any{"geral": true}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("geral = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.ProjectID != c.ProjectID {
+		t.Fatalf("project_id = %d, quer %d", got.ProjectID, c.ProjectID)
+	}
+	if rec := a.do(t, "POST", "/api/me/app", map[string]any{}, 4242); rec.Code != http.StatusBadRequest {
+		t.Fatalf("vazio = %d", rec.Code)
+	}
+}
+
+func TestMeAppUnknownListsApps(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.st.CreateChild("web", "/w/api/apps/web", c.ProjectID)
+	a.st.CreateChild("admin", "/w/api/apps/admin", c.ProjectID)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/app", map[string]any{"app": "mobile"}, 4242)
+	want := "app desconhecido: mobile. Apps deste projeto: admin, web"
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != want {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMeAppNoChildren(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/app", map[string]any{"app": "web"}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "este projeto não tem sub-projetos" {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMeAppGeralRefusedWhenFamilyRootIsAGroup(t *testing.T) {
+	a := newTestAPI(t)
+	g, err := a.st.CreateGroup("loja")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _, err := a.st.CreateChild("api", "/w/loja/api", g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Um card herdado no grupo (o store não impede).
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: g.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/app", map[string]any{"geral": true}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != msgGroupNoCards {
+		t.Fatalf("geral no grupo = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/me/app", map[string]any{"app": "api"}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("app = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.ProjectID != repo.ID {
+		t.Fatalf("project_id = %d", got.ProjectID)
+	}
+}

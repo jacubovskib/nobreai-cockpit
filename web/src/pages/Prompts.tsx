@@ -262,7 +262,7 @@ function Editor({ initial, isNew, onSaved, onDeleted, onDuplicate }: {
 
 export function Prompts() {
   const prompts = usePrompts()
-  const { projectId } = useProjectFilter()
+  const { ids, project: chosen } = useProjectFilter()
   const events = usePromptEvents(50)
   const [q, setQ] = useState('')
   const [tag, setTag] = useState(ALL)
@@ -270,7 +270,9 @@ export function Prompts() {
   const [draft, setDraft] = useState<{ n: number; d: Draft } | null>(null) // rascunho novo (n muda a key do editor)
   // Com projeto escolhido: prompts globais (project_id null) e os do projeto.
   const all = prompts.data ?? []
-  const list = useMemo(() => all.filter((p) => projectId === null || p.project_id === null || p.project_id === projectId), [all, projectId])
+  // Com um filho escolhido, entram também os do pai.
+  const scope = useMemo(() => (ids === null ? null : chosen?.parent_id != null ? [...ids, chosen.parent_id] : ids), [ids, chosen])
+  const list = useMemo(() => all.filter((p) => scope === null || p.project_id === null || scope.includes(p.project_id)), [all, scope])
   const tags = useMemo(() => [ALL, ...Array.from(new Set(list.map((p) => p.tag).filter(Boolean)))], [list])
   const term = q.trim().toLowerCase()
   const shown = list.filter(

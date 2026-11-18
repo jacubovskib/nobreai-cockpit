@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -15,8 +16,9 @@ var ErrNotFound = errors.New("não encontrado")
 
 // CardFilter filtra ListCards. Campos zerados não filtram.
 type CardFilter struct {
-	ProjectID int64
-	Agent     string // cards com alguma sessão desse agente
+	ProjectID  int64
+	ProjectIDs []int64 // vale junto com ProjectID, como IN (...)
+	Agent      string  // cards com alguma sessão desse agente
 }
 
 const cardCols = `id, key, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, project_id, col, created_at, updated_at, branch_head, branch_diverged, branch_merged_at, pause_reason, handoff_incomplete, blocked_by`
@@ -158,6 +160,12 @@ func (s *Store) ListCards(f CardFilter) ([]domain.Card, error) {
 	if f.ProjectID != 0 {
 		q += ` AND project_id=?`
 		args = append(args, f.ProjectID)
+	}
+	if len(f.ProjectIDs) > 0 {
+		q += ` AND project_id IN (` + placeholders(len(f.ProjectIDs)) + `)`
+		for _, id := range f.ProjectIDs {
+			args = append(args, id)
+		}
 	}
 	if f.Agent != "" {
 		q += ` AND id IN (SELECT card_id FROM sessions WHERE agent=? AND card_id IS NOT NULL)`
@@ -338,4 +346,8 @@ func (s *Store) SetHandoffIncomplete(cardID int64, v bool, at time.Time) error {
 		return err
 	}
 	return requireAffected(res)
+}
+
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }

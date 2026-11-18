@@ -10,7 +10,7 @@ import (
 
 // CreateProject cadastra um projeto (captura ligada por padrão).
 func (s *Store) CreateProject(name, path string) (domain.Project, error) {
-	res, err := s.DB.Exec(`INSERT INTO projects(name, path) VALUES (?, ?)`, name, path)
+	res, err := s.DB.Exec(`INSERT INTO projects(name, path) VALUES (?, NULLIF(?, ''))`, name, path)
 	if err != nil {
 		return domain.Project{}, fmt.Errorf("criar projeto: %w", err)
 	}
@@ -23,7 +23,7 @@ func (s *Store) CreateProject(name, path string) (domain.Project, error) {
 
 // ListProjects lista os projetos por id.
 func (s *Store) ListProjects() ([]domain.Project, error) {
-	rows, err := s.DB.Query(`SELECT id, name, path, capture, base_branch FROM projects ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id FROM projects ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func (s *Store) ListProjects() ([]domain.Project, error) {
 	var out []domain.Project
 	for rows.Next() {
 		var p domain.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -39,13 +39,60 @@ func (s *Store) ListProjects() ([]domain.Project, error) {
 	return out, rows.Err()
 }
 
-// UpdateProject atualiza nome, caminho e captura.
+// UpdateProject atualiza nome, caminho e captura. Num projeto com
+// sub-projetos, a captura nova vale também para eles. O nome continua único na
+// família e a pasta de um sub-projeto de monorepo continua dentro da do pai.
 func (s *Store) UpdateProject(p domain.Project) error {
-	res, err := s.DB.Exec(`UPDATE projects SET name=?, path=?, capture=?, base_branch=? WHERE id=?`, p.Name, p.Path, p.Capture, p.BaseBranch, p.ID)
+	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
-	return requireAffected(res)
+	defer tx.Rollback()
+	cur, err := getProjectTx(tx, p.ID)
+	if err != nil {
+		return err
+	}
+	kids, err := childrenTx(tx, p.ID)
+	if err != nil {
+		return err
+	}
+	if cur.ParentID != nil {
+		parent, err := getProjectTx(tx, *cur.ParentID)
+		if err != nil {
+			return err
+		}
+		if p.Path == "" {
+			return familyErr("o sub-projeto precisa de uma pasta")
+		}
+		if err := checkInside(parent, p.Path); err != nil {
+			return err
+		}
+		p.Capture = parent.Capture // a captura do sub-projeto é a do pai
+	} else if len(kids) > 0 && p.Path != cur.Path {
+		if (p.Path == "") != (cur.Path == "") {
+			return familyErr("um projeto com sub-projetos não pode trocar entre ter pasta e ser grupo")
+		}
+		for _, k := range kids {
+			if err := checkInside(domain.Project{Path: p.Path}, k.Path); err != nil {
+				return err
+			}
+		}
+	}
+	if !strings.EqualFold(cur.Name, p.Name) {
+		if err := checkNameFree(tx, cur, p.Name); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE projects SET name=?, path=NULLIF(?, ''), capture=?, base_branch=? WHERE id=?`,
+		p.Name, p.Path, p.Capture, p.BaseBranch, p.ID); err != nil {
+		return err
+	}
+	if cur.Capture != p.Capture {
+		if _, err := tx.Exec(`UPDATE projects SET capture=? WHERE parent_id=?`, p.Capture, p.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // SetProjectBase grava o branch base do projeto ("" volta a detectar pelo git).
@@ -57,8 +104,15 @@ func (s *Store) SetProjectBase(id int64, base string) error {
 	return requireAffected(res)
 }
 
-// DeleteProject remove o projeto.
+// DeleteProject remove o projeto; recusa um projeto que ainda tem sub-projetos.
 func (s *Store) DeleteProject(id int64) error {
+	var n int
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM projects WHERE parent_id=?`, id).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return familyErr("o projeto tem sub-projetos; desligue-os antes de excluir")
+	}
 	res, err := s.DB.Exec(`DELETE FROM projects WHERE id=?`, id)
 	if err != nil {
 		return err
@@ -76,6 +130,9 @@ func (s *Store) ProjectForPath(cwd string) (*domain.Project, error) {
 	var best *domain.Project
 	for i := range ps {
 		p := ps[i]
+		if p.Path == "" { // grupo: não tem pasta
+			continue
+		}
 		root := strings.TrimRight(p.Path, "/")
 		if cwd != root && !strings.HasPrefix(cwd, root+"/") {
 			continue
@@ -126,11 +183,73 @@ func (s *Store) UnassignedLinkedWorktrees() ([]string, error) {
 // AssignSessionsInWorktree liga ao projeto as sessões sem projeto que rodam
 // no worktree e liga a captura completa. Devolve quantas mudaram.
 func (s *Store) AssignSessionsInWorktree(projectID int64, worktree string) (int, error) {
-	res, err := s.DB.Exec(`UPDATE sessions SET project_id=?, full_capture=1
-		WHERE project_id IS NULL AND worktree_linked=1 AND worktree=?`, projectID, worktree)
+	kids, err := s.Children(projectID)
+	if err != nil {
+		return 0, err
+	}
+	parent, err := getProjectTx(s.DB, projectID)
+	if err != nil {
+		return 0, err
+	}
+	type target struct {
+		rel string
+		id  int64
+	}
+	var apps []target
+	for _, k := range kids {
+		if r, ok := relUnder(parent.Path, k.Path); ok {
+			apps = append(apps, target{r, k.ID})
+		}
+	}
+	base := strings.TrimRight(worktree, "/")
+	rows, err := s.DB.Query(`SELECT id, cwd FROM sessions
+		WHERE project_id IS NULL AND worktree_linked=1 AND worktree=?`, worktree)
 	if err != nil {
 		return 0, fmt.Errorf("religar sessões do worktree: %w", err)
 	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	owner := map[string]int64{}
+	for rows.Next() {
+		var id, cwd string
+		if err := rows.Scan(&id, &cwd); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		pid, best := projectID, -1
+		if r, ok := relUnder(base, cwd); ok {
+			for _, a := range apps {
+				if (r == a.rel || strings.HasPrefix(r, a.rel+"/")) && len(a.rel) > best {
+					pid, best = a.id, len(a.rel)
+				}
+			}
+		}
+		owner[id] = pid
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	for id, pid := range owner {
+		if _, err := tx.Exec(`UPDATE sessions SET project_id=?, full_capture=1 WHERE id=?`, pid, id); err != nil {
+			return 0, fmt.Errorf("religar sessões do worktree: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(owner), nil
+}
+
+// relUnder devolve path relativo a base, se path está dentro de base.
+func relUnder(base, path string) (string, bool) {
+	base, path = strings.TrimRight(base, "/"), strings.TrimRight(path, "/")
+	if base == "" || !strings.HasPrefix(path, base+"/") {
+		return "", false
+	}
+	return strings.TrimPrefix(path, base+"/"), true
 }

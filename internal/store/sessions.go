@@ -105,6 +105,9 @@ func (s *Store) StartSession(x domain.Session) error {
 type SessionLocation struct {
 	Cwd, Branch, GitHead, Worktree string
 	WorktreeLinked                 bool
+	// Main é o checkout principal do repositório; não é gravado, só serve a
+	// quem já tem a localização em mãos.
+	Main string
 }
 
 // UpdateSessionLocation grava o novo local da sessão (o agente trocou de
@@ -191,6 +194,22 @@ func (s *Store) ProjectSessionsSince(projectID int64, since time.Time) ([]domain
 	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
 		WHERE project_id=? AND (ended_at IS NULL OR julianday(ended_at) >= julianday(?))
 		ORDER BY julianday(last_event_at) DESC, id`, projectID, fmtTime(since))
+}
+
+// ProjectsSessionsSince é ProjectSessionsSince para vários projetos (a família
+// de um monorepo), no mesmo critério e ordem.
+func (s *Store) ProjectsSessionsSince(projectIDs []int64, since time.Time) ([]domain.Session, error) {
+	if len(projectIDs) == 0 {
+		return nil, nil
+	}
+	args := []any{}
+	for _, id := range projectIDs {
+		args = append(args, id)
+	}
+	args = append(args, fmtTime(since))
+	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
+		WHERE project_id IN (`+placeholders(len(projectIDs))+`) AND (ended_at IS NULL OR julianday(ended_at) >= julianday(?))
+		ORDER BY julianday(last_event_at) DESC, id`, args...)
 }
 
 // SessionsForCard lista as sessões do card, da mais antiga para a mais nova:

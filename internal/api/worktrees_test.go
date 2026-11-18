@@ -450,3 +450,92 @@ func TestWorktreeDetail(t *testing.T) {
 		}
 	}
 }
+
+// fakeWorktrees é um WorktreeReader que lista um worktree por repositório e
+// falha se for chamado com pasta vazia (grupo não roda git).
+type fakeWorktrees struct {
+	*fakeGit
+	t     *testing.T
+	calls map[string]int
+}
+
+func (f *fakeWorktrees) Locate(string) gitinfo.Location { return gitinfo.Location{} }
+func (f *fakeWorktrees) Worktrees(repo string) ([]gitinfo.Worktree, error) {
+	if repo == "" {
+		f.t.Error("git rodou com pasta vazia")
+		return nil, os.ErrInvalid
+	}
+	f.calls[repo]++
+	return []gitinfo.Worktree{{Path: repo, Branch: "feat/x", Main: true}}, nil
+}
+
+func familyAPI(t *testing.T) (*testAPI, *fakeWorktrees) {
+	t.Helper()
+	a := newTestAPI(t)
+	g := &fakeWorktrees{fakeGit: &fakeGit{branch: "main"}, t: t, calls: map[string]int{}}
+	a.h = New(a.st, Deps{Now: func() time.Time { return testNow }, Hub: a.hub, Git: g})
+	return a, g
+}
+
+func TestWorktreesListsMonorepoOnce(t *testing.T) {
+	a, g := familyAPI(t)
+	mono, err := a.st.CreateProject("mono", "/w/mono")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"web", "api"} {
+		app, _, err := a.st.CreateChild(n, "/w/mono/"+n, mono.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.st.CreateCard(domain.Card{Title: "do " + n, ProjectID: app.ID, Branch: "feat/x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := a.do(t, "GET", "/api/worktrees", nil, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[worktreesResp](t, rec)
+	if len(got) != 1 || got[0].Project.ID != mono.ID {
+		t.Fatalf("itens = %+v", got)
+	}
+	if g.calls["/w/mono"] != 1 || len(g.calls) != 1 {
+		t.Fatalf("chamadas ao git = %v", g.calls)
+	}
+	if len(got[0].Worktrees) != 1 || len(got[0].Worktrees[0].Cards) != 2 {
+		t.Fatalf("worktrees = %+v", got[0].Worktrees)
+	}
+}
+
+func TestWorktreesGroupRunsNoGitOnEmptyPath(t *testing.T) {
+	a, g := familyAPI(t)
+	grp, err := a.st.CreateGroup("grupo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"svc-a", "svc-b"} {
+		if _, _, err := a.st.CreateChild(n, "/w/"+n, grp.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := a.do(t, "GET", "/api/worktrees", nil, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[worktreesResp](t, rec)
+	if len(got) != 3 {
+		t.Fatalf("itens = %+v", got)
+	}
+	if got[0].Project.Name != "grupo" || got[0].Error != "" || len(got[0].Worktrees) != 0 {
+		t.Fatalf("item do grupo = %+v", got[0])
+	}
+	for _, x := range got[1:] {
+		if len(x.Worktrees) != 1 || x.Error != "" {
+			t.Fatalf("filho %s = %+v", x.Project.Name, x)
+		}
+	}
+	if g.calls["/w/svc-a"] != 1 || g.calls["/w/svc-b"] != 1 {
+		t.Fatalf("chamadas = %v", g.calls)
+	}
+}

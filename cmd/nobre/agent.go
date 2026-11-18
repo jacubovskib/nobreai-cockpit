@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
 
 func (c *cli) start(args []string) error {
@@ -274,6 +276,9 @@ func (c *cli) status() error {
 	if where == "" {
 		where = "(vazio)"
 	}
+	if k.ProjectName != "" {
+		fmt.Fprintf(c.out, "Projeto: %s\n", k.ProjectName)
+	}
 	fmt.Fprintf(c.out, "Onde parei: %s\n", where)
 	fmt.Fprintf(c.out, "Prontidão: %d/%d\n", k.Readiness.Met, k.Readiness.Total)
 	for _, it := range k.Readiness.Items {
@@ -291,4 +296,48 @@ func (c *cli) status() error {
 		fmt.Fprintf(c.out, "Perguntas em aberto:\n%s\n", strings.Join(open, "\n"))
 	}
 	return nil
+}
+
+func (c *cli) app(args []string) error {
+	const u = `uso: nobre app <nome> | nobre app --geral`
+	fs := flag.NewFlagSet("app", flag.ContinueOnError)
+	geral := fs.Bool("geral", false, "devolve o card ao projeto principal")
+	pos, err := c.parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if (*geral && len(pos) != 0) || (!*geral && len(pos) != 1) {
+		return usagef(u)
+	}
+	name := ""
+	if !*geral {
+		name = pos[0]
+	}
+	cl := c.client()
+	card, err := cl.SetApp(ctx(), name, *geral)
+	if err != nil {
+		return err
+	}
+	label := fmt.Sprintf("o projeto %d", card.ProjectID)
+	if ps, err := cl.Projects(ctx()); err == nil {
+		byID := map[int64]domain.Project{}
+		for _, p := range ps {
+			byID[p.ID] = p
+		}
+		if p, ok := byID[card.ProjectID]; ok {
+			label = p.Name
+			if par, ok := byID[derefID(p.ParentID)]; ok {
+				label = par.Name + " › " + p.Name
+			}
+		}
+	}
+	fmt.Fprintf(c.out, "Card %s agora em %s.\n", card.Key, label)
+	return nil
+}
+
+func derefID(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

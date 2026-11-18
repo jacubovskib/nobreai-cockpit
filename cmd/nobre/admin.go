@@ -6,15 +6,17 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/client"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 )
 
 func (c *cli) project(args []string) error {
-	const u = "uso: nobre project add [path] [--name <nome>] | nobre project base <branch> [path] | nobre project scan [path] | nobre project list"
+	const u = "uso: nobre project add [path] [--name <nome>] [--pai <id|pasta>] | nobre project pai <id|pasta> <id|pasta|--nenhum> | nobre project grupo \"<nome>\" | nobre project base <branch> [path] | nobre project scan [path] [--nao-sugerir rel,rel] | nobre project list"
 	if len(args) == 0 {
 		return usagef(u)
 	}
@@ -22,6 +24,7 @@ func (c *cli) project(args []string) error {
 	case "add":
 		fs := flag.NewFlagSet("project add", flag.ContinueOnError)
 		name := fs.String("name", "", "nome do projeto (padrão: nome da pasta)")
+		pai := fs.String("pai", "", "projeto principal (id ou pasta)")
 		pos, err := c.parse(fs, args[1:])
 		if err != nil {
 			return err
@@ -40,7 +43,16 @@ func (c *cli) project(args []string) error {
 		if c.git != nil && loc.Root == "" {
 			return fmt.Errorf("%s não é um repositório git: o NobreAI Cockpit só cadastra repositórios git", path)
 		}
-		p, err := c.client().AddProject(ctx(), *name, path)
+		var p client.AddedProject
+		if *pai != "" {
+			parent, perr := c.findProjectRef(*pai)
+			if perr != nil {
+				return perr
+			}
+			p, err = c.client().AddChildProject(ctx(), *name, path, parent.ID)
+		} else {
+			p, err = c.client().AddProject(ctx(), *name, path)
+		}
 		if err != nil {
 			return err
 		}
@@ -54,6 +66,33 @@ func (c *cli) project(args []string) error {
 			info = append(info, fmt.Sprintf("%d sessões religadas", p.Reassigned))
 		}
 		fmt.Fprintf(c.out, "Projeto %s cadastrado: %s (%s)\n", p.Name, p.Path, strings.Join(info, ", "))
+		c.printMoved(p.Moved, p.Name)
+		if sg := p.Suggestions; len(sg) > 0 {
+			const max = 5
+			fmt.Fprintln(c.out, "Sub-projetos sugeridos (liste ao usuário, não cadastre sem ele pedir):")
+			for i, x := range sg {
+				if i == max {
+					fmt.Fprintf(c.out, "  mais %d na Configuração → Projetos\n", len(sg)-max)
+					break
+				}
+				fmt.Fprintf(c.out, "  %s  (%s)\n", x.Rel, x.Source)
+			}
+		}
+	case "grupo":
+		pos, err := c.parse(flag.NewFlagSet("project grupo", flag.ContinueOnError), args[1:])
+		if err != nil {
+			return err
+		}
+		if len(pos) != 1 || strings.TrimSpace(pos[0]) == "" {
+			return usagef(u)
+		}
+		g, err := c.client().AddGroup(ctx(), pos[0])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(c.out, "Grupo %s cadastrado (id %d). Use nobre project add <pasta> --pai %d para pôr repositórios nele.\n", g.Name, g.ID, g.ID)
+	case "pai":
+		return c.projectPai(u, args[1:])
 	case "base":
 		pos, err := c.parse(flag.NewFlagSet("project base", flag.ContinueOnError), args[1:])
 		if err != nil {
@@ -174,9 +213,93 @@ func (c *cli) ui() error {
 	return nil
 }
 
+// printMoved avisa o histórico que passou do pai para o filho, se houve.
+func (c *cli) printMoved(m client.Moved, name string) {
+	if m.Sessions == 0 && m.Cards == 0 {
+		return
+	}
+	sess, cards := "sessões", "cards"
+	if m.Sessions == 1 {
+		sess = "sessão"
+	}
+	if m.Cards == 1 {
+		cards = "card"
+	}
+	fmt.Fprintf(c.out, "%d %s e %d %s passaram para %s.\n", m.Sessions, sess, m.Cards, cards, name)
+}
+
+// projectPai liga um projeto a um principal (ou desliga, com --nenhum).
+func (c *cli) projectPai(u string, args []string) error {
+	fs := flag.NewFlagSet("project pai", flag.ContinueOnError)
+	nenhum := fs.Bool("nenhum", false, "desliga o projeto do principal")
+	pos, err := c.parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if (*nenhum && len(pos) != 1) || (!*nenhum && len(pos) != 2) {
+		return usagef("%s", u)
+	}
+	child, err := c.findProjectRef(pos[0])
+	if err != nil {
+		return err
+	}
+	if *nenhum {
+		if _, err := c.client().SetProjectParent(ctx(), child.ID, nil); err != nil {
+			return err
+		}
+		fmt.Fprintf(c.out, "%s não é mais sub-projeto.\n", child.Name)
+		return nil
+	}
+	parent, err := c.findProjectRef(pos[1])
+	if err != nil {
+		return err
+	}
+	// A captura do filho passa a ser a do pai: avisa se elas diferiam.
+	differ := child.Capture != parent.Capture
+	m, err := c.client().SetProjectParent(ctx(), child.ID, &parent.ID)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "%s agora é sub-projeto de %s.\n", child.Name, parent.Name)
+	c.printMoved(m, parent.Name+" › "+child.Name)
+	if differ {
+		state := "desligada"
+		if parent.Capture {
+			state = "ligada"
+		}
+		fmt.Fprintf(c.out, "A captura de %s passa a seguir a de %s (%s).\n", child.Name, parent.Name, state)
+	}
+	return nil
+}
+
+// findProjectRef acha o projeto por id, por nome (grupos não têm pasta) ou,
+// como findProject, pela pasta.
+func (c *cli) findProjectRef(arg string) (*domain.Project, error) {
+	ps, err := c.client().Projects(ctx())
+	if err != nil {
+		return nil, err
+	}
+	if id, perr := strconv.ParseInt(arg, 10, 64); perr == nil {
+		for i := range ps {
+			if ps[i].ID == id {
+				return &ps[i], nil
+			}
+		}
+		return nil, fmt.Errorf("projeto %d não encontrado", id)
+	}
+	for i := range ps {
+		if ps[i].ParentID == nil && ps[i].Path == "" && strings.EqualFold(ps[i].Name, arg) {
+			return &ps[i], nil
+		}
+	}
+	return c.findProject(arg)
+}
+
 // projectScan imprime o levantamento do projeto que contém path (padrão: cwd).
 func (c *cli) projectScan(u string, args []string) error {
-	pos, err := c.parse(flag.NewFlagSet("project scan", flag.ContinueOnError), args)
+	fs := flag.NewFlagSet("project scan", flag.ContinueOnError)
+	noSuggest := fs.String("nao-sugerir", "", "sub-projetos a não sugerir mais (pastas relativas, separadas por vírgula)")
+	pos, err := c.parse(fs, args)
 	if err != nil {
 		return err
 	}
@@ -190,6 +313,18 @@ func (c *cli) projectScan(u string, args []string) error {
 	found, err := c.findProject(arg)
 	if err != nil {
 		return err
+	}
+	if *noSuggest != "" {
+		var rels []string
+		for _, r := range strings.Split(*noSuggest, ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				rels = append(rels, r)
+			}
+		}
+		if err := c.client().DismissSuggestions(ctx(), found.ID, rels); err != nil {
+			return err
+		}
+		fmt.Fprintf(c.out, "Não vou mais sugerir: %s\n", strings.Join(rels, ", "))
 	}
 	s, err := c.client().ScanProject(ctx(), found.ID)
 	if err != nil {
@@ -227,6 +362,12 @@ func (c *cli) projectScan(u string, args []string) error {
 	fmt.Fprintf(c.out, "\nCards que já existem (%d):\n", len(s.Cards))
 	for _, k := range s.Cards {
 		fmt.Fprintf(c.out, "  %s  [%s]  %s  %s\n", k.Key, k.Column, k.Title, k.Branch)
+	}
+	if len(s.Suggestions) > 0 {
+		fmt.Fprintf(c.out, "\nSub-projetos sugeridos (%d):\n", len(s.Suggestions))
+		for _, x := range s.Suggestions {
+			fmt.Fprintf(c.out, "  %s  (%s)\n", x.Rel, x.Source)
+		}
 	}
 	return nil
 }

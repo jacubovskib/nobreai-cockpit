@@ -100,7 +100,7 @@ function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (ke
 export function Board() {
   const { data, isPending, isError } = useCards()
   const qc = useQueryClient()
-  const { projectId } = useProjectFilter()
+  const { ids } = useProjectFilter()
   const projects = useProjects().data ?? []
   const [agent, setAgent] = useState('todos')
   const [error, setError] = useState('')
@@ -121,7 +121,7 @@ export function Board() {
   }
 
   const cards = (data ?? [])
-    .filter((c) => projectId === null || c.project_id === projectId)
+    .filter((c) => ids === null || (c.project_id !== null && ids.includes(c.project_id)))
     .filter((c) => agent === 'todos' || c.agent === agent)
   const groups = groupByColumn(cards)
 
@@ -188,7 +188,7 @@ export function Board() {
                 <span className="mono" style={{ fontSize: 12, color: 'var(--text-2)' }}>{groups[col.id].length}</span>
               </div>
               <p style={{ margin: '-4px 4px 4px', fontSize: 12, color: '#7C8493' }}>{col.rule}</p>
-              {groups[col.id].map((c) => <BoardCard key={c.key} card={c} onMove={onMove} busy={move.isPending} tag={projectId === null ? <ProjectTag project={projects.find((p) => p.id === c.project_id) ?? null} projects={projects} /> : undefined} />)}
+              {groups[col.id].map((c) => <BoardCard key={c.key} card={c} onMove={onMove} busy={move.isPending} tag={ids === null || ids.length > 1 ? <ProjectTag project={projects.find((p) => p.id === c.project_id) ?? null} projects={projects} /> : undefined} />)}
             </section>
           ))}
         </div>

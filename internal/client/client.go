@@ -18,6 +18,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/proc"
+	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
 // Timeout é o prazo de cada chamada.
@@ -134,8 +135,9 @@ func (c *Client) Hook(ctx context.Context, agent string, call adapter.HookCall) 
 // StatusCard é o card do agente em `nobre status`.
 type StatusCard struct {
 	domain.Card
-	Readiness domain.ReadinessResult `json:"readiness"`
-	Content   domain.Content         `json:"content"`
+	ProjectName string                 `json:"project_name"`
+	Readiness   domain.ReadinessResult `json:"readiness"`
+	Content     domain.Content         `json:"content"`
 }
 
 // Status é a resposta de GET /api/me/status.
@@ -199,6 +201,14 @@ func (c *Client) SetBranch(ctx context.Context, branch string) error {
 	return c.Do(ctx, "POST", "/api/me/branch", map[string]string{"branch": branch}, nil)
 }
 
+// SetApp move o card da sessão para um app (sub-projeto) ou, com geral, de volta ao projeto principal.
+func (c *Client) SetApp(ctx context.Context, app string, geral bool) (domain.Card, error) {
+	var card domain.Card
+	body := map[string]any{"app": app, "geral": geral}
+	err := c.Do(ctx, "POST", "/api/me/app", body, &card)
+	return card, err
+}
+
 // SetProjectBase grava o branch base de um projeto.
 func (c *Client) SetProjectBase(ctx context.Context, id int64, base string) error {
 	return c.Do(ctx, "PATCH", "/api/projects/"+strconv.FormatInt(id, 10), map[string]string{"base_branch": base}, nil)
@@ -210,6 +220,35 @@ func (c *Client) AddProject(ctx context.Context, name, path string) (AddedProjec
 	var p AddedProject
 	err := c.Do(ctx, "POST", "/api/projects", map[string]string{"name": name, "path": path}, &p)
 	return p, err
+}
+
+// Moved é o histórico que passou do pai para o filho ao ligar os dois.
+type Moved struct {
+	Sessions int `json:"sessions"`
+	Cards    int `json:"cards"`
+}
+
+// AddChildProject cadastra um sub-projeto de parentID.
+func (c *Client) AddChildProject(ctx context.Context, name, path string, parentID int64) (AddedProject, error) {
+	var p AddedProject
+	err := c.Do(ctx, "POST", "/api/projects", map[string]any{"name": name, "path": path, "parent_id": parentID}, &p)
+	return p, err
+}
+
+// AddGroup cadastra um grupo: projeto principal sem pasta.
+func (c *Client) AddGroup(ctx context.Context, name string) (AddedProject, error) {
+	var p AddedProject
+	err := c.Do(ctx, "POST", "/api/projects", map[string]string{"name": name}, &p)
+	return p, err
+}
+
+// SetProjectParent liga o projeto id ao pai (nil desliga).
+func (c *Client) SetProjectParent(ctx context.Context, id int64, parentID *int64) (Moved, error) {
+	var out struct {
+		Moved Moved `json:"moved"`
+	}
+	err := c.Do(ctx, "PATCH", "/api/projects/"+strconv.FormatInt(id, 10), map[string]any{"parent_id": parentID}, &out)
+	return out.Moved, err
 }
 
 // Projects lista os projetos.
@@ -259,12 +298,19 @@ type Scan struct {
 	Plans    []ScanPlan    `json:"plans"`
 	Sessions []ScanSession `json:"sessions"`
 	Cards    []ScanCard    `json:"cards"`
+
+	Suggestions []workspaces.Suggestion `json:"suggestions"`
 }
 
 // ScanProject pede o levantamento só de leitura do projeto.
 func (c *Client) ScanProject(ctx context.Context, id int64) (Scan, error) {
 	var s Scan
 	return s, c.Do(ctx, "GET", "/api/projects/"+strconv.FormatInt(id, 10)+"/scan", nil, &s)
+}
+
+// DismissSuggestions recusa sugestões de sub-projeto (rels relativos à raiz).
+func (c *Client) DismissSuggestions(ctx context.Context, id int64, rels []string) error {
+	return c.Do(ctx, "POST", "/api/projects/"+strconv.FormatInt(id, 10)+"/suggestions/dismiss", map[string][]string{"rels": rels}, nil)
 }
 
 // AddCard cria um card no projeto da sessão sem ligar a sessão a ele.
@@ -298,5 +344,7 @@ func (c *Client) SavePrompt(ctx context.Context, p domain.Prompt) (domain.Prompt
 // AddedProject é a resposta de AddProject: o projeto e as sessões religadas.
 type AddedProject struct {
 	domain.Project
-	Reassigned int `json:"reassigned"`
+	Reassigned  int                     `json:"reassigned"`
+	Moved       Moved                   `json:"moved"`
+	Suggestions []workspaces.Suggestion `json:"suggestions"`
 }

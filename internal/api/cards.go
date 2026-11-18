@@ -42,6 +42,9 @@ func validColumn(c domain.Column) bool {
 	return false
 }
 
+// msgGroupNoCards recusa um grupo (projeto sem pasta) como destino de card.
+const msgGroupNoCards = "um grupo não recebe cards; escolha um dos repositórios"
+
 func (s *server) projectByID(id int64) (*domain.Project, error) {
 	ps, err := s.st.ListProjects()
 	if err != nil {
@@ -53,6 +56,21 @@ func (s *server) projectByID(id int64) (*domain.Project, error) {
 		}
 	}
 	return nil, nil
+}
+
+// projectLabel é o nome exibido do projeto: "pai › filho" num sub-projeto.
+func (s *server) projectLabel(id int64) (string, error) {
+	p, err := s.projectByID(id)
+	if err != nil || p == nil {
+		return "", err
+	}
+	var parent *domain.Project
+	if p.ParentID != nil {
+		if parent, err = s.projectByID(*p.ParentID); err != nil {
+			return "", err
+		}
+	}
+	return store.DisplayName(*p, parent), nil
 }
 
 func (s *server) listCards(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +137,10 @@ func (s *server) createCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "projeto não encontrado")
 		return
 	}
+	if p.Path == "" {
+		writeError(w, http.StatusBadRequest, msgGroupNoCards)
+		return
+	}
 	c, err := s.st.CreateCard(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
 		HowToTest: in.HowToTest, Branch: in.Branch, ProjectID: in.ProjectID})
 	if err != nil {
@@ -152,6 +174,7 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		WhereStopped *string        `json:"where_stopped"`
 		Column       *domain.Column `json:"column"`
 		BlockedBy    *string        `json:"blocked_by"`
+		ProjectID    *int64         `json:"project_id"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -223,6 +246,28 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 	if in.WhereStopped != nil {
 		now := s.now()
 		c.WhereStopped, c.WhereStoppedAt = *in.WhereStopped, &now
+	}
+	if in.ProjectID != nil && *in.ProjectID != c.ProjectID {
+		if dest, err := s.projectByID(*in.ProjectID); err != nil {
+			writeStoreError(w, err, "")
+			return
+		} else if dest != nil && dest.Path == "" {
+			writeError(w, http.StatusBadRequest, msgGroupNoCards)
+			return
+		}
+		err := s.st.SetCardProject(c.ID, *in.ProjectID)
+		switch {
+		case errors.Is(err, store.ErrFamily):
+			writeError(w, http.StatusBadRequest, "o card só pode ir para um projeto da mesma família")
+			return
+		case errors.Is(err, store.ErrNotFound):
+			writeError(w, http.StatusNotFound, "projeto não encontrado")
+			return
+		case err != nil:
+			writeStoreError(w, err, "")
+			return
+		}
+		c.ProjectID = *in.ProjectID
 	}
 	if err := s.st.UpdateCard(c); err != nil {
 		writeStoreError(w, err, msgCardNotFound)

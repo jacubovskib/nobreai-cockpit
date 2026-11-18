@@ -7,7 +7,7 @@ export type Signal = '' | 'parado' | 'aguardando_revisao' | 'aguardando_voce' | 
 
 export interface Health { ok: boolean; version: string }
 
-export interface Project { id: number; name: string; path: string; capture: boolean; base_branch: string }
+export interface Project { id: number; name: string; path: string; capture: boolean; base_branch: string; parent_id: number | null }
 
 export interface Card {
   id: number

@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +12,8 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
 const (
@@ -43,6 +48,8 @@ func (s *server) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/projects/{id}", s.patchProject)
 	mux.HandleFunc("DELETE /api/projects/{id}", s.deleteProject)
 	mux.HandleFunc("GET /api/projects/{id}/scan", s.scanProject)
+	mux.HandleFunc("GET /api/projects/{id}/suggestions", s.suggestions)
+	mux.HandleFunc("POST /api/projects/{id}/suggestions/dismiss", s.dismissSuggestions)
 }
 
 func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
@@ -190,13 +197,44 @@ func (s *server) listProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, nonNil(ps))
 }
 
+// writeProjectError traduz os erros de cadastro: nome ou pasta repetidos
+// viram 409 e as regras de família do store viram 400 com a mensagem da regra.
+func writeProjectError(w http.ResponseWriter, err error, notFound string) {
+	if isConstraint(err, "UNIQUE") {
+		writeError(w, http.StatusConflict, "já existe um projeto com esse caminho")
+		return
+	}
+	writeStoreError(w, err, notFound)
+}
+
 func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name       string `json:"name"`
 		Path       string `json:"path"`
 		BaseBranch string `json:"base_branch"`
+		ParentID   *int64 `json:"parent_id"`
 	}
 	if !readJSON(w, r, &in) {
+		return
+	}
+	// Sem pasta e sem pai é um grupo: projeto principal que só reúne filhos.
+	if in.ParentID == nil && strings.TrimSpace(in.Path) == "" {
+		if strings.TrimSpace(in.Name) == "" {
+			writeError(w, http.StatusBadRequest, "nome obrigatório")
+			return
+		}
+		p, err := s.st.CreateGroup(strings.TrimSpace(in.Name))
+		if err != nil {
+			writeProjectError(w, err, "")
+			return
+		}
+		s.publish("config")
+		writeJSON(w, http.StatusCreated, struct {
+			domain.Project
+			Reassigned  int                     `json:"reassigned"`
+			Moved       store.Moved             `json:"moved"`
+			Suggestions []workspaces.Suggestion `json:"suggestions"`
+		}{p, 0, store.Moved{}, []workspaces.Suggestion{}})
 		return
 	}
 	if !filepath.IsAbs(in.Path) {
@@ -211,27 +249,40 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(in.Name) == "" {
 		in.Name = filepath.Base(in.Path)
 	}
-	p, err := s.st.CreateProject(in.Name, in.Path)
-	if isConstraint(err, "UNIQUE") {
-		writeError(w, http.StatusConflict, "já existe um projeto com esse caminho")
+	var (
+		p     domain.Project
+		moved store.Moved
+		err   error
+	)
+	if in.ParentID != nil {
+		p, moved, err = s.st.CreateChild(in.Name, in.Path, *in.ParentID)
+	} else {
+		p, err = s.st.CreateProject(in.Name, in.Path)
+	}
+	if err != nil {
+		writeProjectError(w, err, "projeto pai não encontrado")
 		return
 	}
+	// A base de um app de monorepo é a do repositório do pai.
+	repo, err := s.st.RepoProject(p)
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
 	}
-	base := strings.TrimSpace(in.BaseBranch)
-	if base == "" {
-		if br := s.branchReader(); br != nil {
-			base = br.DetectBase(p.Path)
+	if repo.ID == p.ID {
+		base := strings.TrimSpace(in.BaseBranch)
+		if base == "" {
+			if br := s.branchReader(); br != nil {
+				base = br.DetectBase(p.Path)
+			}
 		}
-	}
-	if base != "" {
-		if err := s.st.SetProjectBase(p.ID, base); err != nil {
-			writeStoreError(w, err, "")
-			return
+		if base != "" {
+			if err := s.st.SetProjectBase(p.ID, base); err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+			p.BaseBranch = base
 		}
-		p.BaseBranch = base
 	}
 	// A sessão aberta antes do cadastro passa a pertencer ao projeto.
 	n, err := s.st.ReassignSessions(p.ID, p.Path)
@@ -259,10 +310,42 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.publish("config", "sessions", "cards")
+	// Só informativo: falha ao ler os workspaces não desfaz o cadastro.
+	sugg := []workspaces.Suggestion{}
+	if p.ParentID == nil {
+		if x, err := s.openSuggestions(p); err == nil {
+			sugg = x
+		}
+	}
 	writeJSON(w, http.StatusCreated, struct {
 		domain.Project
-		Reassigned int `json:"reassigned"`
-	}{p, n})
+		Reassigned  int                     `json:"reassigned"`
+		Moved       store.Moved             `json:"moved"`
+		Suggestions []workspaces.Suggestion `json:"suggestions"`
+	}{p, n, moved, sugg})
+}
+
+// readPatchBody lê o corpo do PATCH de projeto: aplica os campos em p e devolve
+// os campos presentes (para distinguir "parent_id": null de ausente).
+func readPatchBody(w http.ResponseWriter, r *http.Request, p *domain.Project) (map[string]json.RawMessage, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "JSON inválido: "+err.Error())
+		return nil, false
+	}
+	fields := map[string]json.RawMessage{}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return fields, true
+	}
+	if err := json.Unmarshal(body, p); err != nil {
+		writeError(w, http.StatusBadRequest, "JSON inválido: "+err.Error())
+		return nil, false
+	}
+	if err := json.Unmarshal(body, &fields); err != nil {
+		writeError(w, http.StatusBadRequest, "JSON inválido: "+err.Error())
+		return nil, false
+	}
+	return fields, true
 }
 
 func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
@@ -279,34 +362,72 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return
 	}
-	if !readJSON(w, r, p) {
+	oldBase, oldPath, oldParent := p.BaseBranch, p.Path, p.ParentID
+	repo, err := s.st.RepoProject(*p)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	isApp := repo.ID != p.ID
+	fields, ok := readPatchBody(w, r, p)
+	if !ok {
 		return
 	}
 	p.ID = id
+	p.ParentID = oldParent // o pai muda só por "parent_id", abaixo
+	if isApp {
+		if p.BaseBranch != oldBase {
+			writeError(w, http.StatusBadRequest, "a base de um app é a do projeto principal "+repo.Name)
+			return
+		}
+		p.BaseBranch = oldBase // omitida ou igual: segue a do repositório do pai
+	}
 	if strings.TrimSpace(p.Name) == "" {
 		writeError(w, http.StatusBadRequest, "nome obrigatório")
 		return
 	}
-	if !filepath.IsAbs(p.Path) {
-		writeError(w, http.StatusBadRequest, "caminho do projeto deve ser absoluto")
+	// Grupo (sem pasta) segue sem pasta; senão a pasta é absoluta.
+	if p.Path != "" || oldPath != "" {
+		if !filepath.IsAbs(p.Path) {
+			writeError(w, http.StatusBadRequest, "caminho do projeto deve ser absoluto")
+			return
+		}
+		p.Path = filepath.Clean(p.Path)
+		if homeOrAncestor(p.Path) {
+			writeError(w, http.StatusBadRequest, msgHomeProject)
+			return
+		}
+	}
+	var newParent *int64
+	setParent := false
+	if raw, has := fields["parent_id"]; has {
+		if err := json.Unmarshal(raw, &newParent); err != nil {
+			writeError(w, http.StatusBadRequest, "parent_id inválido")
+			return
+		}
+		setParent = (newParent == nil) != (oldParent == nil) || (newParent != nil && *newParent != *oldParent)
+	}
+	if err := s.st.UpdateProject(*p); err != nil {
+		writeProjectError(w, err, "projeto não encontrado")
 		return
 	}
-	p.Path = filepath.Clean(p.Path)
-	if homeOrAncestor(p.Path) {
-		writeError(w, http.StatusBadRequest, msgHomeProject)
-		return
+	var moved store.Moved
+	if setParent {
+		if moved, err = s.st.SetParent(id, newParent); err != nil {
+			writeProjectError(w, err, "projeto pai não encontrado")
+			return
+		}
 	}
-	err = s.st.UpdateProject(*p)
-	if isConstraint(err, "UNIQUE") {
-		writeError(w, http.StatusConflict, "já existe um projeto com esse caminho")
-		return
-	}
-	if err != nil {
+	fresh, err := s.projectByID(id)
+	if err != nil || fresh == nil {
 		writeStoreError(w, err, "projeto não encontrado")
 		return
 	}
-	s.publish("config")
-	writeJSON(w, http.StatusOK, p)
+	s.publish("config", "sessions", "cards")
+	writeJSON(w, http.StatusOK, struct {
+		domain.Project
+		Moved store.Moved `json:"moved"`
+	}{*fresh, moved})
 }
 
 func (s *server) deleteProject(w http.ResponseWriter, r *http.Request) {

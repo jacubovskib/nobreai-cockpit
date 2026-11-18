@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { useWorktrees } from '../api/queries'
-import { useProjectFilter, useWithProject } from '../app/project'
-import type { ProjectWorktrees, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
+import { useProjects, useWorktrees } from '../api/queries'
+import { displayName, useProjectFilter, useWithProject } from '../app/project'
+import type { Project, ProjectWorktrees, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { StatusBadge } from '../ui/StatusBadge'
 import { formatBytes, formatPct } from '../ui/bytes'
@@ -82,7 +82,8 @@ function OrphanRow({ s }: { s: WorktreeSession }) {
   )
 }
 
-function ProjectSection({ p }: { p: ProjectWorktrees }) {
+function ProjectSection({ p, all }: { p: ProjectWorktrees; all: Project[] }) {
+  const group = p.project.path === ''
   const live = p.worktrees.reduce((n, w) => n + w.sessions.filter((s) => s.live).length, 0)
   const measured = p.worktrees.flatMap((w) => (w.resources?.ready ? [w.resources] : []))
   const cpu = measured.reduce((n, r) => n + machinePct(r), 0)
@@ -91,9 +92,9 @@ function ProjectSection({ p }: { p: ProjectWorktrees }) {
   return (
     <section aria-labelledby={id} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '4px 12px' }}>
-        <h2 id={id} style={{ ...h2, fontSize: 17 }}>{p.project.name}</h2>
-        <span style={{ ...mono, fontSize: 12, color: 'var(--text-2)' }}>{p.project.path}</span>
-        {!p.error && (
+        <h2 id={id} style={{ ...h2, fontSize: 17 }}>{displayName(p.project, all)}</h2>
+        {group ? <span style={muted}>grupo</span> : <span style={{ ...mono, fontSize: 12, color: 'var(--text-2)' }}>{p.project.path}</span>}
+        {!p.error && !group && (
           <span style={muted}>
             {plural(p.worktrees.length, 'worktree', 'worktrees')} · {live} {live === 1 ? 'agente ao vivo' : 'agentes ao vivo'}
             {measured.length > 0 && ` · ${formatPct(cpu)} da CPU · ${formatBytes(mem)} de memória`}
@@ -121,7 +122,8 @@ function ProjectSection({ p }: { p: ProjectWorktrees }) {
 
 export function Worktrees() {
   const { data, isPending, isError } = useWorktrees()
-  const { projectId } = useProjectFilter()
+  const { ids } = useProjectFilter()
+  const projects = useProjects().data
   const location = useLocation()
   const navigate = useNavigate()
   // O aviso (branch mantido) vem no estado do histórico: guarda e limpa o
@@ -133,7 +135,15 @@ export function Worktrees() {
   }, [stateNotice, location.pathname, location.search, navigate])
   if (isError) return <p role="alert" style={{ color: 'var(--err)' }}>Não foi possível carregar os worktrees.</p>
   if (isPending || !data) return <p className="placeholder">Carregando…</p>
-  const shown = data.filter((p) => projectId === null || p.project.id === projectId)
+  // Um app de monorepo não tem worktree próprio: mostra a seção do pai.
+  const sectionIds = ids === null ? null : ids.map((id) => {
+    const p = projects?.find((x) => x.id === id)
+    const parent = p?.parent_id == null ? undefined : projects?.find((x) => x.id === p.parent_id)
+    return parent && parent.path !== '' ? parent.id : id
+  })
+  const shown = data.filter((p) => sectionIds === null || sectionIds.includes(p.project.id))
+  const all = data.map((p) => p.project)
+  const shownIds = new Set(shown.map((p) => p.project.id))
   return (
     <div style={{ maxWidth: 1180, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 28 }}>
       <header style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -149,7 +159,16 @@ export function Worktrees() {
         </p>
       )}
       {data.length > 0 && shown.length === 0 && <p style={{ margin: 0, color: 'var(--text-2)' }}>Nenhum worktree neste projeto.</p>}
-      {shown.map((p) => <ProjectSection key={p.project.id} p={p} />)}
+      {shown.filter((p) => p.project.parent_id == null || !shownIds.has(p.project.parent_id)).map((p) => (
+        <div key={p.project.id} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <ProjectSection p={p} all={all} />
+          {shown.filter((c) => c.project.parent_id === p.project.id).map((c) => (
+            <div key={c.project.id} style={{ marginLeft: 20, paddingLeft: 16, borderLeft: '2px solid var(--border)' }}>
+              <ProjectSection p={c} all={all} />
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   )
 }

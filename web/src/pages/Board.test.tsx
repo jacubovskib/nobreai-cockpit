@@ -80,6 +80,32 @@ describe('Board por projeto', () => {
   })
 })
 
+describe('Board com família', () => {
+  const fam = {
+    '/api/projects': [
+      { id: 1, name: 'loja', path: '/w/loja', capture: true, parent_id: null },
+      { id: 2, name: 'web', path: '/w/loja/web', capture: true, parent_id: 1 },
+    ],
+    '/api/cards': [
+      card({ id: 1, key: 'NAC-1', title: 'Card do pai', project_id: 1 }),
+      card({ id: 2, key: 'NAC-2', title: 'Card do app', project_id: 2 }),
+    ],
+  }
+  it('parent filter shows children cards', async () => {
+    mock(fam)
+    wrap(<Board />, '/board?projeto=1')
+    expect(await screen.findByText('Card do pai')).toBeInTheDocument()
+    expect(screen.getByText('Card do app')).toBeInTheDocument()
+    expect(screen.getByText('loja › web')).toBeInTheDocument()
+  })
+  it('child filter hides parent cards', async () => {
+    mock(fam)
+    wrap(<Board />, '/board?projeto=2')
+    expect(await screen.findByText('Card do app')).toBeInTheDocument()
+    expect(screen.queryByText('Card do pai')).toBeNull()
+  })
+})
+
 describe('Board marcas e sinais', () => {
   it('mostra as marcas do card', async () => {
     mock({

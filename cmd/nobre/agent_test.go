@@ -312,3 +312,26 @@ func TestCLIDoneRefusedNotInProgress(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestCLIApp(t *testing.T) {
+	var body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Write([]byte(`[{"id":1,"name":"loja","path":"/w/loja"},{"id":2,"name":"web","path":"/w/loja/web","parent_id":1}]`))
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		body = strings.TrimSpace(string(b))
+		w.Write([]byte(`{"key":"NAC-1","project_id":2}`))
+	})
+	r := runCLI(t, addr, "", nil, "app", "web")
+	if r.code != 0 || r.stdout != "Card NAC-1 agora em loja › web.\n" || body != `{"app":"web","geral":false}` {
+		t.Fatalf("%+v body=%q", r, body)
+	}
+	if r := runCLI(t, addr, "", nil, "app", "--geral"); r.code != 0 || body != `{"app":"","geral":true}` {
+		t.Fatalf("%+v body=%q", r, body)
+	}
+	if r := runCLI(t, addr, "", nil, "app"); r.code != 2 {
+		t.Fatalf("uso: %+v", r)
+	}
+}

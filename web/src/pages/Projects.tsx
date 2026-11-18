@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from 'react'
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useCards, useProjects, useTotals } from '../api/queries'
 import { Money } from '../ui/Money'
@@ -7,7 +7,8 @@ import { projectColor, useWithProject } from '../app/project'
 import { range } from './analytics/data'
 import { signalText } from './board'
 import { btn, muted, panel } from './card/shared'
-import { buildRows } from './projects'
+import type { Project } from '../api/types'
+import { buildRows, type ProjectRow } from './projects'
 
 const PERIODS = [
   { id: 1, label: 'Hoje' },
@@ -26,6 +27,73 @@ function Count({ n, since, signal }: { n: number; since: string | null; signal: 
       <strong>{n}</strong>
       <span style={{ ...muted, display: 'block' }}>{signalText({ signal, signal_since: since, blocked_by: '' })}</span>
     </span>
+  )
+}
+
+type RowProps = { r: ProjectRow; list: Project[]; max: number; withP: (to: string) => string }
+
+// Uma linha da tabela. label: o que aparece na primeira coluna; sub: linha de app (indentada, sem link).
+function Line({ r, list, max, withP, label, sub, action }: RowProps & { label?: string; sub?: boolean; action?: ReactNode }) {
+  return (
+    <tr style={{ borderTop: '1px solid var(--border)', background: sub ? 'rgba(255,255,255,0.02)' : undefined }}>
+      <td style={{ ...td, paddingLeft: sub ? 32 : 12 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+          {label !== undefined ? (
+            <span style={{ fontSize: 12.5, color: 'var(--text-2)' }}>{label}</span>
+          ) : r.project ? (
+            <Link to={withP(`/projetos/${r.project.id}`)} style={{ color: 'inherit', textDecoration: 'none' }}>
+              <ProjectTag project={r.project} projects={list} />
+            </Link>
+          ) : (
+            <ProjectTag project={null} projects={list} />
+          )}
+          {action}
+        </div>
+      </td>
+      <td style={{ ...td, minWidth: 150 }}>
+        {r.project && !r.project.capture ? (
+          <span style={muted}>captura desligada</span>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <Money usd={r.costUsd} unpriced={r.unpriced && r.costUsd === 0} />
+            <div aria-hidden="true" style={{ height: 6, borderRadius: 3, background: 'var(--border)' }}>
+              <div style={{ height: 6, borderRadius: 3, width: `${(r.costUsd / max) * 100}%`, background: r.project ? projectColor(r.project.id, list) : 'var(--text-2)' }} />
+            </div>
+          </div>
+        )}
+      </td>
+      <td style={td}>
+        {r.current ? (
+          <Link to={withP(`/cards/${r.current.key}`)} style={{ color: 'inherit' }}>
+            <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5 }}>{r.current.key}</span> {r.current.title}
+          </Link>
+        ) : (
+          <span style={muted}>nada em andamento</span>
+        )}
+      </td>
+      <td style={td}><Count n={r.stale.count} since={r.stale.oldest} signal="parado" /></td>
+      <td style={td}><Count n={r.awaiting.count} since={r.awaiting.oldest} signal="aguardando_revisao" /></td>
+      <td style={{ ...td, color: 'var(--text-2)' }}>{r.lastActivity ? dateFmt.format(new Date(r.lastActivity)) : '—'}</td>
+    </tr>
+  )
+}
+
+// Um pai mostra o total da família e abre os apps (e o "geral") sob demanda.
+function FamilyRows(props: RowProps) {
+  const [open, setOpen] = useState(false)
+  const { r } = props
+  if (r.children.length === 0) return <Line {...props} />
+  const toggle = (
+    <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)} style={{ ...btn, minHeight: 28, padding: '0 10px', fontSize: 12.5 }}>
+      {open ? '▾' : '▸'} apps
+    </button>
+  )
+  return (
+    <>
+      <Line {...props} action={toggle} />
+      {open && r.children.map((c) => <Line key={c.project?.id} {...props} r={c} sub label={c.project?.name} />)}
+      {open && r.general && <Line {...props} r={r.general} sub label="geral" />}
+    </>
   )
 }
 
@@ -83,41 +151,7 @@ export function Projects() {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.project?.id ?? 'none'} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={td}>
-                    {r.project ? (
-                      <Link to={withP(`/projetos/${r.project.id}`)} style={{ color: 'inherit', textDecoration: 'none' }}>
-                        <ProjectTag project={r.project} projects={list} />
-                      </Link>
-                    ) : (
-                      <ProjectTag project={null} projects={list} />
-                    )}
-                  </td>
-                  <td style={{ ...td, minWidth: 150 }}>
-                    {r.project && !r.project.capture ? (
-                      <span style={muted}>captura desligada</span>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <Money usd={r.costUsd} unpriced={r.unpriced && r.costUsd === 0} />
-                        <div aria-hidden="true" style={{ height: 6, borderRadius: 3, background: 'var(--border)' }}>
-                          <div style={{ height: 6, borderRadius: 3, width: `${(r.costUsd / max) * 100}%`, background: r.project ? projectColor(r.project.id, list) : 'var(--text-2)' }} />
-                        </div>
-                      </div>
-                    )}
-                  </td>
-                  <td style={td}>
-                    {r.current ? (
-                      <Link to={withP(`/cards/${r.current.key}`)} style={{ color: 'inherit' }}>
-                        <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5 }}>{r.current.key}</span> {r.current.title}
-                      </Link>
-                    ) : (
-                      <span style={muted}>nada em andamento</span>
-                    )}
-                  </td>
-                  <td style={td}><Count n={r.stale.count} since={r.stale.oldest} signal="parado" /></td>
-                  <td style={td}><Count n={r.awaiting.count} since={r.awaiting.oldest} signal="aguardando_revisao" /></td>
-                  <td style={{ ...td, color: 'var(--text-2)' }}>{r.lastActivity ? dateFmt.format(new Date(r.lastActivity)) : '—'}</td>
-                </tr>
+                <FamilyRows key={r.project?.id ?? 'none'} r={r} list={list} max={max} withP={withP} />
               ))}
             </tbody>
           </table>

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useHealth, useProjects, useSettings } from '../api/queries'
+import type { Project } from '../api/types'
 import { useProjectFilter, withProject } from './project'
 import { useStream } from '../api/useStream'
 import { CurrencyContext } from '../ui/money'
@@ -73,6 +74,16 @@ function DaemonStatus() {
   )
 }
 
+// Raízes por id, cada uma seguida dos filhos por nome (indentados no seletor).
+function projectTree(list: Project[]): { project: Project; child: boolean }[] {
+  const ids = new Set(list.map((p) => p.id))
+  const roots = list.filter((p) => p.parent_id == null || !ids.has(p.parent_id)).sort((a, b) => a.id - b.id)
+  return roots.flatMap((r) => [
+    { project: r, child: false },
+    ...list.filter((p) => p.parent_id === r.id).sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({ project: p, child: true })),
+  ])
+}
+
 export function Layout() {
   useStream()
   const settings = useSettings()
@@ -103,8 +114,8 @@ export function Layout() {
             style={{ width: '100%', minHeight: 44, padding: '0 10px', borderRadius: 8, border: '1px solid #2E333E', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' }}
           >
             <option value="">Todos os projetos</option>
-            {[...(projects.data ?? [])].sort((a, b) => a.id - b.id).map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+            {projectTree(projects.data ?? []).map(({ project: p, child }) => (
+              <option key={p.id} value={p.id}>{child ? `\u00a0\u00a0\u00a0${p.name}` : p.name}</option>
             ))}
           </select>
         </div>

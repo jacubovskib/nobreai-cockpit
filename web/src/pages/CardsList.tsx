@@ -10,11 +10,11 @@ import { useProjectFilter, useWithProject } from '../app/project'
 export function CardsList() {
   const withP = useWithProject()
   const { data, isPending, isError } = useCards()
-  const { projectId } = useProjectFilter()
+  const { ids } = useProjectFilter()
   const projects = useProjects().data ?? []
   const [q, setQ] = useState('')
   const term = q.trim().toLowerCase()
-  const rows = (data ?? []).filter((c) => projectId === null || c.project_id === projectId).filter(
+  const rows = (data ?? []).filter((c) => ids === null || (c.project_id !== null && ids.includes(c.project_id))).filter(
     (c) => !term || c.key.toLowerCase().includes(term) || c.title.toLowerCase().includes(term),
   )
   return (

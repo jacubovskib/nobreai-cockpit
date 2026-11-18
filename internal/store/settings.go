@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
@@ -75,4 +77,30 @@ func (s *Store) PutSettings(st domain.Settings) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// GetKV lê uma chave livre da tabela settings (valor em JSON) para v. Devolve
+// false, sem tocar em v, quando a chave não existe. GetSettings ignora as
+// chaves que não são campos de domain.Settings.
+func (s *Store) GetKV(key string, v any) (bool, error) {
+	var raw string
+	err := s.DB.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, json.Unmarshal([]byte(raw), v)
+}
+
+// PutKV grava (ou troca) uma chave livre da tabela settings como JSON.
+func (s *Store) PutKV(key string, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`INSERT INTO settings(key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(b))
+	return err
 }

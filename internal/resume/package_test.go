@@ -92,3 +92,10 @@ func TestPackageQuestionsShowIDs(t *testing.T) {
 		t.Fatalf("perguntas:\n%s", out)
 	}
 }
+
+func TestBuildInUsesProjectDisplayName(t *testing.T) {
+	out := BuildIn(domain.Card{Key: "NAC-1", Title: "T"}, "loja › web", domain.Content{}, nil, nil, "")
+	if !strings.Contains(out, "loja › web · 0 sessões") {
+		t.Fatalf("cabeçalho sem o nome do app:\n%s", out)
+	}
+}

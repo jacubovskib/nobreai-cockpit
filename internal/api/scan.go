@@ -10,6 +10,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/scan"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
 const (
@@ -50,8 +51,23 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return
 	}
+	if p.Path == "" {
+		writeError(w, http.StatusBadRequest, "grupo não tem repositório; rode o levantamento em cada sub-projeto")
+		return
+	}
+	// App de monorepo: o levantamento roda na pasta do pai.
+	repo, err := s.st.RepoProject(*p)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	family, err := s.st.FamilyIDs(p.ID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
 	now := s.now()
-	res, err := scan.Run(p.Path, board.ProjectBase(s.branchReader(), *p), now)
+	res, err := scan.Run(repo.Path, board.ProjectBase(s.branchReader(), repo), now)
 	var be *scan.BaseError
 	if errors.As(err, &be) {
 		writeError(w, http.StatusConflict, be.Error())
@@ -63,10 +79,10 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	}
 	since := now.AddDate(0, 0, -scanSessionDays)
 	sessions := []scanSession{}
-	ss, err := s.st.ProjectSessionsSince(p.ID, since)
+	ss, err := s.st.ProjectsSessionsSince(family, since)
 	if err == nil {
 		var costs map[string]store.Total
-		costs, err = s.totalsWhere(store.TotalsFilter{GroupBy: "session", From: since, ProjectID: &p.ID})
+		costs, err = s.totalsWhere(store.TotalsFilter{GroupBy: "session", From: since, ProjectIDs: family})
 		for _, x := range ss {
 			if c := costs[x.ID].CostUSD; c > 0 {
 				sessions = append(sessions, scanSession{x.ID, x.StartedAt, x.EndedAt, x.Branch, x.Cwd, c})
@@ -81,7 +97,7 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	if len(sessions) > scanMaxSessions {
 		sessions = sessions[:scanMaxSessions]
 	}
-	cs, err := s.st.ListCards(store.CardFilter{ProjectID: p.ID})
+	cs, err := s.st.ListCards(store.CardFilter{ProjectIDs: family})
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
@@ -90,9 +106,17 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	for _, c := range cs {
 		cards = append(cards, scanCard{c.Key, c.Title, string(c.Column), c.Branch})
 	}
+	sugg := []workspaces.Suggestion{}
+	if p.ParentID == nil { // um nível só: um sub-projeto não recebe sugestões
+		if sugg, err = s.openSuggestions(repo); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, struct {
 		scan.Result
-		Sessions []scanSession `json:"sessions"`
-		Cards    []scanCard    `json:"cards"`
-	}{res, sessions, cards})
+		Sessions    []scanSession           `json:"sessions"`
+		Cards       []scanCard              `json:"cards"`
+		Suggestions []workspaces.Suggestion `json:"suggestions"`
+	}{res, sessions, cards, sugg})
 }

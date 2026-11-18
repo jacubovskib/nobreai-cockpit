@@ -11,10 +11,12 @@ import (
 // CardDetail é o documento de handoff completo de um card.
 type CardDetail struct {
 	domain.Card
-	Content   domain.Content         `json:"content"`
-	Sessions  []SessionWithUsage     `json:"sessions"`
-	Readiness domain.ReadinessResult `json:"readiness"`
-	Totals    store.Total            `json:"totals"`
+	// ProjectName é o nome exibido do projeto ("loja › web" num sub-projeto).
+	ProjectName string                 `json:"project_name"`
+	Content     domain.Content         `json:"content"`
+	Sessions    []SessionWithUsage     `json:"sessions"`
+	Readiness   domain.ReadinessResult `json:"readiness"`
+	Totals      store.Total            `json:"totals"`
 	// Live é a sessão viva dona do card (não encerrada e com processo
 	// existindo); nil se não houver.
 	Live *domain.Session `json:"live"`
@@ -51,6 +53,10 @@ type CardSummary struct {
 // cardDetail carrega conteúdo, sessões (com uso), sessão viva e prontidão do card.
 func (s *server) cardDetail(c domain.Card) (CardDetail, error) {
 	d := CardDetail{Card: c}
+	var err error
+	if d.ProjectName, err = s.projectLabel(c.ProjectID); err != nil {
+		return d, err
+	}
 	ct, err := s.st.CardContent(c.ID)
 	if err != nil {
 		return d, err
