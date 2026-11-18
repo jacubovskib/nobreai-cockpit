@@ -14,11 +14,19 @@ import (
 // Build monta o pacote de retomada em markdown. Seções vazias são omitidas,
 // exceto "Onde parei".
 func Build(c domain.Card, ct domain.Content, sessions []domain.Session, totals []store.Total, diffStat string) string {
+	return BuildIn(c, "", ct, sessions, totals, diffStat)
+}
+
+// BuildIn é o Build com o nome exibido do projeto ("loja › web"), que no
+// cabeçalho substitui o nome da pasta quando não é vazio.
+func BuildIn(c domain.Card, project string, ct domain.Content, sessions []domain.Session, totals []store.Total, diffStat string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s · %s\n", c.Key, c.Title)
 
 	meta := []string{}
-	if repo := repoName(sessions); repo != "" {
+	if project != "" {
+		meta = append(meta, project)
+	} else if repo := repoName(sessions); repo != "" {
 		meta = append(meta, repo)
 	}
 	if c.Branch != "" {

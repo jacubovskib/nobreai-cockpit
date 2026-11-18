@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -42,6 +43,7 @@ func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/todo-done", s.withSessionCard(s.meTodoDone))
 	mux.HandleFunc("POST /api/me/test", s.withSessionCard(s.meTest))
 	mux.HandleFunc("POST /api/me/branch", s.withSessionCard(s.meBranch))
+	mux.HandleFunc("POST /api/me/app", s.withSessionCard(s.meApp))
 	mux.HandleFunc("POST /api/me/done", s.withSessionCard(s.meDone))
 }
 
@@ -358,6 +360,70 @@ func (s *server) meBranch(w http.ResponseWriter, r *http.Request, sess domain.Se
 		return
 	}
 	if _, err := board.SyncCardBranch(s.st, s.branchReader(), c.ID, b); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	s.publish("cards")
+	s.writeCard(w, http.StatusOK, c.Key)
+}
+
+// meApp move o card da sessão para um app (sub-projeto) do monorepo, ou de
+// volta ao projeto principal com geral.
+func (s *server) meApp(w http.ResponseWriter, r *http.Request, sess domain.Session, c domain.Card) {
+	var in struct {
+		App   string `json:"app"`
+		Geral bool   `json:"geral"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	cur, err := s.projectByID(c.ProjectID)
+	if err != nil || cur == nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	repo, err := s.st.RepoProject(*cur)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	kids, err := s.st.Children(repo.ID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	if len(kids) == 0 {
+		writeError(w, http.StatusBadRequest, "este projeto não tem sub-projetos")
+		return
+	}
+	name := strings.TrimSpace(in.App)
+	target := repo.ID
+	switch {
+	case in.Geral && name != "":
+		writeError(w, http.StatusBadRequest, "informe o app ou geral, não os dois")
+		return
+	case in.Geral:
+	case name == "":
+		writeError(w, http.StatusBadRequest, "informe o app ou geral")
+		return
+	default:
+		target = 0
+		for _, k := range kids {
+			if strings.EqualFold(k.Name, name) {
+				target = k.ID
+			}
+		}
+		if target == 0 {
+			names := make([]string, len(kids))
+			for i, k := range kids {
+				names[i] = k.Name
+			}
+			sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("app desconhecido: %s. Apps deste projeto: %s", name, strings.Join(names, ", ")))
+			return
+		}
+	}
+	if err := s.st.SetCardProject(c.ID, target); err != nil {
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}

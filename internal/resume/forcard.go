@@ -24,12 +24,23 @@ func ForCard(st *store.Store, git gitinfo.GitInfo, c domain.Card, exclude string
 	if err != nil {
 		return "", err
 	}
+	projects, err := st.ListProjects()
+	if err != nil {
+		return "", err
+	}
+	label := ""
+	for _, p := range projects {
+		if p.ID != c.ProjectID || p.ParentID == nil {
+			continue
+		}
+		for i := range projects {
+			if projects[i].ID == *p.ParentID {
+				label = store.DisplayName(p, &projects[i])
+			}
+		}
+	}
 	diff := ""
 	if git != nil {
-		projects, err := st.ListProjects()
-		if err != nil {
-			return "", err
-		}
 		since := ""
 		for _, x := range sessions { // ordenadas por início: fica a mais recente
 			if x.ID != exclude {
@@ -42,5 +53,5 @@ func ForCard(st *store.Store, git gitinfo.GitInfo, c domain.Card, exclude string
 			}
 		}
 	}
-	return Build(c, ct, sessions, totals, diff), nil
+	return BuildIn(c, label, ct, sessions, totals, diff), nil
 }

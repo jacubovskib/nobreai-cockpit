@@ -1440,3 +1440,21 @@ func TestMonorepoSessionLocatesOncePerHook(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionStartListsApps(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if strings.Contains(ctx, "Apps deste projeto") {
+		t.Fatalf("projeto solto lista apps:\n%s", ctx)
+	}
+	if _, _, err := e.st.CreateChild("web", "/w/api/apps/web", p.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx = additionalContext(t, e.call(t, "session_start"))
+	for _, want := range []string{"Apps deste projeto: web (apps/web).", "nobre app <nome>", "nobre app --geral"} {
+		if !strings.Contains(ctx, want) {
+			t.Fatalf("contexto sem %q:\n%s", want, ctx)
+		}
+	}
+}

@@ -34,6 +34,9 @@ const askOnlyGuidance = `Só crie card quando o usuário pedir ("crie um card pa
 // commandsGuidance são os comandos nobre para uma sessão com card.
 const commandsGuidance = `Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre block <KEY> quando o card só puder continuar depois de outro, antes de parar; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
 
+// appGuidance ensina o nobre app em projetos com sub-projetos.
+const appGuidance = "Quando o card for de um app só, rode nobre app <nome> ao criar o card ou ao começar a mexer nele; nobre app --geral devolve ao projeto principal."
+
 // guidanceFor são as instruções sem a frase de sessão registrada (o aviso de
 // repositório não cadastrado termina nelas): o critério de criação conforme a
 // opção e os comandos.
@@ -129,6 +132,15 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	if notFound != "" {
 		fmt.Fprintf(&b, "\n\nO card %s não foi encontrado; a sessão segue sem card.", notFound)
 	}
+	if sess.FullCapture {
+		apps, err := a.appsGuidance(sess)
+		if err != nil {
+			return adapter.HookReply{}, err
+		}
+		if apps != "" {
+			b.WriteString("\n\n" + apps)
+		}
+	}
 	if resumed == nil && sess.CardID != nil {
 		c, err := a.st.GetCardByID(*sess.CardID)
 		if err != nil {
@@ -188,6 +200,41 @@ func (a *Adapter) unregisteredRoot(cwd string) string {
 		return ""
 	}
 	return root
+}
+
+// appsGuidance lista os apps (sub-projetos) da família do projeto da sessão e
+// ensina o nobre app; "" quando o projeto não tem sub-projetos.
+func (a *Adapter) appsGuidance(sess domain.Session) (string, error) {
+	if sess.ProjectID == nil {
+		return "", nil
+	}
+	ps, err := a.st.ListProjects()
+	if err != nil {
+		return "", err
+	}
+	for _, p := range ps {
+		if p.ID != *sess.ProjectID {
+			continue
+		}
+		repo, err := a.st.RepoProject(p)
+		if err != nil {
+			return "", err
+		}
+		kids, err := a.st.Children(repo.ID)
+		if err != nil || len(kids) == 0 {
+			return "", err
+		}
+		items := make([]string, len(kids))
+		for i, k := range kids {
+			rel := k.Path
+			if repo.Path != "" {
+				rel = strings.TrimPrefix(rel, strings.TrimRight(repo.Path, "/")+"/")
+			}
+			items[i] = fmt.Sprintf("%s (%s)", k.Name, rel)
+		}
+		return "Apps deste projeto: " + strings.Join(items, ", ") + ".\n" + appGuidance, nil
+	}
+	return "", nil
 }
 
 // pausedCards lista os cards pausados do projeto da sessão (exceto o que

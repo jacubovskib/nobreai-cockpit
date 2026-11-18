@@ -55,6 +55,21 @@ func (s *server) projectByID(id int64) (*domain.Project, error) {
 	return nil, nil
 }
 
+// projectLabel é o nome exibido do projeto: "pai › filho" num sub-projeto.
+func (s *server) projectLabel(id int64) (string, error) {
+	p, err := s.projectByID(id)
+	if err != nil || p == nil {
+		return "", err
+	}
+	var parent *domain.Project
+	if p.ParentID != nil {
+		if parent, err = s.projectByID(*p.ParentID); err != nil {
+			return "", err
+		}
+	}
+	return store.DisplayName(*p, parent), nil
+}
+
 func (s *server) listCards(w http.ResponseWriter, r *http.Request) {
 	var f store.CardFilter
 	if p := r.URL.Query().Get("project"); p != "" {

@@ -75,3 +75,9 @@ func TestPlainNobreCommandReviewBypasses(t *testing.T) {
 		}
 	}
 }
+
+func TestAppIsHandoffCommand(t *testing.T) {
+	if !plainNobreCommand("nobre app web") || !plainNobreCommand("nobre app --geral") {
+		t.Fatal("nobre app deveria passar na pausa por limite")
+	}
+}

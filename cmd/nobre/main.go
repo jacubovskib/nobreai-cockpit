@@ -31,6 +31,7 @@ Agente (use dentro de uma sessão de agente):
   nobre todo done <id>                                    conclui uma pendência
   nobre ask "<pergunta>"                                  registra uma pergunta em aberto
   nobre branch <nome>                                     informa o branch de trabalho do card
+  nobre app <nome> | --geral                              põe o card num app (sub-projeto) do monorepo; --geral volta ao projeto principal
   nobre answer <id> "<resposta>"                          responde uma pergunta do card
   nobre block <KEY> [--why "<motivo>"]                    marca o card que bloqueia este (nobre block --clear remove)
   nobre test "<como testar>"                              registra como testar
@@ -126,6 +127,8 @@ func (c *cli) run(args []string) int {
 		err = c.ask(rest)
 	case "branch":
 		err = c.branch(rest)
+	case "app":
+		err = c.app(rest)
 	case "answer":
 		err = c.answer(rest)
 	case "block":

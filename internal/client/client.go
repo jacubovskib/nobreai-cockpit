@@ -134,8 +134,9 @@ func (c *Client) Hook(ctx context.Context, agent string, call adapter.HookCall) 
 // StatusCard é o card do agente em `nobre status`.
 type StatusCard struct {
 	domain.Card
-	Readiness domain.ReadinessResult `json:"readiness"`
-	Content   domain.Content         `json:"content"`
+	ProjectName string                 `json:"project_name"`
+	Readiness   domain.ReadinessResult `json:"readiness"`
+	Content     domain.Content         `json:"content"`
 }
 
 // Status é a resposta de GET /api/me/status.
@@ -197,6 +198,14 @@ func (c *Client) Block(ctx context.Context, key, why string) (domain.Card, error
 // SetBranch informa o branch de trabalho do card da sessão.
 func (c *Client) SetBranch(ctx context.Context, branch string) error {
 	return c.Do(ctx, "POST", "/api/me/branch", map[string]string{"branch": branch}, nil)
+}
+
+// SetApp move o card da sessão para um app (sub-projeto) ou, com geral, de volta ao projeto principal.
+func (c *Client) SetApp(ctx context.Context, app string, geral bool) (domain.Card, error) {
+	var card domain.Card
+	body := map[string]any{"app": app, "geral": geral}
+	err := c.Do(ctx, "POST", "/api/me/app", body, &card)
+	return card, err
 }
 
 // SetProjectBase grava o branch base de um projeto.
