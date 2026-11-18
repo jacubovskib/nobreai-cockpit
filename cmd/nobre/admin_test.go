@@ -195,11 +195,53 @@ func runProjectCLI(t *testing.T, addr, cwd string, git gitinfo.WorktreeReader, a
 }
 
 func TestCLIProjectAddRefusesNonGit(t *testing.T) {
-	var body, paths []string
-	addr := projectServer(t, `{}`, &body, &paths)
+	var posts []string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			posts = append(posts, r.URL.Path)
+		}
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":"a pasta não é um repositório git nem tem repositórios dentro"}`))
+	})
 	r := runProjectCLI(t, addr, "/w/solto", testRepos, "project", "add")
-	if r.code == 0 || !strings.Contains(r.err, "não é um repositório git") || len(paths) != 0 {
-		t.Fatalf("%+v paths=%v", r, paths)
+	if r.code == 0 || !strings.Contains(r.err, "não é um repositório git") || len(posts) != 0 {
+		t.Fatalf("%+v posts=%v", r, posts)
+	}
+}
+
+func TestProjectAddGroupFolderPrintsSuggestions(t *testing.T) {
+	var batch string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/fs/scan":
+			if r.URL.Query().Get("path") != "/w/grupo" {
+				t.Errorf("path = %q", r.URL.Query().Get("path"))
+			}
+			sg := ""
+			for _, n := range []string{"a", "b", "c", "d", "e", "f", "g"} {
+				sg += `{"path":"/w/grupo/` + n + `","rel":"` + n + `","name":"` + n + `","source":"git","registered":null,"blocked":""},`
+			}
+			sg += `{"path":"/w/grupo/h","rel":"h","name":"h","source":"git","registered":{"id":9,"name":"h"},"blocked":""}`
+			w.Write([]byte(`{"path":"/w/grupo","git":false,"kind":"group","name":"grupo","registered":null,"suggestions":[` + sg + `]}`))
+		case r.URL.Path == "/api/projects/batch" && r.Method == "POST":
+			b, _ := io.ReadAll(r.Body)
+			batch = string(b)
+			w.WriteHeader(201)
+			w.Write([]byte(`{"project":{"id":1,"name":"grupo","path":"/w/grupo","kind":"group"},"children":[],"moved":{"sessions":0,"cards":0}}`))
+		default:
+			t.Errorf("path = %s", r.URL.Path)
+		}
+	})
+	r := runProjectCLI(t, addr, "/w/grupo", testRepos, "project", "add")
+	want := "Grupo grupo cadastrado: /w/grupo\n" +
+		"Sub-projetos sugeridos (liste ao usuário, não cadastre sem ele pedir):\n" +
+		"  a  (git)\n  b  (git)\n  c  (git)\n  d  (git)\n  e  (git)\n" +
+		"  mais 2 na Configuração → Projetos\n"
+	if r.code != 0 || r.stdout != want {
+		t.Fatalf("%+v\nquer %q", r, want)
+	}
+	if !strings.Contains(batch, `"path":"/w/grupo"`) || !strings.Contains(batch, `"children":[]`) {
+		t.Fatalf("batch = %s", batch)
 	}
 }
 

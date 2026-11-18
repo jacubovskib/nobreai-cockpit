@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -109,5 +110,75 @@ func TestSessionStartUnregisteredWithoutAgentCreatesCards(t *testing.T) {
 	}
 	if strings.Contains(ctx, "crie os cards importantes") || strings.Contains(ctx, "quando começar algo que precisa de histórico") {
 		t.Fatalf("contexto manda criar cards: %q", ctx)
+	}
+}
+
+func TestUnregisteredNonGitFolderWithRepos(t *testing.T) {
+	e := newEnv(t)
+	e.realGit()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "api", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", dir)))
+	if !strings.HasPrefix(ctx, unregisteredFolderPhrase) || !strings.Contains(ctx, "nobre project add "+dir) {
+		t.Fatalf("contexto = %q", ctx)
+	}
+	if strings.Contains(ctx, "nobre project scan") {
+		t.Fatalf("grupo não tem levantamento: %q", ctx)
+	}
+
+	// Sem repositórios no primeiro nível: sem aviso.
+	empty, _ := filepath.EvalSymlinks(t.TempDir())
+	if err := os.MkdirAll(filepath.Join(empty, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.call(t, "session_start", with("cwd", empty)); r.Stdout != "" {
+		t.Fatalf("pasta sem repositórios não avisa: %q", r.Stdout)
+	}
+
+	// A home nunca recebe aviso, mesmo com repositórios dentro.
+	t.Setenv("HOME", dir)
+	if r := e.call(t, "session_start", with("cwd", dir)); r.Stdout != "" {
+		t.Fatalf("HOME não avisa: %q", r.Stdout)
+	}
+}
+
+func TestUnregisteredRepoInsideGroupSuggestsPai(t *testing.T) {
+	e := newEnv(t)
+	e.realGit()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := e.st.CreateGroupAt("meus", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	novo := filepath.Join(dir, "novo")
+	if err := os.MkdirAll(novo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", novo, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
+		t.Skipf("git init: %v %s", err, out)
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", novo), with("session_id", "s1")))
+	if !strings.Contains(ctx, "--pai") || !strings.Contains(ctx, registeredPhrase) {
+		t.Fatalf("contexto = %q", ctx)
+	}
+	sess, err := e.st.GetSession("claude:s1")
+	if err != nil || sess.ProjectID == nil || *sess.ProjectID != g.ID {
+		t.Fatalf("sessão = %+v err=%v", sess, err)
+	}
+
+	if err := e.st.PutKV("subproject_dismissed", map[string][]string{strconv.FormatInt(g.ID, 10): {"novo"}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx = additionalContext(t, e.call(t, "session_start", with("cwd", novo), with("session_id", "s2")))
+	if strings.Contains(ctx, "--pai") {
+		t.Fatalf("recusado não avisa: %q", ctx)
 	}
 }

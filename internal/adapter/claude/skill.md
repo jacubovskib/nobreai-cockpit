@@ -52,6 +52,7 @@ Se o usuário não quiser o repositório no board, ele desliga a captura do proj
 - `nobre done`: marca o card como pronto para revisão. Recusa se "Como testar" estiver vazio ou mais antigo que a última edição de arquivo, ou se houver pergunta sem resposta. `nobre done --force` ignora essas recusas; use só depois de registrar o motivo com `nobre note`.
 - `nobre card add "Migrar sessões" --goal "..." --done-when "..." --branch feat/sessoes --where "parei na migration 3" --column pausado`: cria um card sem ligar esta sessão (`--column` aceita `backlog` ou `pausado`).
 - `nobre project scan`: levantamento só de leitura do projeto (inclui os sub-projetos sugeridos; `--nao-sugerir rel,rel` recusa); `nobre project base main`: define o branch base (`nobre project base <branch> [path]`).
+- `nobre project add <pasta>`: numa pasta que não é git e tem repositórios dentro, cadastra um grupo com pasta e lista os repositórios como sub-projetos sugeridos; mostre a lista ao usuário e só cadastre um deles (`nobre project add <repo> --pai <id do grupo>`) se ele pedir.
 - `nobre status`: mostra o card, "Onde parei" e o que falta para o handoff.
 
 ## Como manter o card útil
