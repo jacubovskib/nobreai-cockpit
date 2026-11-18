@@ -132,6 +132,10 @@
   // SaveContext grava saídas (upsert por session_id,item_id), turnos (upsert por
   // session_id,path,turn) e o cursor, numa transação. reset=true apaga antes as
   // linhas de (session_id, path).
+  // Mescla de saídas (tool_use e tool_result podem chegar em leituras diferentes):
+  // - linha nova: tool = COALESCE(NULLIF(tool,''),'?'), key idem;
+  // - conflito: tool/key só mudam se o novo não for vazio; in_tokens só se o novo > 0;
+  //   bytes/tokens/is_error só se o novo tiver Result=true; turn/segment/at ficam os da primeira gravação.
   func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.ToolOutput, turns []usage.ContextTurn, next int64, st usage.ContextState) error
   func (s *Store) ClaudeTranscripts() (map[string]string, error) // session id → transcript_path (agent='claude', path não vazio)
   // adapter
@@ -180,6 +184,8 @@
   - `TestContextCursor_Empty`: sem linha → off 0, `ContextState{LastTurn:-1}`.
   - `TestSaveContext_RoundTrip`: grava 2 turnos + 1 output, cursor devolve off, LastTurn 1, LastMessageID do turno 1, Segment gravado. Linha de `transcript_offsets` já existente (offset de uso 999) mantém `offset` 999.
   - `TestSaveContext_UpsertTurn`: gravar de novo o turno 1 com tokens novos substitui.
+  - `TestSaveContext_KeepCompleted`: registro completo (Result true, bytes 400) seguido de um só de uso (Result false, bytes 0) do mesmo item → bytes/tokens continuam 400/100.
+  - `TestSaveContext_MergeUseAndResult`: grava {item t1, Tool Bash, Key "git status", InTokens 5, Result false, Turn 2}; depois {item t1, Tool "", Key "", Bytes 400, Tokens 100, Result true, Turn 3} → linha única Bash/"git status"/in 5/tokens 100/turn 2. Resultado sozinho de item novo → tool "?" key "?".
   - `TestSaveContext_Reset`: reset=true apaga turnos/saídas antigos do path (não os de outro path da mesma sessão).
   - `TestClaudeTranscripts`: só sessões agent claude com transcript_path.
 

@@ -374,3 +374,11 @@ export interface FsScan {
 
 // POST /api/projects/batch
 export interface BatchResult { project: Project; children: Project[]; moved: { sessions: number; cards: number } }
+
+export interface ContextKey { tool: string; key: string; count: number; tokens: number; in_tokens: number; avg_tokens: number; weight: number }
+export interface ContextSession { session_id: string; card_key: string; card_title: string; started_at: string; peak_context: number; compactions: number; weight: number }
+export interface ContextProject { project_id: number; weight: number; top_tool: string; top_key: string }
+export interface ContextTop { keys: ContextKey[] | null; sessions: ContextSession[] | null; projects: ContextProject[] | null; context_total: number; weight_total: number }
+export interface ContextTurnPoint { turn: number; at: string; tokens: number; after_compact: boolean }
+export interface ContextOutput { tool: string; key: string; tokens: number; in_tokens: number; rereads: number; weight: number; at: string; subagent: boolean }
+export interface ContextDetail { turns: ContextTurnPoint[] | null; top: ContextOutput[] | null }

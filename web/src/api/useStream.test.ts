@@ -62,3 +62,17 @@ describe('prévia do Continuar', () => {
     expect(spy.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0])).toContain('continue-preview')
   })
 })
+
+describe('kind context', () => {
+  it('só usage invalida o contexto; sessions (a cada hook) não', async () => {
+    const { invalidateForKind } = await import('./useStream')
+    const qc = new QueryClient()
+    const spy = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue()
+    const keys = () => spy.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0])
+    invalidateForKind(qc, 'sessions')
+    expect(keys()).not.toContain('context')
+    spy.mockClear()
+    invalidateForKind(qc, 'usage')
+    expect(keys()).toContain('context')
+  })
+})

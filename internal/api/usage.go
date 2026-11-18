@@ -61,6 +61,42 @@ func parseDay(v string) (time.Time, error) {
 	return time.ParseInLocation("2006-01-02", v, time.Local)
 }
 
+// parseScope lê project/exact/from/to da query (mesmas regras e mensagens em
+// todos os endpoints de consumo). Em erro já respondeu e devolve ok=false.
+func (s *server) parseScope(w http.ResponseWriter, r *http.Request) (from, to time.Time, ids []int64, ok bool) {
+	q := r.URL.Query()
+	if v := q.Get("project"); v != "" {
+		id, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "projeto inválido")
+			return
+		}
+		// Um pai soma os filhos; um filho só a si. Id desconhecido não filtra nada.
+		// exact=1 não expande: só o projeto pedido (o "geral" de um principal).
+		ids = []int64{id}
+		if q.Get("exact") != "1" {
+			fam, ferr := s.st.FamilyIDs(id)
+			if ferr != nil {
+				writeStoreError(w, ferr, "")
+				return
+			}
+			if len(fam) > 0 {
+				ids = fam
+			}
+		}
+	}
+	var err error
+	if from, err = parseDay(q.Get("from")); err != nil {
+		writeError(w, http.StatusBadRequest, "data inicial inválida")
+		return
+	}
+	if to, err = parseDay(q.Get("to")); err != nil {
+		writeError(w, http.StatusBadRequest, "data final inválida")
+		return
+	}
+	return from, to, ids, true
+}
+
 // usageTotals: GET /api/usage/totals?from=&to=&group= (padrão group=agent;
 // intervalo [from, to)).
 func (s *server) usageTotals(w http.ResponseWriter, r *http.Request) {
@@ -75,34 +111,8 @@ func (s *server) usageTotals(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agrupamento inválido (use agent, card, session, day_agent, model ou project)")
 		return
 	}
-	var err error
-	if v := q.Get("project"); v != "" {
-		id, perr := strconv.ParseInt(v, 10, 64)
-		if perr != nil {
-			writeError(w, http.StatusBadRequest, "projeto inválido")
-			return
-		}
-		// Um pai soma os filhos; um filho só a si. Id desconhecido não filtra nada.
-		// exact=1 não expande: só o projeto pedido (o "geral" de um principal).
-		ids := []int64{id}
-		if q.Get("exact") != "1" {
-			var ferr error
-			if ids, ferr = s.st.FamilyIDs(id); ferr != nil {
-				writeStoreError(w, ferr, "")
-				return
-			}
-			if len(ids) == 0 {
-				ids = []int64{id}
-			}
-		}
-		f.ProjectIDs = ids
-	}
-	if f.From, err = parseDay(q.Get("from")); err != nil {
-		writeError(w, http.StatusBadRequest, "data inicial inválida")
-		return
-	}
-	if f.To, err = parseDay(q.Get("to")); err != nil {
-		writeError(w, http.StatusBadRequest, "data final inválida")
+	var ok bool
+	if f.From, f.To, f.ProjectIDs, ok = s.parseScope(w, r); !ok {
 		return
 	}
 	ts, err := s.st.Totals(f)

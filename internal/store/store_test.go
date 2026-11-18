@@ -26,7 +26,7 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("foreign_keys = %d, err = %v", fk, err)
 	}
 	var v int
-	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil || v != 13 {
+	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil || v != 14 {
 		t.Fatalf("user_version = %d, err = %v", v, err)
 	}
 }

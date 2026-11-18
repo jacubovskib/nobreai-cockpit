@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { get } from './client'
-import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits } from './types'
+import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits, ContextTop, ContextDetail } from './types'
 
 export const useHealth = () =>
   useQuery({ queryKey: ['health'], queryFn: () => get<Health>('/api/health'), refetchInterval: 15000, retry: false })
@@ -70,3 +70,23 @@ export const useWorktreeDetail = (project: string, path: string) =>
 // A hora relativa ("reinicia em…") muda sem evento: relê a cada minuto.
 export const usePlanLimits = (hours = 24) =>
   useQuery({ queryKey: ['plan', hours], queryFn: () => get<PlanLimits>(`/api/plan-limits?hours=${hours}`), refetchInterval: 60000 })
+
+export const useContextTop = (from?: string, to?: string, project?: number | null, exact = false) =>
+  useQuery({
+    queryKey: ['context', 'top', from ?? '', to ?? '', project ?? null, exact],
+    queryFn: () => {
+      const q = new URLSearchParams()
+      if (from) q.set('from', from)
+      if (to) q.set('to', to)
+      if (project != null) q.set('project', String(project))
+      if (project != null && exact) q.set('exact', '1')
+      return get<ContextTop>(`/api/context/top?${q}`)
+    },
+  })
+
+export const useContextSession = (id: string | null) =>
+  useQuery({
+    queryKey: ['context', 'session', id],
+    queryFn: () => get<ContextDetail>(`/api/context/sessions/${encodeURIComponent(id!)}`),
+    enabled: id !== null,
+  })

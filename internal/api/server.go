@@ -81,6 +81,7 @@ func New(st *store.Store, deps Deps) http.Handler {
 	s.configRoutes(mux)
 	s.promptRoutes(mux)
 	s.usageRoutes(mux)
+	s.contextRoutes(mux)
 	s.overviewRoutes(mux)
 	s.hookRoutes(mux)
 	s.agentRoutes(mux)
