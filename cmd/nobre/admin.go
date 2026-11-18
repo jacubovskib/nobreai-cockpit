@@ -15,6 +15,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/client"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
 func (c *cli) project(args []string) error {
@@ -144,8 +145,10 @@ func (c *cli) addGroupFolder(name, path string) error {
 	notGit := fmt.Errorf("%s não é um repositório git: o NobreAI Cockpit só cadastra repositórios git", path)
 	scan, err := c.client().ScanFolder(ctx(), path)
 	if err != nil {
+		// Só a recusa de "sem repositórios" vira a mensagem de não git; as
+		// outras (a home, fora da home) chegam como o daemon as escreveu.
 		var ae *client.APIError
-		if errors.As(err, &ae) && ae.Status == http.StatusBadRequest {
+		if errors.As(err, &ae) && ae.Status == http.StatusBadRequest && ae.Message == workspaces.MsgNoRepos {
 			return notGit
 		}
 		return err
@@ -320,7 +323,7 @@ func (c *cli) projectPai(u string, args []string) error {
 	return nil
 }
 
-// findProjectRef acha o projeto por id, por nome (grupos não têm pasta) ou,
+// findProjectRef acha o projeto por id, por nome (grupo, com ou sem pasta) ou,
 // como findProject, pela pasta.
 func (c *cli) findProjectRef(arg string) (*domain.Project, error) {
 	ps, err := c.client().Projects(ctx())
@@ -336,7 +339,7 @@ func (c *cli) findProjectRef(arg string) (*domain.Project, error) {
 		return nil, fmt.Errorf("projeto %d não encontrado", id)
 	}
 	for i := range ps {
-		if ps[i].ParentID == nil && ps[i].Path == "" && strings.EqualFold(ps[i].Name, arg) {
+		if ps[i].ParentID == nil && ps[i].IsGroup() && strings.EqualFold(ps[i].Name, arg) {
 			return &ps[i], nil
 		}
 	}

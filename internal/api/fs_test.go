@@ -201,3 +201,16 @@ func TestFsScanEmptyFolder400(t *testing.T) {
 		t.Fatalf("scan vazia = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// A home não pode ser cadastrada: a varredura dela responde a mesma mensagem
+// do cadastro, sem varrer.
+func TestFsScanHomeRefused(t *testing.T) {
+	a, home := fsAPI(t)
+	mkdirs(t, home, "api/.git")
+	for _, q := range []string{"", "?path=" + url.QueryEscape(home)} {
+		rec := a.do(t, "GET", "/api/fs/scan"+q, nil, 0)
+		if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != msgHomeProject {
+			t.Fatalf("scan %q = %d %s", q, rec.Code, rec.Body)
+		}
+	}
+}

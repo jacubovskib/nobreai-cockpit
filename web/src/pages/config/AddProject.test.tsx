@@ -12,9 +12,13 @@ const scan = (o: object = {}) => ({
   ...o,
 })
 
+// Fail é uma rota que responde erro com a mensagem do daemon.
+class Fail { constructor(readonly status: number, readonly error: string) {} }
+
 function mock(routes: Record<string, unknown>) {
   const fn = vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
     const r = routes[`${init?.method ?? 'GET'} ${url}`]
+    if (r instanceof Fail) return new Response(JSON.stringify({ error: r.error }), { status: r.status })
     return r === undefined ? new Response('{"error":"x"}', { status: 404 }) : new Response(JSON.stringify(r), { status: 200 })
   })
   vi.stubGlobal('fetch', fn)
@@ -36,6 +40,16 @@ describe('AddProject', () => {
     const a = await screen.findByRole('button', { name: /^a\// })
     expect(within(a).getByText('git')).toBeInTheDocument()
     expect(within(screen.getByRole('navigation', { name: 'Caminho da pasta' })).getByRole('button', { name: 'bravonix' })).toBeInTheDocument()
+  })
+
+  it('shows the daemon message when the chosen folder is the home', async () => {
+    const msg = 'a pasta pessoal, a raiz e as pastas acima da pessoal não podem ser cadastradas como projeto'
+    mock({ 'GET /api/fs/dirs': home, 'GET /api/fs/scan?path=%2Fh%2Fw': new Fail(400, msg) })
+    open()
+    await screen.findByRole('button', { name: /bravonix/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Usar esta pasta' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(msg)
+    expect(screen.queryByRole('button', { name: 'Cadastrar' })).not.toBeInTheDocument()
   })
 
   it('scan of a group folder lists suggestions checked and blocked disabled', async () => {

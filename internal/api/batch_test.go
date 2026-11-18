@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -308,5 +309,84 @@ func TestGroupCardRefusesBranch(t *testing.T) {
 	rec := a.do(t, "POST", "/api/cards", map[string]any{"title": "x", "project_id": g.ID, "branch": "feat/x"}, 0)
 	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "grupo não tem branch" {
 		t.Fatalf("card = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Grupo com a captura desligada funciona como "ignorar": cadastrar de novo não
+// adota as sessões soltas na pasta dele (como o hook, que não as liga).
+func TestBatchSkipsAdoptionWhenCaptureOff(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "a")
+	rec := a.do(t, "POST", "/api/projects/batch", map[string]any{"path": dir}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
+	}
+	g := decode[batchResp](t, rec).Project
+	a.patchCapture(t, g, false)
+	a.startSess(t, "claude:docs", dir+"/docs", nil, false)
+	rec = a.do(t, "POST", "/api/projects/batch", map[string]any{"path": dir}, 0)
+	if rec.Code != http.StatusOK || decode[batchResp](t, rec).Moved.Sessions != 0 {
+		t.Fatalf("batch 2 = %d %s", rec.Code, rec.Body)
+	}
+	if pid, capture := a.owner(t, "claude:docs"); pid != nil || capture {
+		t.Fatalf("sessão adotada com a captura desligada: %v %v", pid, capture)
+	}
+}
+
+// O cadastro pela tela também adota as sessões em worktrees ligados fora da
+// pasta do repositório, como o POST /api/projects fazia; no monorepo cada uma
+// vai para o app do mesmo lugar no checkout principal.
+func TestBatchAdoptsLinkedWorktreeSessions(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "apps/web")
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wt, other := t.TempDir(), t.TempDir()
+	g := &locGit{fakeGit: &fakeGit{branch: "feat/x"}, mains: map[string]string{wt: dir, other: "/r/outro"}}
+	a.h = New(a.st, Deps{Now: func() time.Time { return testNow }, Hub: a.hub, Git: g})
+	a.startLinkedSess(t, "claude:raiz", wt, wt)
+	a.startLinkedSess(t, "claude:web", wt+"/apps/web/src", wt)
+	a.startLinkedSess(t, "claude:outro", other, other)
+	rec := a.do(t, "POST", "/api/projects/batch", map[string]any{"path": dir, "children": []map[string]string{{"path": dir + "/apps/web"}}}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[batchResp](t, rec)
+	if got.Moved.Sessions != 2 {
+		t.Fatalf("moved = %+v", got.Moved)
+	}
+	if pid, capture := a.owner(t, "claude:raiz"); pid == nil || *pid != got.Project.ID || !capture {
+		t.Fatalf("raiz = %v %v", pid, capture)
+	}
+	if pid, _ := a.owner(t, "claude:web"); pid == nil || *pid != got.Children[0].ID {
+		t.Fatalf("web = %v", pid)
+	}
+	if pid, _ := a.owner(t, "claude:outro"); pid != nil {
+		t.Fatalf("outro = %v", pid)
+	}
+}
+
+// Card com branch que vai para o grupo perde o branch: card de grupo nunca tem.
+func TestPatchCardIntoGroupClearsBranch(t *testing.T) {
+	a := newTestAPI(t)
+	g := groupWithFolder(t, a)
+	kid, _, err := a.st.CreateChild("a", g.Path+"/a", g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: kid.ID, Branch: "feat/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "PATCH", "/api/cards/"+c.Key, map[string]any{"project_id": g.ID}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch = %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[domain.Card](t, rec); got.ProjectID != g.ID || got.Branch != "" {
+		t.Fatalf("card = %+v", got)
+	}
+	if got, _ := a.st.GetCardByID(c.ID); got.Branch != "" {
+		t.Fatalf("branch gravado = %q", got.Branch)
 	}
 }

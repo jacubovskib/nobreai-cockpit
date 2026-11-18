@@ -518,3 +518,10 @@ func (s *Store) UnassignedSessionsUnder(root string) ([]domain.Session, error) {
 		WHERE project_id IS NULL AND (cwd=? OR substr(cwd, 1, ?)=?) ORDER BY julianday(started_at), id`,
 		root, utf8.RuneCountInString(prefix), prefix)
 }
+
+// UnassignedLinkedSessions lista as sessões sem projeto (vivas e encerradas)
+// que rodam num worktree ligado, na ordem em que começaram.
+func (s *Store) UnassignedLinkedSessions() ([]domain.Session, error) {
+	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
+		WHERE project_id IS NULL AND worktree_linked=1 AND worktree<>'' ORDER BY julianday(started_at), id`)
+}

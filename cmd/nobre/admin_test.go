@@ -386,7 +386,7 @@ func TestCLIProjectGrupoAndAddPai(t *testing.T) {
 			w.WriteHeader(201)
 			w.Write([]byte(`{"id":7,"name":"loja","path":"","moved":{"sessions":2,"cards":0}}`))
 		case r.URL.Path == "/api/projects":
-			w.Write([]byte(`[{"id":7,"name":"loja","path":"","capture":true}]`))
+			w.Write([]byte(`[{"id":7,"name":"loja","path":"","capture":true,"kind":"group"}]`))
 		default:
 			t.Errorf("%s %s", r.Method, r.URL.Path)
 		}
@@ -431,6 +431,41 @@ func TestCLIProjectPaiUnknownNumericIDIsNotAPath(t *testing.T) {
 	})
 	r := runProjectCLI(t, addr, "/r", testRepos, "project", "pai", "99", "1")
 	if r.code == 0 || !strings.Contains(r.err, "projeto 99 não encontrado") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// --pai pelo nome acha o grupo com pasta (o kind manda, não a pasta vazia).
+func TestCLIProjectAddPaiByNameFindsGroupWithFolder(t *testing.T) {
+	var bodies []string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/projects":
+			bodies = append(bodies, string(b))
+			w.WriteHeader(201)
+			w.Write([]byte(`{"id":8,"name":"api","path":"/w/api","moved":{"sessions":0,"cards":0}}`))
+		case r.URL.Path == "/api/projects":
+			w.Write([]byte(`[{"id":7,"name":"bravonix","path":"/w/bravonix","capture":true,"kind":"group"}]`))
+		default:
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+	})
+	r := runProjectCLI(t, addr, "/w/api", testRepos, "project", "add", "--pai", "bravonix")
+	if r.code != 0 || len(bodies) != 1 || !strings.Contains(bodies[0], `"parent_id":7`) {
+		t.Fatalf("add --pai: %+v corpos=%v", r, bodies)
+	}
+}
+
+// Recusa da varredura por outro motivo (a home, fora da home): a CLI mostra a
+// mensagem do daemon, não "não é um repositório git".
+func TestProjectAddGroupFolderPrintsServerRefusal(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":"pasta fora da home do usuário"}`))
+	})
+	r := runProjectCLI(t, addr, "/w/solto", testRepos, "project", "add")
+	if r.code == 0 || !strings.Contains(r.err, "pasta fora da home do usuário") || strings.Contains(r.err, "não é um repositório git") {
 		t.Fatalf("%+v", r)
 	}
 }

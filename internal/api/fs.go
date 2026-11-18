@@ -18,7 +18,7 @@ import (
 const (
 	msgOutsideHome = "pasta fora da home do usuário"
 	msgNotDir      = "não é uma pasta"
-	msgNothingHere = "a pasta não é um repositório git nem tem repositórios dentro"
+	msgNothingHere = workspaces.MsgNoRepos
 )
 
 func (s *server) fsRoutes(mux *http.ServeMux) {
@@ -157,10 +157,15 @@ func (s *server) dismissedFor(id int64) (map[string]bool, error) {
 }
 
 // fsScan: GET /api/fs/scan?path=, o que a pasta é (repositório, monorepo ou
-// grupo de repositórios) e as sugestões de sub-projetos dentro dela.
+// grupo de repositórios) e as sugestões de sub-projetos dentro dela. A home
+// não pode ser cadastrada: responde a recusa do cadastro, sem varrer.
 func (s *server) fsScan(w http.ResponseWriter, r *http.Request) {
-	real, _, ok := s.resolveDir(w, r)
+	real, home, ok := s.resolveDir(w, r)
 	if !ok {
+		return
+	}
+	if real == home {
+		writeError(w, http.StatusBadRequest, msgHomeProject)
 		return
 	}
 	git := isGitDir(real)

@@ -7,11 +7,33 @@ import (
 	"strings"
 )
 
+// MsgNoRepos é a recusa da varredura de uma pasta que não é git e não tem
+// repositórios dentro (o daemon responde, a CLI reconhece).
+const MsgNoRepos = "a pasta não é um repositório git nem tem repositórios dentro"
+
 // scanDepth é quantos níveis abaixo da raiz a varredura de repositórios olha.
 const scanDepth = 2
 
 var skipDirs = map[string]bool{
 	"node_modules": true, "vendor": true, "dist": true, "build": true, "target": true,
+}
+
+// SkipDir diz se a varredura pula a pasta name: oculta ou de dependências/build.
+func SkipDir(name string) bool { return strings.HasPrefix(name, ".") || skipDirs[name] }
+
+// InScan diz se a pasta rel (relativa à raiz da varredura) está ao alcance de
+// ScanRepos: até 2 níveis e nenhuma pasta do caminho que a varredura pula.
+func InScan(rel string) bool {
+	segs := strings.Split(filepath.ToSlash(rel), "/")
+	if len(segs) > scanDepth {
+		return false
+	}
+	for _, s := range segs {
+		if s == "" || SkipDir(s) {
+			return false
+		}
+	}
+	return true
 }
 
 // ScanRepos procura repositórios git até 2 níveis abaixo de root. Uma pasta
@@ -39,7 +61,7 @@ func scanRepos(root, rel string, depth int, out *[]Suggestion) error {
 	for _, e := range entries {
 		name := e.Name()
 		// DirEntry.IsDir é falso para symlink: não seguimos.
-		if !e.IsDir() || strings.HasPrefix(name, ".") || skipDirs[name] {
+		if !e.IsDir() || SkipDir(name) {
 			continue
 		}
 		sub := filepath.ToSlash(filepath.Join(rel, name))

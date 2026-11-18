@@ -48,3 +48,14 @@ func TestScanReposSkips(t *testing.T) {
 		t.Fatalf("rels = %v, quer %v", rels(got), want)
 	}
 }
+
+func TestInScanMatchesScanRepos(t *testing.T) {
+	for rel, want := range map[string]bool{
+		"a": true, "a/b": true, "a/b/c": false, ".projects": false, ".projects/x": false,
+		"node_modules/y": false, "a/vendor": false, "a/.worktrees": false, "": false, "..": false, "../x": false,
+	} {
+		if got := InScan(rel); got != want {
+			t.Errorf("InScan(%q) = %v, quer %v", rel, got, want)
+		}
+	}
+}

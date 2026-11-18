@@ -125,8 +125,9 @@ func (s *server) detectBase(p *domain.Project, br gitinfo.BranchReader) {
 }
 
 // adoptRootSessions adota as sessões sem projeto (vivas e encerradas) cuja
-// pasta fica dentro do principal e cujo dono, pela regra do hook, é um
-// membro da família. Devolve quantas foram adotadas.
+// pasta fica dentro do principal, ou num worktree ligado fora dela, e cujo
+// dono, pela regra do hook, é um membro da família com captura ligada.
+// Devolve quantas foram adotadas.
 func (s *server) adoptRootSessions(root domain.Project) (int, error) {
 	if root.Path == "" {
 		return 0, nil
@@ -143,14 +144,32 @@ func (s *server) adoptRootSessions(root domain.Project) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	wr, _ := s.deps.Git.(gitinfo.WorktreeReader)
+	var wr gitinfo.WorktreeReader
+	if g, ok := s.deps.Git.(gitinfo.WorktreeReader); ok {
+		// Um Locate por worktree, não por sessão.
+		wr = &locateCache{WorktreeReader: g, seen: map[string]gitinfo.Location{}}
+		linked, err := s.st.UnassignedLinkedSessions()
+		if err != nil {
+			return 0, err
+		}
+		under := map[string]bool{}
+		for _, x := range sessions {
+			under[x.ID] = true
+		}
+		for _, x := range linked {
+			if !under[x.ID] {
+				sessions = append(sessions, x)
+			}
+		}
+	}
 	n := 0
 	for _, x := range sessions {
 		owner, err := s.sessionOwner(wr, x)
 		if err != nil {
 			return n, err
 		}
-		if owner == nil || !inFam[owner.ID] {
+		// Captura desligada funciona como "ignorar", como no hook.
+		if owner == nil || !owner.Capture || !inFam[owner.ID] {
 			continue
 		}
 		if err := s.st.AdoptSession(x.ID, owner.ID); err != nil {
@@ -159,4 +178,19 @@ func (s *server) adoptRootSessions(root domain.Project) (int, error) {
 		n++
 	}
 	return n, nil
+}
+
+// locateCache guarda o Locate de cada pasta durante uma adoção.
+type locateCache struct {
+	gitinfo.WorktreeReader
+	seen map[string]gitinfo.Location
+}
+
+func (c *locateCache) Locate(dir string) gitinfo.Location {
+	if l, ok := c.seen[dir]; ok {
+		return l
+	}
+	l := c.WorktreeReader.Locate(dir)
+	c.seen[dir] = l
+	return l
 }

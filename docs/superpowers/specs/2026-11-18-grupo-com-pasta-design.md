@@ -109,7 +109,7 @@ Um repositório já cadastrado como projeto solto aparece na lista com "já cada
 ### CLI e agente
 
 - `nobre project add <pasta>`: se a pasta não é git e a varredura acha repositórios, cadastra como grupo com pasta e imprime "Sub-projetos sugeridos" (até 5 mais "mais N na Configuração → Projetos"). Se a pasta não é git e não tem repositórios, recusa como hoje.
-- `SessionStart` numa pasta que não é git: se o próprio cwd (nunca a home) tem repositórios no primeiro nível e não está cadastrado, a sessão recebe o aviso de não cadastrado com essa pasta, como acontece hoje com repositórios. A skill diz para cadastrar só a pasta e listar as sugestões ao usuário.
+- `SessionStart` numa pasta que não é git: se o próprio cwd (nunca a home) tem repositórios no primeiro nível, não está cadastrado e não contém nenhum projeto ou grupo cadastrado (por isso `~/workspace` não recebe), a sessão recebe o aviso de pasta não cadastrada. Ao contrário do aviso de repositório, o agente pergunta ao usuário antes de cadastrar a pasta como grupo; se ele aceitar, cadastra só a pasta e lista as sugestões ao usuário.
 
 ## O que fica para o construtor
 
