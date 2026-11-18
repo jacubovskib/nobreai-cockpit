@@ -93,7 +93,7 @@ func TestContextByProjectAndTotals(t *testing.T) {
 		t.Fatalf("got=%+v err=%v", got, err)
 	}
 	// p1: (10+50)*2=120, top Read .go; p2: 10*1=10.
-	if got[0].ProjectID != p1.ID || got[0].Weight != 120 || got[0].TopKey != "Read .go" || got[1].ProjectID != p2.ID || got[1].Weight != 10 {
+	if got[0].ProjectID != p1.ID || got[0].Weight != 120 || got[0].TopKey != "Read .go" || got[0].TopTool != "Read" || got[1].ProjectID != p2.ID || got[1].Weight != 10 {
 		t.Fatalf("got=%+v", got)
 	}
 	tot, err := s.ContextTotals(ContextFilter{})
@@ -194,7 +194,7 @@ func TestContextSessionDetail(t *testing.T) {
 	ctxSession(t, s, "s1", nil, nil)
 	save(t, s, "s1", "/main", []usage.ToolOutput{ctxOut("1", "Bash", "ls", 10, 0, 0, 0), ctxOut("2", "Bash", "go test", 5, 0, 0, 0)},
 		append(append(ctxTurns(0, 0, 1), ctxTurns(1, 2, 3)...), ctxTurns(2, 4, 4)...))
-	save(t, s, "s1", "/sub", []usage.ToolOutput{ctxOut("3", "Agent", "Agent geral", 1000, 0, 0, 0)}, ctxTurns(0, 0, 3))
+	save(t, s, "s1", "/sub", []usage.ToolOutput{ctxOut("3", "Agent", "Agent geral", 1000, 40, 0, 0)}, ctxTurns(0, 0, 3))
 	turns, top, err := s.ContextSessionDetail("s1", 2)
 	if err != nil || len(turns) != 5 {
 		t.Fatalf("turns=%+v err=%v", turns, err)
@@ -204,7 +204,7 @@ func TestContextSessionDetail(t *testing.T) {
 			t.Fatalf("turns[%d]=%+v", i, tp)
 		}
 	}
-	if len(top) != 2 || top[0].Key != "Agent geral" || !top[0].Subagent || top[0].Rereads != 3 || top[1].Subagent {
+	if len(top) != 2 || top[0].Key != "Agent geral" || !top[0].Subagent || top[0].Rereads != 3 || top[0].InTokens != 40 || top[0].Weight != 3120 || top[1].Subagent {
 		t.Fatalf("top=%+v", top)
 	}
 	if _, _, err := s.ContextSessionDetail("nada", 5); !errors.Is(err, ErrNotFound) {

@@ -117,3 +117,27 @@ func TestContextTop_Empty(t *testing.T) {
 		t.Fatalf("vazio = %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestContextTop_KeepsHookKeysBelowCutoff(t *testing.T) {
+	a := newTestAPI(t)
+	p, _ := a.st.CreateProject("loja", "/r/loja")
+	pid := p.ID
+	if err := a.st.StartSession(domain.Session{ID: "s", Agent: "claude", PID: 1, Cwd: "/w", ProjectID: &pid,
+		TranscriptPath: "/main", StartedAt: testNow, LastEventAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	var outs []usage.ToolOutput
+	for i := 0; i < 33; i++ {
+		outs = append(outs, usage.ToolOutput{ItemID: "o" + itoa(int64(i)), Tool: "Read", Key: "Read f" + itoa(int64(i)),
+			Tokens: int64(1000 - i), Turn: 0, At: testNow, Result: true})
+	}
+	outs = append(outs, usage.ToolOutput{ItemID: "h", Tool: "hook", Key: "SessionStart · cockpit", Tokens: 1, Turn: 0, At: testNow, Result: true})
+	turns := []usage.ContextTurn{{Turn: 0, MessageID: "m0", At: testNow, Tokens: 100}, {Turn: 1, MessageID: "m1", At: testNow.Add(time.Minute), Tokens: 200}}
+	if err := a.st.SaveContext("s", "/main", false, outs, turns, 1, usage.ContextState{LastTurn: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got := decode[ctxTop](t, a.do(t, "GET", "/api/context/top", nil, 0))
+	if len(got.Keys) != 31 || got.Keys[29].Key != "Read f29" || got.Keys[30].Tool != "hook" {
+		t.Fatalf("keys = %d, last = %+v", len(got.Keys), got.Keys[len(got.Keys)-1])
+	}
+}

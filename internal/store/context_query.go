@@ -29,6 +29,7 @@ type ContextKey struct {
 type ContextProject struct {
 	ProjectID int64  `json:"project_id"`
 	Weight    int64  `json:"weight"`
+	TopTool   string `json:"top_tool"`
 	TopKey    string `json:"top_key"` // chave de maior peso no projeto
 }
 
@@ -51,6 +52,7 @@ type ContextOutput struct {
 	Tool     string `json:"tool"`
 	Key      string `json:"key"`
 	Tokens   int64  `json:"tokens"`
+	InTokens int64  `json:"in_tokens"`
 	Rereads  int64  `json:"rereads"`
 	Weight   int64  `json:"weight"`
 	At       string `json:"at"`
@@ -174,7 +176,7 @@ func (s *Store) ContextTopSessions(f ContextFilter, limit int) ([]ContextSession
 // ContextByProject soma o peso por projeto e acha a chave mais pesada de cada
 // um. Sessões sem projeto ficam de fora.
 func (s *Store) ContextByProject(f ContextFilter) ([]ContextProject, error) {
-	q, args := f.outsQuery(`SELECT project_id, key, SUM(weight)`,
+	q, args := f.outsQuery(`SELECT project_id, tool, key, SUM(weight)`,
 		`WHERE project_id IS NOT NULL GROUP BY project_id, tool, key ORDER BY project_id, SUM(weight) DESC, tool, key`)
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {
@@ -185,15 +187,15 @@ func (s *Store) ContextByProject(f ContextFilter) ([]ContextProject, error) {
 	idx := map[int64]int{}
 	for rows.Next() {
 		var pid, w int64
-		var key string
-		if err := rows.Scan(&pid, &key, &w); err != nil {
+		var tool, key string
+		if err := rows.Scan(&pid, &tool, &key, &w); err != nil {
 			return nil, err
 		}
 		i, ok := idx[pid]
 		if !ok {
 			// A primeira (tool, key) do projeto é a de maior peso (ordem da consulta).
 			idx[pid] = len(out)
-			out = append(out, ContextProject{ProjectID: pid, TopKey: key})
+			out = append(out, ContextProject{ProjectID: pid, TopTool: tool, TopKey: key})
 			i = len(out) - 1
 		}
 		out[i].Weight += w
@@ -258,7 +260,7 @@ func (s *Store) ContextSessionDetail(sessionID string, limit int) (turns []Conte
 	}
 
 	orows, err := s.DB.Query(ctxOutputsCTE(` WHERE o.session_id = ?`)+`
-		SELECT tool, key, tokens, rereads, weight, at, path <> transcript_path FROM outs
+		SELECT tool, key, tokens, in_tokens, rereads, weight, at, path <> transcript_path FROM outs
 		ORDER BY weight DESC, tokens DESC, at LIMIT ?`, sessionID, sqlLimit(limit))
 	if err != nil {
 		return nil, nil, err
@@ -266,7 +268,7 @@ func (s *Store) ContextSessionDetail(sessionID string, limit int) (turns []Conte
 	defer orows.Close()
 	for orows.Next() {
 		var o ContextOutput
-		if err := orows.Scan(&o.Tool, &o.Key, &o.Tokens, &o.Rereads, &o.Weight, &o.At, &o.Subagent); err != nil {
+		if err := orows.Scan(&o.Tool, &o.Key, &o.Tokens, &o.InTokens, &o.Rereads, &o.Weight, &o.At, &o.Subagent); err != nil {
 			return nil, nil, err
 		}
 		top = append(top, o)

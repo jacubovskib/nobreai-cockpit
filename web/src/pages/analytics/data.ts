@@ -66,3 +66,12 @@ export function niceMax(max: number) {
   const nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10
   return nice * pow * 4
 }
+
+// contextLabel: rótulo único de uma chave de contexto. A chave de Bash é o
+// comando; a de hook vem sem prefixo; nas demais a chave já traz o nome da
+// ferramenta ("Read .png", "Agent Explore").
+export function contextLabel(tool: string, key: string) {
+  if (tool === 'Bash') return `$ ${key}`
+  if (tool === 'hook') return `hook ${key}`
+  return key || tool
+}

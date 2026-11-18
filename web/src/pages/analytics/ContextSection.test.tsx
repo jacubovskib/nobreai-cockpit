@@ -19,14 +19,14 @@ afterEach(() => vi.unstubAllGlobals())
 
 const top = {
   keys: [
-    { tool: 'Read', key: 'README.md', count: 3, tokens: 12000, in_tokens: 500, avg_tokens: 4166, weight: 90000 },
-    { tool: 'SessionStart', key: 'cockpit', count: 10, tokens: 2000, in_tokens: 0, avg_tokens: 200, weight: 5000 },
+    { tool: 'Read', key: 'Read README.md', count: 3, tokens: 12000, in_tokens: 500, avg_tokens: 4166, weight: 90000 },
+    { tool: 'hook', key: 'SessionStart · cockpit', count: 10, tokens: 2000, in_tokens: 0, avg_tokens: 200, weight: 5000 },
   ],
   sessions: [
     { session_id: 's1', card_key: 'NAC-7', card_title: 'Medir', started_at: '2026-11-15T12:00:00Z', peak_context: 150000, compactions: 2, weight: 80000 },
     { session_id: 's2', card_key: '', card_title: '', started_at: '2026-11-16T12:00:00Z', peak_context: 50000, compactions: 0, weight: 1000 },
   ],
-  projects: [{ project_id: 1, weight: 95000, top_key: 'Read · README.md' }],
+  projects: [{ project_id: 1, weight: 95000, top_tool: 'Read', top_key: 'Read README.md' }],
   context_total: 200000,
   weight_total: 95000,
 }
@@ -36,7 +36,7 @@ const detail = {
     { turn: 2, at: 'b', tokens: 9000, after_compact: false },
     { turn: 3, at: 'c', tokens: 2000, after_compact: true },
   ],
-  top: [{ tool: 'Read', key: 'big.go', tokens: 8000, rereads: 3, weight: 24000, at: 'b', subagent: true }],
+  top: [{ tool: 'Read', key: 'Read big.go', tokens: 8000, in_tokens: 100, rereads: 3, weight: 24000, at: 'b', subagent: true }],
 }
 const routes = { '/api/context/top': top, '/api/projects': [{ id: 1, name: 'Cockpit', path: '/x', capture: true, base_branch: 'main', parent_id: null, kind: 'repo' }], '/api/context/sessions/s1': detail }
 
@@ -45,9 +45,9 @@ describe('ContextSection', () => {
     mock(routes)
     show()
     expect(await screen.findByRole('heading', { name: 'O que enche o contexto' })).toBeInTheDocument()
-    const row = (await screen.findAllByText('Read · README.md'))[0].closest('tr')!
+    const row = (await screen.findAllByText('Read README.md'))[0].closest('tr')!
     expect(within(row).getAllByRole('cell').map((c) => c.textContent)).toEqual(['3', '500', '12 k', '4 k', '90 k'])
-    expect(screen.getByText('SessionStart · cockpit')).toBeInTheDocument()
+    expect(screen.getByText('hook SessionStart · cockpit')).toBeInTheDocument()
     const rest = screen.getByText('Resto (base e conversa)').closest('tr')!
     expect(rest).toHaveTextContent('105 k')
     expect(screen.getByText(/Peso = tamanho × turnos/)).toBeInTheDocument()
@@ -68,7 +68,7 @@ describe('ContextSection', () => {
     unmount()
     mock(routes)
     show(1, true)
-    await screen.findAllByText('Read · README.md')
+    await screen.findAllByText('Read README.md')
     expect(screen.queryByText('Por projeto')).toBeNull()
     expect(urls.find((u) => u.startsWith('/api/context/top'))).toContain('project=1&exact=1')
   })
@@ -80,6 +80,7 @@ describe('ContextSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /NAC-7/ }))
     expect(await screen.findByRole('img', { name: 'Contexto por turno' })).toBeInTheDocument()
     expect(screen.getByText('Saídas mais pesadas')).toBeInTheDocument()
+    expect(screen.getByText('8 k × 3 releituras')).toBeInTheDocument()
     expect(screen.getByText('subagente')).toBeInTheDocument()
     expect(screen.getAllByTestId('compact')).toHaveLength(1)
     expect(urls).toContain('/api/context/sessions/s1')

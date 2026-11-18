@@ -6,23 +6,36 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
+const topKeys = 30
+
 func (s *server) contextRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/context/top", s.contextTop)
 	mux.HandleFunc("GET /api/context/sessions/{id}", s.contextSession)
 }
 
 // contextTop: GET /api/context/top?from=&to=&project=&exact=1 — o que mais
-// enche o contexto: chaves (até 30), sessões (até 10), projetos e totais.
+// enche o contexto: chaves (até 30, mais as de hook), sessões (até 10), projetos e totais.
 func (s *server) contextTop(w http.ResponseWriter, r *http.Request) {
 	var f store.ContextFilter
 	var ok bool
 	if f.From, f.To, f.ProjectIDs, ok = s.parseScope(w, r); !ok {
 		return
 	}
-	keys, err := s.st.ContextTopKeys(f, 30)
+	all, err := s.st.ContextTopKeys(f, 0)
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
+	}
+	// As 30 de maior peso, mais toda chave de hook (a injeção do próprio
+	// Cockpit) que ficou abaixo do corte, em ordem de peso.
+	keys := all
+	if len(all) > topKeys {
+		keys = append([]store.ContextKey{}, all[:topKeys]...)
+		for _, k := range all[topKeys:] {
+			if k.Tool == "hook" {
+				keys = append(keys, k)
+			}
+		}
 	}
 	sessions, err := s.st.ContextTopSessions(f, 10)
 	if err != nil {

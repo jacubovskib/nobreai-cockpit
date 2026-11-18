@@ -2,13 +2,11 @@ import { useState, type CSSProperties } from 'react'
 import { useContextSession, useContextTop, useProjects } from '../../api/queries'
 import { h2, muted, num, panel, td, th, thead } from '../card/shared'
 import { ContextCurve } from './ContextCurve'
-import { tokens } from './data'
+import { contextLabel, tokens } from './data'
 
 const right: CSSProperties = { ...th, textAlign: 'right' }
 const table: CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 14 }
 const startFmt = new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-
-const label = (tool: string, key: string) => (key ? `${tool} · ${key}` : tool)
 
 function SessionDetail({ id }: { id: string }) {
   const q = useContextSession(id)
@@ -23,9 +21,9 @@ function SessionDetail({ id }: { id: string }) {
       <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {top.map((o, i) => (
           <li key={i} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 14 }}>
-            <span className="mono" style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{label(o.tool, o.key)}</span>
+            <span className="mono" style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{contextLabel(o.tool, o.key)}</span>
             {o.subagent && <span style={muted}>subagente</span>}
-            <span style={{ ...muted, fontVariantNumeric: 'tabular-nums' }}>{tokens(o.tokens)} × {o.rereads} releituras</span>
+            <span style={{ ...muted, fontVariantNumeric: 'tabular-nums' }}>{tokens(o.tokens + o.in_tokens)} × {o.rereads} releituras</span>
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{tokens(o.weight)}</span>
           </li>
         ))}
@@ -69,7 +67,7 @@ export function ContextSection({ from, to, projectId, exact }: { from: string; t
               <tbody>
                 {keys.map((k) => (
                   <tr key={`${k.tool}|${k.key}`} style={{ borderTop: '1px solid var(--border)' }}>
-                    <th scope="row" className="mono" style={{ ...td, textAlign: 'left', fontWeight: 400 }}>{label(k.tool, k.key)}</th>
+                    <th scope="row" className="mono" style={{ ...td, textAlign: 'left', fontWeight: 400 }}>{contextLabel(k.tool, k.key)}</th>
                     <td style={num}>{k.count}</td>
                     <td style={num}>{tokens(k.in_tokens)}</td>
                     <td style={num}>{tokens(k.tokens)}</td>
@@ -103,7 +101,7 @@ export function ContextSection({ from, to, projectId, exact }: { from: string; t
                       <tr key={p.project_id} style={{ borderTop: '1px solid var(--border)' }}>
                         <th scope="row" style={{ ...td, textAlign: 'left', fontWeight: 400 }}>{nameOf(p.project_id)}</th>
                         <td style={num}>{tokens(p.weight)}</td>
-                        <td className="mono" style={td}>{p.top_key}</td>
+                        <td className="mono" style={td}>{contextLabel(p.top_tool, p.top_key)}</td>
                       </tr>
                     ))}
                   </tbody>
