@@ -45,10 +45,12 @@ export function Analytics() {
   const money = (usd: number) => formatMoney(usd, cur)
   const amount = (usd: number) => formatAmount(usd, cur)
   const symbol = moneySymbol(cur)
-  const { projectId, ids } = useProjectFilter()
-  const dayAgent = useTotals('day_agent', from, to, projectId)
-  const byAgent = useTotals('agent', from, to, projectId)
-  const byCard = useTotals('card', from, to, projectId)
+  const { projectId, ids, app } = useProjectFilter()
+  // "geral" é só o principal: o servidor expandiria o pai para a família sem exact.
+  const exact = app === 'geral'
+  const dayAgent = useTotals('day_agent', from, to, projectId, exact)
+  const byAgent = useTotals('agent', from, to, projectId, exact)
+  const byCard = useTotals('card', from, to, projectId, exact)
   const sessions = useSessions(200)
   const cards = useCards().data
 

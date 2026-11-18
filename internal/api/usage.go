@@ -83,13 +83,17 @@ func (s *server) usageTotals(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Um pai soma os filhos; um filho só a si. Id desconhecido não filtra nada.
-		ids, ferr := s.st.FamilyIDs(id)
-		if ferr != nil {
-			writeStoreError(w, ferr, "")
-			return
-		}
-		if len(ids) == 0 {
-			ids = []int64{id}
+		// exact=1 não expande: só o projeto pedido (o "geral" de um principal).
+		ids := []int64{id}
+		if q.Get("exact") != "1" {
+			var ferr error
+			if ids, ferr = s.st.FamilyIDs(id); ferr != nil {
+				writeStoreError(w, ferr, "")
+				return
+			}
+			if len(ids) == 0 {
+				ids = []int64{id}
+			}
 		}
 		f.ProjectIDs = ids
 	}

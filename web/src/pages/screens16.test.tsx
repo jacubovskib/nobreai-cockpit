@@ -277,6 +277,23 @@ describe('Analytics', () => {
   })
 
 
+  it('com app=geral pede os totais com exact=1; sem app não', async () => {
+    const fn = vi.fn(async (url: string) => {
+      const ok = (b: unknown) => new Response(JSON.stringify(b), { status: 200 })
+      if (url.startsWith('/api/usage/totals')) return ok([])
+      if (url.startsWith('/api/sessions')) return ok([])
+      if (url === '/api/settings') return ok(settings)
+      if (url === '/api/cards') return ok([])
+      if (url === '/api/projects') return ok([{ id: 1, name: 'api', path: '/w/api', capture: true, parent_id: null, kind: 'group' }, { id: 2, name: 'web', path: '/w/web', capture: true, parent_id: 1, kind: 'repo' }])
+      return new Response('{}', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fn)
+    wrap(<Analytics />, '/analytics?projeto=1&app=geral')
+    const totals = () => fn.mock.calls.map(([u]) => String(u)).filter((u) => u.startsWith('/api/usage/totals'))
+    await waitFor(() => expect(['day_agent', 'agent', 'card'].every((g) => totals().some((u) => u.includes(`group=${g}&`) && u.includes('project=1') && u.includes('exact=1')))).toBe(true))
+  })
+
+
   it('mostra "sem preço" e "sem card", nunca zero, e alterna para a tabela', async () => {
     const today = new Date()
     const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
