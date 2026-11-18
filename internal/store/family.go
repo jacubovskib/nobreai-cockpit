@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -29,8 +31,8 @@ type querier interface {
 
 func getProjectTx(q querier, id int64) (domain.Project, error) {
 	var p domain.Project
-	err := q.QueryRow(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id FROM projects WHERE id=?`, id).
-		Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID)
+	err := q.QueryRow(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id, kind FROM projects WHERE id=?`, id).
+		Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID, &p.Kind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -38,7 +40,7 @@ func getProjectTx(q querier, id int64) (domain.Project, error) {
 }
 
 func childrenTx(q querier, id int64) ([]domain.Project, error) {
-	rows, err := q.Query(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id FROM projects WHERE parent_id=? ORDER BY id`, id)
+	rows, err := q.Query(`SELECT id, name, COALESCE(path, ''), capture, base_branch, parent_id, kind FROM projects WHERE parent_id=? ORDER BY id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +48,7 @@ func childrenTx(q querier, id int64) ([]domain.Project, error) {
 	var out []domain.Project
 	for rows.Next() {
 		var p domain.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Capture, &p.BaseBranch, &p.ParentID, &p.Kind); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -60,7 +62,8 @@ func inside(root, path string) bool {
 	return strings.HasPrefix(path, root+"/")
 }
 
-// checkInside vale só para pai com pasta (monorepo); grupo aceita qualquer pasta.
+// checkInside vale para pai com pasta (monorepo ou grupo com pasta); grupo sem
+// pasta aceita qualquer pasta.
 func checkInside(parent domain.Project, path string) error {
 	if parent.Path != "" && !inside(parent.Path, path) {
 		return familyErr("a pasta do sub-projeto precisa ficar dentro da pasta do projeto principal")
@@ -87,9 +90,30 @@ func checkNameFree(q querier, p domain.Project, name string) error {
 	return nil
 }
 
-// CreateGroup cria um projeto principal sem pasta (grupo de repositórios).
+// CreateGroup cria um grupo de repositórios sem pasta.
 func (s *Store) CreateGroup(name string) (domain.Project, error) {
-	return s.CreateProject(name, "")
+	return s.insertProject(name, "", "group")
+}
+
+// CreateGroupAt cria um grupo com pasta. A pasta é absoluta, não é a home nem
+// ancestral dela, e não fica dentro de um projeto cadastrado.
+func (s *Store) CreateGroupAt(name, path string) (domain.Project, error) {
+	if !filepath.IsAbs(path) {
+		return domain.Project{}, familyErr("a pasta do grupo precisa ser um caminho absoluto")
+	}
+	path = filepath.Clean(path)
+	if home, err := os.UserHomeDir(); err == nil {
+		home = filepath.Clean(home)
+		if path == home || path == "/" || inside(path, home) {
+			return domain.Project{}, familyErr("a pasta do grupo não pode ser a home nem uma pasta que a contém")
+		}
+	}
+	if p, err := s.ProjectForPath(path); err != nil {
+		return domain.Project{}, err
+	} else if p != nil {
+		return domain.Project{}, familyErr("a pasta do grupo fica dentro do projeto " + p.Name)
+	}
+	return s.insertProject(name, path, "group")
 }
 
 // checkAttach valida ligar o projeto child (path e nome já definidos) ao pai.
@@ -105,6 +129,9 @@ func checkAttach(q querier, child, parent domain.Project) error {
 		if len(kids) > 0 {
 			return familyErr("um projeto com sub-projetos não pode virar sub-projeto")
 		}
+	}
+	if child.IsGroup() {
+		return familyErr("um grupo não pode ser sub-projeto")
 	}
 	if child.Path == "" {
 		return familyErr("o sub-projeto precisa de uma pasta")
@@ -193,7 +220,7 @@ func (s *Store) SetParent(id int64, parentID *int64) (Moved, error) {
 func moveHistory(tx querier, parent, child domain.Project) (Moved, error) {
 	var m Moved
 	if parent.Path == "" {
-		return m, nil // grupo: não tem pasta de onde puxar histórico
+		return m, nil // grupo sem pasta: não tem de onde puxar histórico
 	}
 	rel := strings.TrimPrefix(strings.TrimRight(child.Path, "/"), strings.TrimRight(parent.Path, "/")+"/")
 	root := strings.TrimRight(child.Path, "/")
@@ -268,7 +295,8 @@ func (s *Store) FamilyIDs(id int64) ([]int64, error) {
 // Children lista os sub-projetos de id.
 func (s *Store) Children(id int64) ([]domain.Project, error) { return childrenTx(s.DB, id) }
 
-// RepoProject devolve o pai quando p é app de monorepo (pai com pasta); senão p.
+// RepoProject devolve o pai quando p é app de monorepo (pai repositório); senão
+// p, inclusive para filho de grupo, com ou sem pasta.
 func (s *Store) RepoProject(p domain.Project) (domain.Project, error) {
 	if p.ParentID == nil {
 		return p, nil
@@ -277,7 +305,7 @@ func (s *Store) RepoProject(p domain.Project) (domain.Project, error) {
 	if err != nil {
 		return p, err
 	}
-	if parent.Path == "" {
+	if parent.IsGroup() {
 		return p, nil
 	}
 	return parent, nil

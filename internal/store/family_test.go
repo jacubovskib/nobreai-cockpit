@@ -382,13 +382,18 @@ func TestUpdateProjectKeepsFamilyInvariants(t *testing.T) {
 	}
 }
 
-func TestUpdateGroupWithChildrenCannotGainPath(t *testing.T) {
+// NAC-27: um grupo pode ganhar pasta, desde que os filhos fiquem dentro dela.
+func TestUpdateGroupWithChildrenGainsPathOnlyAroundThem(t *testing.T) {
 	s := newTestStore(t)
 	g, _ := s.CreateGroup("g")
 	mustChild(t, s, "front", "/r/front", g.ID)
-	g.Path = "/r"
+	g.Path = "/x"
 	if err := s.UpdateProject(g); !errors.Is(err, ErrFamily) {
-		t.Fatalf("grupo virando monorepo: %v", err)
+		t.Fatalf("pasta que deixa filho fora: %v", err)
+	}
+	g.Path = "/r"
+	if err := s.UpdateProject(g); err != nil {
+		t.Fatalf("pasta que contém os filhos: %v", err)
 	}
 }
 
