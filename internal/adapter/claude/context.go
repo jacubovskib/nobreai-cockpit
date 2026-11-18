@@ -81,6 +81,9 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	if err != nil {
 		return adapter.HookReply{}, err
 	}
+	// O que esta sessão passa a ter visto: o contexto de agora. Substitui o
+	// registro de antes (resume, clear e compact reinjetam a configuração).
+	_, _ = a.st.SwapSeenConfig(sess.ID, sess.SeenConfig, domain.SeenConfig{AgentCreatesCards: set.AgentCreatesCards, Capture: sess.FullCapture})
 
 	var resumed *domain.Card
 	var pkg, notFound string

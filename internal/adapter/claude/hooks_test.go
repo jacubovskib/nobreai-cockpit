@@ -1458,3 +1458,150 @@ func TestSessionStartListsApps(t *testing.T) {
 		}
 	}
 }
+
+// noticeContext lê o additionalContext de uma resposta de hook (vazio se não
+// houver) e confere o hookEventName.
+func noticeContext(t *testing.T, r adapter.HookReply, event string) string {
+	t.Helper()
+	if r.Stdout == "" {
+		return ""
+	}
+	var out struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(r.Stdout), &out); err != nil {
+		t.Fatalf("stdout não é JSON: %q", r.Stdout)
+	}
+	if out.HookSpecificOutput.HookEventName != event {
+		t.Fatalf("stdout = %s", r.Stdout)
+	}
+	return out.HookSpecificOutput.AdditionalContext
+}
+
+// cardsOffAfterStart abre a sessão com os padrões e depois desliga
+// AgentCreatesCards.
+func (e *env) cardsOffAfterStart(t *testing.T) {
+	t.Helper()
+	e.project(t)
+	e.call(t, "session_start")
+	set := domain.DefaultSettings()
+	set.AgentCreatesCards = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *env) notifiedLines(t *testing.T) int {
+	t.Helper()
+	log, err := e.st.RecentConfigLog(50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, l := range log {
+		if l.Kind == domain.LogAgentNotified {
+			n++
+		}
+	}
+	return n
+}
+
+func TestSessionStartRecordsSeenConfig(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	e.call(t, "session_start")
+	sess, err := e.st.GetSession(sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.SeenConfig == nil || *sess.SeenConfig != (domain.SeenConfig{AgentCreatesCards: true, Capture: true}) {
+		t.Fatalf("seen = %+v", sess.SeenConfig)
+	}
+}
+
+func TestPromptAfterCardsSettingChangeNotifiesOnce(t *testing.T) {
+	e := newEnv(t)
+	e.cardsOffAfterStart(t)
+	if got := noticeContext(t, e.call(t, "user_prompt_submit"), "UserPromptSubmit"); !strings.Contains(got, "Só crie card") {
+		t.Fatalf("contexto = %q", got)
+	}
+	if r := e.call(t, "user_prompt_submit"); r.Stdout != "" {
+		t.Fatalf("segundo aviso: %q", r.Stdout)
+	}
+	if n := e.notifiedLines(t); n != 1 {
+		t.Fatalf("linhas agent_notified = %d", n)
+	}
+}
+
+func TestPostToolUseCarriesNotice(t *testing.T) {
+	e := newEnv(t)
+	e.cardsOffAfterStart(t)
+	if got := noticeContext(t, e.call(t, "post_tool_use_read"), "PostToolUse"); !strings.Contains(got, "Só crie card") {
+		t.Fatalf("contexto = %q", got)
+	}
+	if r := e.call(t, "post_tool_use_read"); r.Stdout != "" {
+		t.Fatalf("segundo aviso: %q", r.Stdout)
+	}
+}
+
+func TestSubagentGetsNoNotice(t *testing.T) {
+	e := newEnv(t)
+	e.cardsOffAfterStart(t)
+	if r := e.call(t, "post_tool_use_read", with("agent_id", "a1")); r.Stdout != "" {
+		t.Fatalf("subagente recebeu aviso: %q", r.Stdout)
+	}
+	if got := noticeContext(t, e.call(t, "post_tool_use_read"), "PostToolUse"); !strings.Contains(got, "Só crie card") {
+		t.Fatalf("agente principal sem aviso: %q", got)
+	}
+}
+
+func TestConcurrentPostToolUseSingleNotice(t *testing.T) {
+	e := newEnv(t)
+	e.cardsOffAfterStart(t)
+	replies := make([]adapter.HookReply, 2)
+	var wg sync.WaitGroup
+	for i := range replies {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			replies[i] = e.call(t, "post_tool_use_read")
+		}()
+	}
+	wg.Wait()
+	n := 0
+	for _, r := range replies {
+		if noticeContext(t, r, "PostToolUse") != "" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("avisos = %d", n)
+	}
+}
+
+func TestLegacySessionNoFalseNotice(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	e.call(t, "session_start")
+	if _, err := e.st.DB.Exec(`UPDATE sessions SET seen_config = ''`); err != nil {
+		t.Fatal(err)
+	}
+	set := domain.DefaultSettings()
+	set.AgentCreatesCards = false
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.call(t, "user_prompt_submit"); r.Stdout != "" {
+		t.Fatalf("aviso falso: %q", r.Stdout)
+	}
+	sess, err := e.st.GetSession(sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.SeenConfig == nil || *sess.SeenConfig != (domain.SeenConfig{AgentCreatesCards: false, Capture: true}) {
+		t.Fatalf("seen = %+v", sess.SeenConfig)
+	}
+}

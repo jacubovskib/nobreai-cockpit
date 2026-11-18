@@ -89,17 +89,23 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 	case "SessionStart":
 		return a.sessionStart(sess, p, h.Env, now)
 	case "UserPromptSubmit":
+		notice, noticed := a.noticeReply(sess, p, event, now)
 		if sess.FullCapture {
 			a.event(sess.ID, domain.EvPrompt, map[string]any{"text": p.Prompt}, now)
 		} else {
 			a.publish("sessions") // última atividade mudou
 		}
+		if noticed {
+			return notice, nil
+		}
 	case "PreToolUse":
 		return a.preToolUse(sess, p, now)
 	case "PostToolUse":
+		notice, _ := a.noticeReply(sess, p, event, now)
 		if sess.FullCapture {
-			return adapter.HookReply{}, a.postToolUse(sess, p, now)
+			return notice, a.postToolUse(sess, p, now)
 		}
+		return notice, nil
 	case "Stop":
 		reply, err := a.stop(sess, p, now)
 		a.ingestAsync(sess.ID, transcriptPath(p, sess))
