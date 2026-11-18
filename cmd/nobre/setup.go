@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -227,6 +228,7 @@ func (c *cli) removeStatusLine(d *setupDeps, dry bool, l *checklist) error {
 		prefix = "[dry-run] "
 		rep, err = claude.PlanUninstallStatusLine(d.SettingsPath)
 	} else {
+		c.tellRemoved("statusline")
 		rep, err = claude.UninstallStatusLine(d.SettingsPath, d.NobreBin)
 	}
 	if err != nil {
@@ -239,14 +241,24 @@ func (c *cli) removeStatusLine(d *setupDeps, dry bool, l *checklist) error {
 	return nil
 }
 
-// removeAll é o "nobre setup --remover": desfaz o setup na ordem inversa do
-// uso. Primeiro os hooks e a status line (o Claude Code para de chamar o
-// nobre), depois a skill e por fim o serviço. Binários e banco ficam.
+// tellRemoved avisa o daemon, antes de escrever, que a remoção é de propósito.
+// Melhor esforço: daemon fora do ar não impede a remoção.
+func (c *cli) tellRemoved(keys ...string) {
+	cx, cancel := context.WithTimeout(ctx(), 2*time.Second)
+	defer cancel()
+	_ = c.client().IntegrationRemoved(cx, keys, "cli")
+}
+
+// removeAll é o "nobre setup --remover": primeiro para o serviço (o monitor
+// nunca vê a remoção), depois desfaz hooks, status line e skill. Binários e
+// banco ficam.
 func (c *cli) removeAll(d *setupDeps, dry bool, l *checklist) error {
 	prefix := ""
 	if dry {
 		prefix = "[dry-run] "
 	}
+	c.removeService(d, dry, l)
+
 	rep, slErr, err := claude.UninstallSettings(d.SettingsPath, dry)
 	if err != nil {
 		l.bad("Hooks do Claude Code: %v", err)
@@ -272,8 +284,6 @@ func (c *cli) removeAll(d *setupDeps, dry bool, l *checklist) error {
 			l.ok("Skill removida: %s", skill)
 		}
 	}
-
-	c.removeService(d, dry, l)
 
 	if dir := filepath.Dir(d.NobreBin); !dry {
 		fmt.Fprintf(c.out, "\nOs binários em %s e o banco em %s não foram tocados (o make uninstall também apaga os binários).\n"+
