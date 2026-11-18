@@ -42,6 +42,27 @@ func userResult(id, content string, isErr bool) string {
 		id + `","content":` + content + e + `}]}}`
 }
 
+func mustWrite(t *testing.T, p, content string) {
+	t.Helper()
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendTo(t *testing.T, p, content string) {
+	t.Helper()
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func quote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 func hookLine(uuid, event, cmd, stdout string) string {
@@ -103,16 +124,12 @@ func TestParseContext_SplitMessageAcrossReads(t *testing.T) {
 	l2 := asst("m1", 10, 20, 30)
 	p := writeLines(t, l1, l2)
 	// primeira leitura só vê a primeira linha
-	if err := os.WriteFile(p, []byte(l1+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, p, l1+"\n")
 	_, turns, next, st, _, _ := ParseContext(p, 0, zero)
 	if len(turns) != 1 || turns[0].Tokens != 3 {
 		t.Fatalf("turns %+v", turns)
 	}
-	f, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString(l2 + "\n")
-	f.Close()
+	appendTo(t, p, l2+"\n")
 	_, turns, _, st, _, _ = ParseContext(p, next, st)
 	if len(turns) != 1 || turns[0].Turn != 0 || turns[0].Tokens != 60 || st.LastTurn != 0 {
 		t.Fatalf("turns %+v st %+v", turns, st)
@@ -135,9 +152,7 @@ func TestParseContext_Compaction(t *testing.T) {
 	if st.Segment != 1 {
 		t.Fatalf("st %+v", st)
 	}
-	f, _ := os.OpenFile(p2, os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString(asst("m2", 2, 2, 2) + "\n")
-	f.Close()
+	appendTo(t, p2, asst("m2", 2, 2, 2)+"\n")
 	_, turns, _, _, _, _ = ParseContext(p2, next, st)
 	if len(turns) != 1 || turns[0].Segment != 1 {
 		t.Fatalf("turns %+v", turns)
@@ -155,18 +170,20 @@ func TestParseContext_Hooks(t *testing.T) {
 		hookLine("h4", "PostToolUse", "/x/other.sh", "texto puro"),
 		hookLine("h5", "SessionStart", "/x/other.sh", ""),
 		blocking, blockingStr,
+		hookLine("h6", "UserPromptSubmit", "/x/other.sh", "abcde"),
+		"{isto nao e json",
 	)
 	outs, _, _, _, _, _ := ParseContext(p, 0, zero)
-	if len(outs) != 4 {
+	if len(outs) != 5 {
 		t.Fatalf("outs %+v", outs)
 	}
 	want := []struct {
 		id, key string
 		bytes   int64
-	}{{"h1", "SessionStart · cockpit", 40}, {"h2", "SessionStart · outros", 10}, {"b1", "Stop · bloqueio", 30}, {"b2", "Stop · bloqueio", 12}}
+	}{{"h1", "SessionStart · cockpit", 40}, {"h2", "SessionStart · outros", 10}, {"b1", "Stop · bloqueio", 30}, {"b2", "Stop · bloqueio", 12}, {"h6", "UserPromptSubmit · outros", 5}}
 	for i, w := range want {
 		o := outs[i]
-		if o.ItemID != w.id || o.Tool != "hook" || o.Key != w.key || o.Bytes != w.bytes || o.InTokens != 0 || o.Turn != -1 {
+		if o.ItemID != w.id || o.Tool != "hook" || o.Key != w.key || o.Bytes != w.bytes || o.InTokens != 0 || o.Turn != -1 || !o.Result || o.Tokens != EstimateTokens(w.bytes, 0) {
 			t.Fatalf("out %d %+v", i, o)
 		}
 	}
@@ -211,7 +228,7 @@ func TestParseContext_Truncated(t *testing.T) {
 func TestParseContext_PartialLastLine(t *testing.T) {
 	l1 := asst("m1", 1, 1, 1)
 	p := filepath.Join(t.TempDir(), "t.jsonl")
-	os.WriteFile(p, []byte(l1+"\n"+asst("m2", 2, 2, 2)), 0o644)
+	mustWrite(t, p, l1+"\n"+asst("m2", 2, 2, 2))
 	_, turns, next, _, _, _ := ParseContext(p, 0, zero)
 	if len(turns) != 1 || next != int64(len(l1)+1) {
 		t.Fatalf("turns %+v next %d", turns, next)
@@ -251,15 +268,13 @@ func TestParseContext_UseAndResultAcrossReads(t *testing.T) {
 	input := `{"command":"git status -s"}`
 	l1 := asst("m1", 1, 1, 1, toolUse("t1", "Bash", input))
 	p := filepath.Join(t.TempDir(), "t.jsonl")
-	os.WriteFile(p, []byte(l1+"\n"), 0o644)
+	mustWrite(t, p, l1+"\n")
 	outs, _, next, st, _, _ := ParseContext(p, 0, zero)
 	if len(outs) != 1 || outs[0].Result || outs[0].Tool != "Bash" || outs[0].Key != "git status" ||
 		outs[0].InTokens == 0 || outs[0].Bytes != 0 || outs[0].Turn != 0 {
 		t.Fatalf("outs %+v", outs)
 	}
-	f, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString(userResult("t1", quote("abcdefgh"), false) + "\n")
-	f.Close()
+	appendTo(t, p, userResult("t1", quote("abcdefgh"), false)+"\n")
 	outs, _, _, _, _, _ = ParseContext(p, next, st)
 	if len(outs) != 1 || outs[0].ItemID != "t1" || outs[0].Tool != "" || !outs[0].Result || outs[0].Bytes != 8 || outs[0].Turn != 0 {
 		t.Fatalf("outs %+v", outs)
@@ -270,6 +285,18 @@ func TestParseContext_UseWithoutResult(t *testing.T) {
 	p := writeLines(t, asst("m1", 1, 1, 1, toolUse("t1", "Write", `{"file_path":"/a","content":"xxxxxxxx"}`)))
 	outs, _, _, _, _, _ := ParseContext(p, 0, zero)
 	if len(outs) != 1 || outs[0].Result || outs[0].InTokens == 0 || outs[0].Tokens != 0 || outs[0].Key != "Write" {
+		t.Fatalf("outs %+v", outs)
+	}
+}
+
+func TestParseContext_EmptyIDsSkipped(t *testing.T) {
+	p := writeLines(t,
+		asst("m1", 1, 1, 1, toolUse("", "Bash", `{"command":"ls"}`)),
+		userResult("", `"abc"`, false),
+		hookLine("", "SessionStart", "/x/nobre hook", `{"hookSpecificOutput":{"additionalContext":"abcd"}}`),
+	)
+	outs, _, _, _, _, _ := ParseContext(p, 0, zero)
+	if len(outs) != 0 {
 		t.Fatalf("outs %+v", outs)
 	}
 }

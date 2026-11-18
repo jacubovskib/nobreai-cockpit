@@ -174,7 +174,7 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 				continue
 			}
 			for _, b := range contentBlocks(l.Message.Content) {
-				if b.Type != "tool_result" {
+				if b.Type != "tool_result" || b.ToolUseID == "" {
 					continue
 				}
 				bytes, images := resultSize(b.Content)
@@ -186,7 +186,7 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 					Turn: st.LastTurn, Segment: st.Segment, At: at, IsError: b.IsError, Result: true})
 			}
 		case "attachment":
-			if l.Attachment == nil {
+			if l.Attachment == nil || l.UUID == "" {
 				continue
 			}
 			if o, ok := hookOutput(l.UUID, l.Attachment.Type, l.Attachment.HookEvent, l.Attachment.Command,
@@ -336,13 +336,13 @@ var (
 	wrappers = map[string]bool{"sudo": true, "env": true, "time": true, "nice": true, "nohup": true, "rtk": true}
 )
 
-// firstSegment corta no primeiro |, ;, && ou || e devolve o trecho e o resto.
+// firstSegment corta no primeiro |, ;, quebra de linha, && ou || e devolve o trecho e o resto.
 func firstSegment(s string) (seg, rest string, cut bool) {
 	for i := 0; i < len(s); i++ {
 		switch {
 		case strings.HasPrefix(s[i:], "&&"), strings.HasPrefix(s[i:], "||"):
 			return s[:i], s[i+2:], true
-		case s[i] == '|' || s[i] == ';':
+		case s[i] == '|' || s[i] == ';' || s[i] == '\n':
 			return s[:i], s[i+1:], true
 		}
 	}
@@ -366,16 +366,38 @@ func BashKey(command string) string {
 		break
 	}
 	toks := strings.Fields(seg)
+	// skipFlags pula flags (-x); os de valueFlags levam o valor junto.
+	skipFlags := func(valueFlags ...string) {
+		for len(toks) > 0 && strings.HasPrefix(toks[0], "-") {
+			takes := false
+			for _, v := range valueFlags {
+				takes = takes || toks[0] == v
+			}
+			toks = toks[1:]
+			if takes && len(toks) > 0 {
+				toks = toks[1:]
+			}
+		}
+	}
 	for len(toks) > 0 {
 		t := toks[0]
 		switch {
-		case reAssign.MatchString(t), wrappers[filepath.Base(t)]:
+		case reAssign.MatchString(t):
 			toks = toks[1:]
+		case filepath.Base(t) == "sudo":
+			toks = toks[1:]
+			skipFlags("-u", "-g")
+		case filepath.Base(t) == "env":
+			toks = toks[1:]
+			skipFlags()
 		case filepath.Base(t) == "timeout":
 			toks = toks[1:]
+			skipFlags("-s", "-k")
 			if len(toks) > 0 {
-				toks = toks[1:]
+				toks = toks[1:] // duração
 			}
+		case wrappers[filepath.Base(t)]:
+			toks = toks[1:]
 		default:
 			goto found
 		}
@@ -385,7 +407,7 @@ found:
 		return "outro"
 	}
 	prog := filepath.Base(toks[0])
-	if !reProgram.MatchString(prog) {
+	if strings.HasPrefix(prog, "-") || !reProgram.MatchString(prog) {
 		return "outro"
 	}
 	if subcmdOf[prog] && len(toks) > 1 && reSubcmd.MatchString(toks[1]) {
