@@ -38,6 +38,7 @@ func homeOrAncestor(path string) bool {
 func (s *server) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
+	s.configLogRoutes(mux)
 	mux.HandleFunc("GET /api/limits", s.listLimits)
 	mux.HandleFunc("PUT /api/limits", s.putLimit)
 	mux.HandleFunc("GET /api/prices", s.listPrices)
@@ -69,6 +70,7 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "")
 		return
 	}
+	old := st
 	keepCmd := st.TerminalCmd
 	if !readJSON(w, r, &st) {
 		return
@@ -98,8 +100,34 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "")
 		return
 	}
+	changes, err := changedSettings(old, st)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	notified := 0
+	for _, c := range changes {
+		if err := s.logConfig(domain.LogSettingChanged, c); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if string(c["key"]) == `"agent_creates_cards"` {
+			if notified, err = s.countStaleCardsRule(st.AgentCreatesCards); err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+		}
+	}
 	s.publish("config")
-	s.getSettings(w, r)
+	fresh, err := s.st.GetSettings()
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		domain.Settings
+		NotifiedSessions int `json:"notified_sessions"`
+	}{fresh, notified})
 }
 
 func (s *server) listLimits(w http.ResponseWriter, r *http.Request) {
@@ -362,7 +390,7 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "projeto não encontrado")
 		return
 	}
-	oldBase, oldPath, oldParent := p.BaseBranch, p.Path, p.ParentID
+	oldBase, oldPath, oldParent, oldCapture := p.BaseBranch, p.Path, p.ParentID, p.Capture
 	repo, err := s.st.RepoProject(*p)
 	if err != nil {
 		writeStoreError(w, err, "")
@@ -423,11 +451,27 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "projeto não encontrado")
 		return
 	}
+	// Mudar a captura vale para as sessões vivas da família; o filho segue o pai,
+	// então só a mudança de quem tem o controle chega aqui.
+	notified := 0
+	if fresh.Capture != oldCapture {
+		if notified, err = s.applyProjectCapture(id, fresh.Capture); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if err := s.logConfig(domain.LogProjectCapture, map[string]any{
+			"project_id": id, "project": fresh.Name, "capture": fresh.Capture, "notified_sessions": notified,
+		}); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+	}
 	s.publish("config", "sessions", "cards")
 	writeJSON(w, http.StatusOK, struct {
 		domain.Project
-		Moved store.Moved `json:"moved"`
-	}{*fresh, moved})
+		Moved            store.Moved `json:"moved"`
+		NotifiedSessions int         `json:"notified_sessions"`
+	}{*fresh, moved, notified})
 }
 
 func (s *server) deleteProject(w http.ResponseWriter, r *http.Request) {
