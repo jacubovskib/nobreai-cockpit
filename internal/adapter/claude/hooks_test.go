@@ -1398,3 +1398,45 @@ func TestWorktreeRootSessionLandsInParent(t *testing.T) {
 		t.Fatalf("sessão na raiz deveria cair no pai: %+v", s)
 	}
 }
+
+// countGit conta as chamadas a Locate.
+type countGit struct {
+	wtGit
+	n *int
+}
+
+func (g countGit) Locate(dir string) gitinfo.Location {
+	*g.n++
+	return g.wtGit.Locate(dir)
+}
+
+func TestMonorepoSessionLocatesOncePerHook(t *testing.T) {
+	cases := []struct{ name, cwd, root string }{
+		{"app no checkout principal", "/r/loja/apps/web/src", "web"},
+		{"raiz no checkout principal", "/r/loja", "loja"},
+		{"app no worktree", "/r/loja/.worktrees/x/apps/web", "web"},
+		{"raiz no worktree", "/r/loja/.worktrees/x", "loja"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e, loja, web := newMonorepoWorktreeEnv(t)
+			n := 0
+			e.a.deps.Git = countGit{wtGit: e.a.deps.Git.(wtGit), n: &n}
+			e.call(t, "session_start", with("cwd", c.cwd))
+			s, err := e.st.GetSession(sessID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := loja.ID
+			if c.root == "web" {
+				want = web.ID
+			}
+			if s.ProjectID == nil || *s.ProjectID != want {
+				t.Fatalf("projeto = %v, quer %d", s.ProjectID, want)
+			}
+			if n != 1 {
+				t.Fatalf("Locate chamado %d vezes, quer 1", n)
+			}
+		})
+	}
+}

@@ -229,10 +229,18 @@ func (s *Store) AssignSessionsInWorktree(projectID int64, worktree string) (int,
 		return 0, err
 	}
 	rows.Close()
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
 	for id, pid := range owner {
-		if _, err := s.DB.Exec(`UPDATE sessions SET project_id=?, full_capture=1 WHERE id=?`, pid, id); err != nil {
+		if _, err := tx.Exec(`UPDATE sessions SET project_id=?, full_capture=1 WHERE id=?`, pid, id); err != nil {
 			return 0, fmt.Errorf("religar sessões do worktree: %w", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return len(owner), nil
 }

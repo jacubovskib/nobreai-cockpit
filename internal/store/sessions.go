@@ -105,6 +105,9 @@ func (s *Store) StartSession(x domain.Session) error {
 type SessionLocation struct {
 	Cwd, Branch, GitHead, Worktree string
 	WorktreeLinked                 bool
+	// Main é o checkout principal do repositório; não é gravado, só serve a
+	// quem já tem a localização em mãos.
+	Main string
 }
 
 // UpdateSessionLocation grava o novo local da sessão (o agente trocou de
