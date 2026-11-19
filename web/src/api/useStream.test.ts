@@ -76,3 +76,28 @@ describe('kind context', () => {
     expect(keys()).toContain('context')
   })
 })
+
+describe('kinds do RTK', () => {
+  async function keysFor(kind: string) {
+    const { invalidateForKind } = await import('./useStream')
+    const qc = new QueryClient()
+    const spy = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue()
+    invalidateForKind(qc, kind)
+    return spy.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0])
+  }
+
+  it('usage atualiza só a economia, não o estado nem a prévia', async () => {
+    const keys = await keysFor('usage')
+    expect(keys).toContain('rtk-savings')
+    expect(keys).not.toContain('rtk')
+  })
+
+  it('config atualiza o estado e a economia', async () => {
+    const keys = await keysFor('config')
+    expect(keys).toEqual(expect.arrayContaining(['rtk', 'rtk-savings']))
+  })
+
+  it('integration atualiza o estado (hook removido fora do Cockpit)', async () => {
+    expect(await keysFor('integration')).toContain('rtk')
+  })
+})

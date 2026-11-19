@@ -107,13 +107,15 @@ export function useRtkApply() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (action: 'activate' | 'deactivate') => post<RtkApplied>('/api/rtk', { action }),
-    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: ['rtk'] }), qc.invalidateQueries({ queryKey: ['overview'] }), qc.invalidateQueries({ queryKey: ['config-log'] })]),
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: ['rtk'] }), qc.invalidateQueries({ queryKey: ['rtk-savings'] }), qc.invalidateQueries({ queryKey: ['overview'] }), qc.invalidateQueries({ queryKey: ['config-log'] })]),
   })
 }
 
+// Chave própria: o kind usage atualiza a economia sem refazer o estado do RTK
+// (rtk --version) nem a prévia.
 export const useRtkSavings = (from?: string, to?: string, project?: number | null, exact = false) =>
   useQuery({
-    queryKey: ['rtk', 'savings', from ?? '', to ?? '', project ?? null, exact],
+    queryKey: ['rtk-savings', from ?? '', to ?? '', project ?? null, exact],
     queryFn: () => {
       const q = new URLSearchParams()
       if (from) q.set('from', from)
