@@ -221,7 +221,7 @@ export interface Alert {
   integration?: IntegrationAlert
 }
 
-export type IntegrationAction = 'reinstall' | 'statusline' | 'restart' | 'make_install' | 'config'
+export type IntegrationAction = 'reinstall' | 'statusline' | 'rtk' | 'restart' | 'make_install' | 'config'
 export interface IntegrationAlert { key: string; text: string; action: IntegrationAction | string; again: boolean }
 
 // GET /api/config-log
@@ -382,3 +382,13 @@ export interface ContextTop { keys: ContextKey[] | null; sessions: ContextSessio
 export interface ContextTurnPoint { turn: number; at: string; tokens: number; after_compact: boolean }
 export interface ContextOutput { tool: string; key: string; tokens: number; in_tokens: number; rereads: number; weight: number; at: string; subagent: boolean }
 export interface ContextDetail { turns: ContextTurnPoint[] | null; top: ContextOutput[] | null }
+
+// GET /api/rtk
+export interface RtkActivation { on: string; off?: string }
+export interface RtkStatus { installed: boolean; path: string; version: string; active: boolean; detail: string; activations: RtkActivation[] }
+export interface RtkApplied { output: string; backup: string; status: RtkStatus }
+
+// GET /api/rtk/savings
+export interface RtkGain { available: boolean; commands: number; input_tokens: number; saved_tokens: number; savings_pct: number; oldest_day: string }
+export interface RtkCompare { key: string; before_count: number; before_avg: number; after_count: number; after_avg: number; change_pct: number }
+export interface RtkSavings { installed: boolean; gain: RtkGain; compare: RtkCompare[]; activations: RtkActivation[] }

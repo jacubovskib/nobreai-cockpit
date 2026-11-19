@@ -15,6 +15,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
+	"github.com/nobretech/nobreai-cockpit/internal/rtk"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -47,6 +48,8 @@ type Deps struct {
 	Terminals *pty.Manager
 	// Integration é o monitor da integração com o agente; nil = rotas 503.
 	Integration IntegrationSource
+	// RTK é a integração com o RTK (compressor de saída de comandos); nil = rotas 503.
+	RTK *rtk.Tool
 	// Home é a raiz do seletor de pastas (vazio = os.UserHomeDir()); existe para os testes.
 	Home string
 }
@@ -86,6 +89,7 @@ func New(st *store.Store, deps Deps) http.Handler {
 	s.hookRoutes(mux)
 	s.agentRoutes(mux)
 	s.integrationRoutes(mux)
+	s.rtkRoutes(mux)
 	s.worktreeRoutes(mux)
 	s.terminalRoutes(mux)
 	s.planLimitsRoutes(mux)

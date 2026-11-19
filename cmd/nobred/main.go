@@ -25,6 +25,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/resources"
+	"github.com/nobretech/nobreai-cockpit/internal/rtk"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -117,6 +118,11 @@ func run(dbPath string, seedDemo bool) error {
 	paths.SearchPATH = func() string { return userPATH.Get(time.Minute) }
 	go userPATH.Get(0) // já na partida, sem atrasar o servidor
 	claudeAdapter.SetPaths(paths)
+	// RTK: comprime a saída dos comandos do Claude Code; o hook mora no mesmo
+	// settings.json. Sem demo o Tool existe, mas o monitor não roda.
+	home, _ := os.UserHomeDir()
+	rtkTool := &rtk.Tool{SettingsPath: paths.SettingsPath, Home: home,
+		SearchPATH: func() string { return userPATH.Get(time.Minute) }, Store: st, Now: time.Now}
 	// As leituras de transcript em segundo plano terminam antes de st.Close
 	// (defers rodam em ordem inversa).
 	defer claudeAdapter.Wait()
@@ -133,7 +139,13 @@ func run(dbPath string, seedDemo bool) error {
 	var mon *integration.Monitor
 	if !seedDemo {
 		mon = &integration.Monitor{
-			Health:      claudeAdapter.Health,
+			Health: func() []adapter.Check {
+				checks := claudeAdapter.Health()
+				if checks == nil { // sem settings.json do Claude: nada a vigiar
+					return nil
+				}
+				return append(checks, rtkTool.Check())
+			},
 			Files:       claudeAdapter.WatchedFiles,
 			NobreBin:    claudeAdapter.NobreBinary,
 			Store:       st,
@@ -142,6 +154,11 @@ func run(dbPath string, seedDemo bool) error {
 			Logf:        log.Printf,
 		}
 		integ = mon
+	}
+	// A demonstração nunca mexe no settings.json real: sem RTK, as rotas dão 503.
+	apiRTK := rtkTool
+	if seedDemo {
+		apiRTK = nil
 	}
 	handler := api.New(st, api.Deps{
 		Integration: integ,
@@ -154,6 +171,7 @@ func run(dbPath string, seedDemo bool) error {
 		UserPATH:    userPATH,
 		Resources:   monitor,
 		Terminals:   terms,
+		RTK:         apiRTK,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.

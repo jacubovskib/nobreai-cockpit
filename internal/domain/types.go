@@ -94,6 +94,8 @@ const (
 	LogIntegrationIgnored = "integration_ignored"
 	LogIntegrationRemoved = "integration_removed"
 	LogAgentNotified      = "agent_notified"
+	LogRTKOn              = "rtk_on"
+	LogRTKOff             = "rtk_off"
 )
 
 // ConfigLogEntry é uma linha do registro de mudanças de configuração.

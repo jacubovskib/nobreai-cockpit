@@ -7,6 +7,7 @@ import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
 import { formatAmount, formatMoney, moneySymbol, useCurrency } from '../ui/money'
+import { RtkSavings } from './analytics/RtkSavings'
 import { ContextSection } from './analytics/ContextSection'
 import { DailyChart } from './analytics/DailyChart'
 import { buildDays, range, tokens, ymd } from './analytics/data'
@@ -273,6 +274,7 @@ export function Analytics() {
           </table>
         </div>
       </section>
+      <RtkSavings from={from} to={to} projectId={projectId} exact={exact} />
       <ContextSection from={from} to={to} projectId={projectId} exact={exact} />
       <p style={muted}>Custo calculado pela tabela de preços por modelo; em planos de assinatura, mostra o equivalente em API. Uso de modelo sem preço aparece como “sem preço”, nunca como zero.</p>
     </div>

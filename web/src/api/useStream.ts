@@ -8,12 +8,14 @@ const KIND_KEYS: Record<string, string[]> = {
   // Sem 'context': sessions sai a cada hook, e o contexto medido sempre
   // publica usage.
   sessions: ['sessions', 'card', 'cards', 'overview', 'usage', 'events', 'worktrees'],
-  config: ['settings', 'limits', 'prices', 'projects', 'overview', 'worktrees'],
-  usage: ['usage', 'context', 'overview', 'cards', 'card'],
+  config: ['settings', 'limits', 'prices', 'projects', 'overview', 'worktrees', 'rtk', 'rtk-savings'],
+  // Só a economia do RTK: o estado ('rtk') roda rtk --version e a prévia não muda com o uso.
+  usage: ['usage', 'context', 'overview', 'cards', 'card', 'rtk-savings'],
   prompts: ['prompts', 'continue-preview'],
   terminals: ['terminals'],
   plan: ['plan', 'overview'],
-  integration: ['overview', 'config-log', 'agents'],
+  // 'rtk': o hook pode ter saído do settings.json fora do Cockpit.
+  integration: ['overview', 'config-log', 'agents', 'rtk'],
   config_log: ['config-log'],
 }
 

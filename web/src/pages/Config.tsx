@@ -7,6 +7,7 @@ import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { AddProject } from './config/AddProject'
 import { isGroup } from '../app/project'
+import { RtkCard } from './config/RtkCard'
 import { ConfigLog } from './config/ConfigLog'
 import { ErrorLine, btn, btnPrimary, h2, input, muted, panel } from './card/shared'
 
@@ -176,6 +177,7 @@ function Agents({ settings }: { settings?: Settings }) {
       {agents.isPending && <p className="placeholder">Detectando…</p>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
         {agents.data?.map((a) => <AgentCard key={a.agent} info={a} />)}
+        <RtkCard />
       </div>
       {settings && <PlanWarn settings={settings} />}
     </Section>

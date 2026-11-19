@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/rtk"
 )
 
 type fakeStore struct {
@@ -421,5 +423,66 @@ func TestBrokenNotReloggedAfterRestart(t *testing.T) {
 	e.monitor().CheckNow()
 	if n := e.st.count(domain.LogIntegrationBroken); n != 2 {
 		t.Fatalf("quebra nova: broken logado %d vezes", n)
+	}
+}
+
+func TestRTK_NeverActiveNoAlert(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{bad("rtk", "missing", "hook ausente")}
+	for i := 0; i < 2; i++ {
+		if p := m.CheckNow(); len(p) != 0 {
+			t.Fatalf("%+v", p)
+		}
+	}
+}
+
+func TestRTK_RemovedOutside(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("rtk")}
+	m.CheckNow()
+	e.checks = []adapter.Check{bad("rtk", "missing", "hook ausente")}
+	p := m.CheckNow()
+	want := "O hook do RTK sumiu do ~/.claude/settings.json; os comandos voltam a sair sem compressão."
+	if len(p) != 1 || p[0].Key != "rtk" || p[0].Action != ActionRTK || p[0].Text != want {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestRTK_DeadBinary(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("rtk")}
+	m.CheckNow()
+	e.checks = []adapter.Check{bad("rtk", "dead_binary", "sumiu")}
+	p := m.CheckNow()
+	want := "O RTK está ativo no Claude Code, mas o binário sumiu. Reinstale com cargo install --git https://github.com/rtk-ai/rtk --branch master rtk."
+	if len(p) != 1 || p[0].Action != ActionConfig || p[0].Text != want {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestRTK_MissingWithoutBinary(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("rtk")}
+	m.CheckNow()
+	e.checks = []adapter.Check{bad("rtk", "missing", rtk.DetailNotInstalled)}
+	p := m.CheckNow()
+	if len(p) != 1 || p[0].Action != ActionConfig || !strings.Contains(p[0].Text, "Reinstale") {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestRTK_DeliberateRemoval(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("rtk")}
+	m.CheckNow()
+	m.Removed([]string{"rtk"}, "config")
+	e.checks = []adapter.Check{bad("rtk", "missing", "hook ausente")}
+	if p := m.CheckNow(); len(p) != 0 {
+		t.Fatalf("%+v", p)
 	}
 }

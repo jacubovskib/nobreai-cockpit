@@ -1,0 +1,503 @@
+// Package rtk embrulha tudo o que toca o binário do RTK (Rust Token Killer) e
+// o settings.json do Claude Code: achar o binário, saber se o hook está ativo,
+// ativar/desativar com cópia de segurança e ler o ganho de tokens.
+// O Cockpit nunca baixa nem instala o RTK; só roda o que já está instalado.
+package rtk
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+)
+
+const (
+	kvActivations = "rtk_activations"
+	hookCommand   = "rtk hook claude"
+	backupPrefix  = "settings.json.bak-rtk-"
+	keepBackups   = 3
+	gainTTL       = 60 * time.Second
+	gainErrTTL    = 15 * time.Second // falha também fica em cache, por menos tempo
+	shortTimeout  = 5 * time.Second
+	initTimeout   = 20 * time.Second
+)
+
+// DetailNotInstalled é o Detail do Check quando o hook falta e o binário
+// também: o monitor usa para não oferecer "religar" sem o RTK instalado.
+const DetailNotInstalled = "RTK não instalado"
+
+// KV é o armazenamento chave-valor (config do store).
+type KV interface {
+	GetKV(key string, v any) (bool, error)
+	PutKV(key string, v any) error
+}
+
+// Interval é um período em que o hook esteve ativo.
+type Interval struct {
+	On  time.Time  `json:"on"`
+	Off *time.Time `json:"off,omitempty"` // nil = ativo
+}
+
+// Status é o retrato do RTK neste momento.
+type Status struct {
+	Installed   bool       `json:"installed"`
+	Path        string     `json:"path"`
+	Version     string     `json:"version"` // "1.2.0" (sem o prefixo "rtk ")
+	Active      bool       `json:"active"`  // hook no settings.json
+	Detail      string     `json:"detail"`  // motivo quando inativo/ilegível
+	Activations []Interval `json:"activations"`
+}
+
+// GainDay é a linha diária de `rtk gain --daily --format json`.
+type GainDay struct {
+	Date         string `json:"date"`
+	Commands     int64  `json:"commands"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+	SavedTokens  int64  `json:"saved_tokens"`
+}
+
+// Tool reúne as dependências; os testes injetam um rtk falso e arquivos temporários.
+type Tool struct {
+	SettingsPath string        // ~/.claude/settings.json
+	Home         string        // para os fallbacks ~/.cargo/bin e ~/.local/bin
+	SearchPATH   func() string // nil = PATH do processo
+	Store        KV
+	Now          func() time.Time
+	// Run executa o binário; nil = os/exec com timeout.
+	Run func(ctx context.Context, bin string, args ...string) ([]byte, error)
+
+	mu      sync.Mutex // protege o KV de intervalos
+	applyMu sync.Mutex // serializa Apply (backup + init)
+	gainMu  sync.Mutex // protege só os campos do cache do gain
+	gain    []GainDay
+	gainErr error
+	gainAt  time.Time
+	gainSet bool
+	gainRun *gainFlight // execução em andamento; as chamadas concorrentes esperam por ela
+}
+
+// gainFlight é uma execução do `rtk gain` compartilhada por quem chega enquanto ela roda.
+type gainFlight struct {
+	done chan struct{}
+	days []GainDay
+	err  error
+}
+
+func (t *Tool) now() time.Time {
+	if t.Now != nil {
+		return t.Now()
+	}
+	return time.Now()
+}
+
+// Find devolve o caminho do rtk: PATH do usuário, ~/.cargo/bin, ~/.local/bin.
+// Vazio quando não está instalado.
+func (t *Tool) Find() string {
+	path := os.Getenv("PATH")
+	if t.SearchPATH != nil {
+		path = t.SearchPATH()
+	}
+	for _, d := range filepath.SplitList(path) {
+		if !filepath.IsAbs(d) {
+			continue
+		}
+		if p := filepath.Join(d, "rtk"); executable(p) {
+			return p
+		}
+	}
+	if t.Home != "" {
+		for _, rel := range []string{".cargo/bin/rtk", ".local/bin/rtk"} {
+			if p := filepath.Join(t.Home, rel); executable(p) {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+func executable(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
+}
+
+// run executa o rtk, pelo Run injetado ou por os/exec.
+func (t *Tool) run(bin string, args ...string) ([]byte, error) {
+	if t.Run != nil {
+		return t.Run(context.Background(), bin, args...)
+	}
+	timeout := shortTimeout
+	if len(args) > 0 && args[0] == "init" && !contains(args, "--dry-run") {
+		timeout = initTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	// Sem WaitDelay, um neto que herdou a saída segura o Wait além do timeout.
+	cmd.WaitDelay = time.Second
+	cmd.Env = os.Environ()
+	if t.Home != "" {
+		cmd.Env = append(cmd.Env, "HOME="+t.Home)
+	}
+	if t.SearchPATH != nil {
+		cmd.Env = append(cmd.Env, "PATH="+t.SearchPATH())
+	}
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	err := cmd.Run()
+	return buf.Bytes(), err
+}
+
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// hookState lê o settings.json: ativo, motivo, código do Check e erro.
+type hookState struct {
+	active bool
+	detail string
+	code   string // "", "missing", "unreadable", "no_settings"
+}
+
+func (t *Tool) hook() hookState {
+	raw, err := os.ReadFile(t.SettingsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return hookState{detail: "settings.json do Claude Code não existe", code: "no_settings"}
+		}
+		return hookState{detail: "não consegui ler o settings.json: " + err.Error(), code: "unreadable"}
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return hookState{detail: "settings.json ilegível: " + err.Error(), code: "unreadable"}
+	}
+	hooks, _ := doc["hooks"].(map[string]any)
+	entries, _ := hooks["PreToolUse"].([]any)
+	for _, e := range entries {
+		entry, _ := e.(map[string]any)
+		matcher, _ := entry["matcher"].(string)
+		if !matchesBash(matcher) {
+			continue
+		}
+		cmds, _ := entry["hooks"].([]any)
+		for _, c := range cmds {
+			m, _ := c.(map[string]any)
+			if cmd, _ := m["command"].(string); strings.Contains(cmd, hookCommand) {
+				return hookState{active: true}
+			}
+		}
+	}
+	return hookState{detail: "hook do RTK não está no settings.json", code: "missing"}
+}
+
+// matchesBash diz se o matcher do hook casa a ferramenta Bash.
+func matchesBash(m string) bool {
+	if m == "" || m == "*" {
+		return true
+	}
+	for _, alt := range strings.Split(m, "|") {
+		if strings.TrimSpace(alt) == "Bash" {
+			return true
+		}
+	}
+	return false
+}
+
+// Status devolve o retrato atual; withVersion roda `rtk --version`.
+func (t *Tool) Status(withVersion bool) Status {
+	s := Status{Path: t.Find()}
+	s.Installed = s.Path != ""
+	if s.Installed && withVersion {
+		if out, err := t.run(s.Path, "--version"); err == nil {
+			s.Version = strings.TrimPrefix(strings.TrimSpace(string(out)), "rtk ")
+		}
+	}
+	h := t.hook()
+	s.Active, s.Detail = h.active, h.detail
+	s.Activations, _ = t.Activations()
+	return s
+}
+
+// Check é o item do checklist de integrações e mantém os intervalos em dia:
+// hook ativo com binário e sem intervalo aberto (ativação manual) abre um;
+// settings.json legível sem o hook (removido fora do Cockpit) fecha o aberto.
+// settings.json ausente ou ilegível não mexe nos intervalos.
+func (t *Tool) Check() adapter.Check {
+	c := adapter.Check{Key: "rtk", Label: "RTK ativo no Claude Code"}
+	bin := t.Find()
+	h := t.hook()
+	c.State = bin + "|" + h.code + "|" + fmt.Sprint(h.active)
+	switch {
+	case h.code == "no_settings" || h.code == "unreadable":
+		c.Code, c.Detail = h.code, h.detail
+	case !h.active:
+		c.Code = "missing"
+		c.Detail = "hook do RTK não está ativo"
+		if bin == "" {
+			c.Detail = DetailNotInstalled
+		}
+		t.closeIfOpen()
+	case bin == "":
+		// Hook sem binário não comprime nada: não abre intervalo.
+		c.Code, c.Detail = "dead_binary", "hook ativo, mas o binário rtk não foi encontrado"
+	default:
+		c.OK = true
+		c.Detail = bin
+		t.openIfNone()
+	}
+	return c
+}
+
+// openIfNone abre um intervalo quando o hook está ativo e nenhum está aberto.
+func (t *Tool) openIfNone() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	iv, err := t.loadLocked()
+	if err != nil {
+		return
+	}
+	if n := len(iv); n > 0 && iv[n-1].Off == nil {
+		return
+	}
+	_ = t.saveLocked(append(iv, Interval{On: t.now()}))
+}
+
+// closeIfOpen fecha o intervalo aberto, se houver, quando o hook sumiu.
+func (t *Tool) closeIfOpen() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	iv, err := t.loadLocked()
+	if err != nil {
+		return
+	}
+	n := len(iv)
+	if n == 0 || iv[n-1].Off != nil {
+		return
+	}
+	off := t.now()
+	iv[n-1].Off = &off
+	_ = t.saveLocked(iv)
+}
+
+func (t *Tool) loadLocked() ([]Interval, error) {
+	if t.Store == nil {
+		return nil, nil
+	}
+	var iv []Interval
+	if _, err := t.Store.GetKV(kvActivations, &iv); err != nil {
+		return nil, err
+	}
+	return iv, nil
+}
+
+func (t *Tool) saveLocked(iv []Interval) error {
+	if t.Store == nil {
+		return nil
+	}
+	return t.Store.PutKV(kvActivations, iv)
+}
+
+// Activations devolve os intervalos de ativação registrados.
+func (t *Tool) Activations() ([]Interval, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.loadLocked()
+}
+
+func initArgs(action string) ([]string, error) {
+	switch action {
+	case "activate":
+		return []string{"init", "-g", "--hook-only", "--auto-patch"}, nil
+	case "deactivate":
+		return []string{"init", "-g", "--uninstall"}, nil
+	}
+	return nil, fmt.Errorf("ação inválida: %q", action)
+}
+
+// Preview roda o init com --dry-run e devolve o que ele faria.
+func (t *Tool) Preview(action string) (string, error) {
+	args, err := initArgs(action)
+	if err != nil {
+		return "", err
+	}
+	bin := t.Find()
+	if bin == "" {
+		return "", errors.New(DetailNotInstalled)
+	}
+	out, err := t.run(bin, append(args, "--dry-run")...)
+	if err != nil {
+		return string(out), fmt.Errorf("rtk falhou: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+// Apply ativa ou desativa o hook: copia o settings.json (guarda as 3 cópias
+// mais recentes), roda o init e atualiza os intervalos. Não restaura sozinho.
+func (t *Tool) Apply(action string) (out string, backup string, err error) {
+	args, err := initArgs(action)
+	if err != nil {
+		return "", "", err
+	}
+	t.applyMu.Lock()
+	defer t.applyMu.Unlock()
+	bin := t.Find()
+	if bin == "" {
+		return "", "", errors.New(DetailNotInstalled)
+	}
+	if _, serr := os.Stat(t.SettingsPath); serr != nil {
+		if action == "activate" || !errors.Is(serr, os.ErrNotExist) {
+			return "", "", fmt.Errorf("settings.json indisponível: %v", serr)
+		}
+	} else if backup, err = t.backup(); err != nil {
+		return "", "", fmt.Errorf("não consegui copiar o settings.json: %v", err)
+	}
+	raw, rerr := t.run(bin, args...)
+	out = string(raw)
+	if rerr != nil {
+		return out, backup, fmt.Errorf("rtk falhou: %v: %s", rerr, strings.TrimSpace(out))
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	iv, lerr := t.loadLocked()
+	if lerr != nil {
+		return out, backup, lerr
+	}
+	open := len(iv) > 0 && iv[len(iv)-1].Off == nil
+	switch {
+	case action == "activate" && !open:
+		iv = append(iv, Interval{On: t.now()})
+	case action == "deactivate" && open:
+		off := t.now()
+		iv[len(iv)-1].Off = &off
+	default:
+		return out, backup, nil
+	}
+	return out, backup, t.saveLocked(iv)
+}
+
+// backup copia o settings.json para settings.json.bak-rtk-<AAAAMMDD-HHMMSS>
+// (com sufixo -2, -3... se o nome já existir) e apaga as cópias além das 3
+// mais recentes, nunca a recém-criada.
+func (t *Tool) backup() (string, error) {
+	data, err := os.ReadFile(t.SettingsPath)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(t.SettingsPath)
+	base := backupPrefix + t.now().Format("20060102-150405")
+	dst := filepath.Join(dir, base)
+	for n := 2; ; n++ {
+		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			_, werr := f.Write(data)
+			if cerr := f.Close(); werr == nil {
+				werr = cerr
+			}
+			if werr != nil {
+				_ = os.Remove(dst)
+				return "", werr
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return "", err
+		}
+		dst = filepath.Join(dir, fmt.Sprintf("%s-%d", base, n))
+	}
+	t.prune(dir, filepath.Base(dst))
+	return dst, nil
+}
+
+// prune mantém só as 3 cópias mais recentes (incluindo a recém-criada).
+func (t *Tool) prune(dir, keep string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		log.Printf("rtk: não consegui listar %s para podar cópias: %v", dir, err)
+		return
+	}
+	var names []string
+	for _, e := range entries {
+		if n := e.Name(); strings.HasPrefix(n, backupPrefix) && n != keep {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names) // o carimbo ordena cronologicamente
+	for len(names) > keepBackups-1 {
+		if err := os.Remove(filepath.Join(dir, names[0])); err != nil {
+			log.Printf("rtk: não consegui apagar a cópia %s: %v", names[0], err)
+		}
+		names = names[1:]
+	}
+}
+
+// Gain devolve os dias de `rtk gain --daily --format json`, com cache de 60 s
+// (15 s para falha). Chamadas concorrentes esperam a mesma execução, então um
+// rtk lento não empilha subprocessos. O subprocesso roda fora de qualquer
+// trava compartilhada com os intervalos.
+func (t *Tool) Gain() ([]GainDay, error) {
+	t.gainMu.Lock()
+	if t.gainSet {
+		ttl := gainTTL
+		if t.gainErr != nil {
+			ttl = gainErrTTL
+		}
+		if age := t.now().Sub(t.gainAt); age >= 0 && age < ttl {
+			days, err := append([]GainDay(nil), t.gain...), t.gainErr
+			t.gainMu.Unlock()
+			return days, err
+		}
+	}
+	if f := t.gainRun; f != nil {
+		t.gainMu.Unlock()
+		<-f.done
+		return append([]GainDay(nil), f.days...), f.err
+	}
+	f := &gainFlight{done: make(chan struct{})}
+	t.gainRun = f
+	t.gainMu.Unlock()
+
+	defer func() {
+		t.gainMu.Lock()
+		t.gain, t.gainErr, t.gainAt, t.gainSet = f.days, f.err, t.now(), true
+		t.gainRun = nil
+		t.gainMu.Unlock()
+		close(f.done)
+	}()
+	f.days, f.err = t.fetchGain()
+	return append([]GainDay(nil), f.days...), f.err
+}
+
+// fetchGain roda o `rtk gain` e decodifica a saída.
+func (t *Tool) fetchGain() ([]GainDay, error) {
+	bin := t.Find()
+	if bin == "" {
+		return nil, errors.New(DetailNotInstalled)
+	}
+	out, err := t.run(bin, "gain", "--daily", "--format", "json")
+	if err != nil {
+		return nil, fmt.Errorf("rtk gain indisponível: %v", err)
+	}
+	var doc struct {
+		Daily []GainDay `json:"daily"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		return nil, fmt.Errorf("saída do rtk gain inválida: %v", err)
+	}
+	return doc.Daily, nil
+}
