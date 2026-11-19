@@ -70,7 +70,7 @@ func novo(t *testing.T, withBin bool, settings string) *env {
 			"case \"$1\" in\n" +
 			"--version) echo 'rtk 1.2.0';;\n" +
 			"gain) echo '" + gainJSON + "';;\n" +
-			"init) if [ -n \"$RTK_FAIL\" ] || [ -f " + filepath.Join(dir, "fail") + " ]; then echo 'falhou feio'; exit 1; fi; echo 'feito';;\n" +
+			"init) if [ -n \"$RTK_FAIL\" ] || [ -f " + filepath.Join(dir, "fail") + " ]; then echo 'falhou feio'; exit 1; fi; echo '{\"mudou\":1}' > " + e.settings + "; echo 'feito';;\n" +
 			"esac\n"
 		if err := os.WriteFile(e.bin, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
@@ -199,7 +199,7 @@ func TestCheck_OpensIntervalForManualActivation(t *testing.T) {
 	e := novo(t, true, hookBash)
 	e.tool.Check()
 	iv, err := e.tool.Activations()
-	if err != nil || len(iv) != 1 || !iv[0].On.Equal(e.now) || !iv[0].Off.IsZero() {
+	if err != nil || len(iv) != 1 || !iv[0].On.Equal(e.now) || iv[0].Off != nil {
 		t.Fatalf("intervalos = %+v (%v)", iv, err)
 	}
 	e.now = e.now.Add(time.Hour)
@@ -210,7 +210,7 @@ func TestCheck_OpensIntervalForManualActivation(t *testing.T) {
 	// hook inativo: Check não fecha
 	os.WriteFile(e.settings, []byte(`{}`), 0o644)
 	e.tool.Check()
-	if iv, _ := e.tool.Activations(); len(iv) != 1 || !iv[0].Off.IsZero() {
+	if iv, _ := e.tool.Activations(); len(iv) != 1 || iv[0].Off != nil {
 		t.Fatalf("Check fechou o intervalo: %+v", iv)
 	}
 }
@@ -247,8 +247,77 @@ func TestApply_Activate(t *testing.T) {
 		}
 	}
 	iv, _ := e.tool.Activations()
-	if len(iv) != 1 || !iv[0].On.Equal(e.now) || !iv[0].Off.IsZero() {
+	if len(iv) != 1 || !iv[0].On.Equal(e.now) || iv[0].Off != nil {
 		t.Fatalf("intervalos = %+v", iv)
+	}
+}
+
+func TestApply_BackupDetails(t *testing.T) {
+	e := novo(t, true, `{"original":true}`)
+	dir := filepath.Dir(e.settings)
+	os.WriteFile(filepath.Join(dir, "settings.json.bak-other"), []byte("x"), 0o644)
+	_, b1, err := e.tool.Apply("activate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(b1); string(got) != `{"original":true}` {
+		t.Fatalf("backup = %q", got)
+	}
+	// mesmo segundo: nome único
+	_, b2, _ := e.tool.Apply("deactivate")
+	_, b3, _ := e.tool.Apply("activate")
+	_, b4, _ := e.tool.Apply("deactivate")
+	if b1 == b2 || b2 == b3 || b3 == b4 || b1 == b3 {
+		t.Fatalf("nomes repetidos: %s %s %s %s", b1, b2, b3, b4)
+	}
+	if _, err := os.Stat(b4); err != nil {
+		t.Fatal("a cópia nova foi podada")
+	}
+	baks, _ := filepath.Glob(filepath.Join(dir, "settings.json.bak-rtk-*"))
+	if len(baks) != 3 {
+		t.Fatalf("cópias = %v", baks)
+	}
+	for _, n := range []string{"settings.json", "settings.json.bak-other"} {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			t.Fatalf("%s sumiu", n)
+		}
+	}
+}
+
+func TestApply_BackupSurvivesFailure(t *testing.T) {
+	e := novo(t, true, `{"original":true}`)
+	os.WriteFile(filepath.Join(e.dir, "fail"), nil, 0o644)
+	_, backup, err := e.tool.Apply("activate")
+	if err == nil || backup == "" {
+		t.Fatalf("err=%v backup=%q", err, backup)
+	}
+	if _, serr := os.Stat(backup); serr != nil {
+		t.Fatal("backup sumiu após falha")
+	}
+}
+
+func TestApply_DeactivateWithoutSettings(t *testing.T) {
+	e := novo(t, true, "")
+	_, backup, err := e.tool.Apply("deactivate")
+	if err != nil || backup != "" {
+		t.Fatalf("err=%v backup=%q", err, backup)
+	}
+	if got := e.invocacoes(); len(got) != 1 || got[0] != "init -g --uninstall" {
+		t.Fatalf("invocações = %q", got)
+	}
+}
+
+func TestFind_IgnoresRelativePATH(t *testing.T) {
+	e := novo(t, false, "")
+	e.tool.SearchPATH = func() string { return ":bin:." }
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "bin"), 0o755)
+	os.WriteFile(filepath.Join(dir, "bin", "rtk"), []byte("#!/bin/sh\n"), 0o755)
+	cwd, _ := os.Getwd()
+	defer os.Chdir(cwd)
+	os.Chdir(dir)
+	if got := e.tool.Find(); got != "" {
+		t.Fatalf("Find = %q", got)
 	}
 }
 
@@ -264,7 +333,7 @@ func TestApply_Deactivate(t *testing.T) {
 		t.Fatalf("invocações = %q", got)
 	}
 	iv, _ := e.tool.Activations()
-	if len(iv) != 1 || !iv[0].Off.Equal(e.now) {
+	if len(iv) != 1 || iv[0].Off == nil || !iv[0].Off.Equal(e.now) {
 		t.Fatalf("intervalos = %+v", iv)
 	}
 }
