@@ -363,3 +363,32 @@ func TestIntegrationSkipsGroupCard(t *testing.T) {
 		t.Fatalf("column = %s", got.Column)
 	}
 }
+
+func TestIntegrationConcludedCardGetsMemoryCandidates(t *testing.T) {
+	st, d, c := integFixture(t, domain.Revisao, "feat/x")
+	if _, err := st.AddDecision(domain.Decision{CardID: c.ID, What: "Usar fila", Why: "evita perda", At: integNow}); err != nil {
+		t.Fatal(err)
+	}
+	runCheck(t, st)
+	mergeFeat(t, d)
+	runCheck(t, st)
+	got, _ := st.GetCardByID(c.ID)
+	if got.Column != domain.Concluido {
+		t.Fatalf("card = %+v", got)
+	}
+	ms, err := st.ListMemories(store.MemoryFilter{})
+	if err != nil || len(ms) != 1 || ms[0].Rule != "Usar fila" || ms[0].Status != "candidata" || ms[0].Source != "card" {
+		t.Fatalf("ms = %+v %v", ms, err)
+	}
+}
+
+func TestIntegrationInProgressCardGetsNoMemoryCandidates(t *testing.T) {
+	st, d, c := integFixture(t, domain.EmAndamento, "feat/x")
+	st.AddDecision(domain.Decision{CardID: c.ID, What: "Usar fila", Why: "evita perda", At: integNow})
+	runCheck(t, st)
+	mergeFeat(t, d)
+	runCheck(t, st)
+	if ms, _ := st.ListMemories(store.MemoryFilter{}); len(ms) != 0 {
+		t.Fatalf("ms = %+v", ms)
+	}
+}

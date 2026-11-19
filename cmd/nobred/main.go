@@ -207,7 +207,7 @@ func run(dbPath string, seedDemo bool) error {
 	go func() {
 		defer close(intDone)
 		board.RunIntegrations(ctx, st, git, 2*time.Minute, time.Now,
-			func() { hub.Publish("cards") }, log.Printf)
+			func() { hub.Publish("cards"); hub.Publish("memories") }, log.Printf)
 	}()
 	defer func() { stop(); <-intDone }()
 	if mon != nil {

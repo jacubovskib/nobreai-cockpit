@@ -335,3 +335,59 @@ func TestCLIApp(t *testing.T) {
 		t.Fatalf("uso: %+v", r)
 	}
 }
+
+func TestCLILembrar(t *testing.T) {
+	var last, body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		bs, _ := io.ReadAll(r.Body)
+		last, body = r.Method+" "+r.URL.Path, string(bs)
+		w.Write([]byte(`{"id":7,"similar":[{"id":3,"rule":"regra parecida"}]}`))
+	})
+	r := runCLI(t, addr, "", nil, "lembrar", "usar", "rtk", "--faca", "rtk git status", "--cat", "shell", "--escopo", "raiz")
+	if r.code != 0 || last != "POST /api/me/remember" {
+		t.Fatalf("%+v last=%s", r, last)
+	}
+	var got map[string]string
+	json.Unmarshal([]byte(body), &got)
+	if got["rule"] != "usar rtk" || got["do"] != "rtk git status" || got["category"] != "shell" || got["scope"] != "raiz" {
+		t.Fatalf("body = %s", body)
+	}
+	if r.stdout != "Memória #7 gravada (raiz).\nParecida com #3: regra parecida\n" {
+		t.Fatalf("stdout = %q", r.stdout)
+	}
+	runCLI(t, addr, "", nil, "lembrar", "só regra")
+	json.Unmarshal([]byte(body), &got)
+	if got["category"] != "dominio" || got["scope"] != "projeto" || got["do"] != "" {
+		t.Fatalf("padrões = %s", body)
+	}
+	if r := runCLI(t, addr, "", nil, "lembrar"); r.code != 2 || !strings.Contains(r.err, "uso: nobre lembrar") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCLILembrarSemParecida(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"id":2,"similar":[]}`)) })
+	if r := runCLI(t, addr, "", nil, "lembrar", "x", "--escopo", "global"); r.stdout != "Memória #2 gravada (global).\n" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCLIMemorias(t *testing.T) {
+	var query string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Write([]byte(`[{"id":4,"category":"shell","rule":"usar rtk","do":"rtk git","scope":"raiz"},{"id":5,"category":"dominio","rule":"sem ação","do":"","scope":"global"}]`))
+	})
+	r := runCLI(t, addr, "", nil, "memorias", "rtk")
+	want := "#4 [shell] (raiz) usar rtk → rtk git\n#5 [dominio] (global) sem ação\n"
+	if r.code != 0 || r.stdout != want || query != "q=rtk" {
+		t.Fatalf("%+v query=%q", r, query)
+	}
+	addr = fake(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`[]`)) })
+	if r := runCLI(t, addr, "", nil, "memorias"); r.stdout != "Nenhuma memória.\n" {
+		t.Fatalf("%+v", r)
+	}
+	if r := runCLI(t, addr, "", nil, "lembrar", "--help"); !strings.Contains(r.stdout, "--faca") {
+		t.Fatalf("help = %q", r.stdout)
+	}
+}

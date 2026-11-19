@@ -444,3 +444,12 @@ func (s *Store) MemoriesForSession(sess domain.Session) (app, root, global []dom
 	}
 	return app, root, global, nil
 }
+
+// GetMemory devolve a memória pelo id (qualquer status).
+func (s *Store) GetMemory(id int64) (domain.Memory, error) {
+	m, err := scanMemory(s.DB.QueryRow(`SELECT `+memoryCols+` FROM memories WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	return m, err
+}

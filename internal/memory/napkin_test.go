@@ -84,11 +84,11 @@ func TestParseNapkin_Irregular(t *testing.T) {
 	}
 	var long NapkinItem
 	for _, it := range items {
-		if len([]rune(it.Rule)) == 300 {
+		if len([]rune(it.Rule)) > 300 {
 			long = it
 		}
 	}
-	if !long.NeedsReview || !strings.HasSuffix(long.Rule, "…") {
+	if !long.NeedsReview || strings.Contains(long.Rule, "…") {
 		t.Errorf("longa: %+v", long)
 	}
 }

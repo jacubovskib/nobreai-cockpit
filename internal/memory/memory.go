@@ -174,3 +174,12 @@ func FormatBlock(chosen []Item, left int) string {
 	}
 	return b.String()
 }
+
+// UsedTokens soma os tokens estimados das linhas escolhidas.
+func UsedTokens(chosen []Item) int {
+	n := 0
+	for _, it := range chosen {
+		n += it.tokens()
+	}
+	return n
+}

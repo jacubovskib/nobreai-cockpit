@@ -92,11 +92,22 @@ func checkCardIntegration(st *store.Store, git gitinfo.BranchReader, now time.Ti
 	}
 	// Marca, decisão e ida para concluido (só se ainda em revisao) numa
 	// transação, condicionadas ao branch lido: a leitura pode estar velha.
-	return st.RecordIntegration(c.ID, c.Branch, now, domain.Decision{
+	recorded, err := st.RecordIntegration(c.ID, c.Branch, now, domain.Decision{
 		What: fmt.Sprintf("Branch %s integrada em %s (%s)", c.Branch, base, merged[:min(7, len(merged))]),
 		Why:  "detectado pelo Cockpit",
 		At:   now,
 	})
+	if err != nil || !recorded || c.Column != domain.Revisao {
+		return recorded, err
+	}
+	// O card pode ter ido para concluido: gera as memórias candidatas das decisões.
+	// Falha aqui não desfaz a integração; volta junto para o log.
+	if cur, gerr := st.GetCardByID(c.ID); gerr == nil && cur.Column == domain.Concluido {
+		if _, merr := st.CardMemoryCandidates(c.ID); merr != nil {
+			return recorded, fmt.Errorf("memórias candidatas: %w", merr)
+		}
+	}
+	return recorded, nil
 }
 
 // RunIntegrations chama CheckIntegrations a cada every até ctx terminar

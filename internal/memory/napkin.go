@@ -5,6 +5,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // NapkinItem é um item lido de um .claude/napkin.md.
@@ -12,7 +13,7 @@ type NapkinItem struct {
 	Category    Category
 	Rule, Do    string
 	Date        string // "AAAA-MM-DD" ou ""
-	NeedsReview bool   // cortado ou sem ação
+	NeedsReview bool   // acima de 300/400 caracteres ou sem ação
 }
 
 const (
@@ -108,9 +109,9 @@ func (d *napkinDraft) build() NapkinItem {
 		it.Date = m[1]
 		head = strings.TrimSpace(head[len(m[0]):])
 	}
-	var cutR, cutD bool
-	it.Rule, cutR = CleanText(head, maxRule)
-	it.Do, cutD = CleanText(strings.Join(d.do, " "), maxDo)
-	it.NeedsReview = cutR || cutD || it.Do == ""
+	// O texto vai inteiro: candidata guarda tudo e o usuário edita antes de aprovar.
+	it.Rule, _ = CleanText(head, 0)
+	it.Do, _ = CleanText(strings.Join(d.do, " "), 0)
+	it.NeedsReview = utf8.RuneCountInString(it.Rule) > maxRule || utf8.RuneCountInString(it.Do) > maxDo || it.Do == ""
 	return it
 }

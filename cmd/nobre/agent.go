@@ -341,3 +341,51 @@ func derefID(p *int64) int64 {
 	}
 	return *p
 }
+
+func (c *cli) lembrar(args []string) error {
+	const u = `uso: nobre lembrar "<regra>" [--faca "<ação>"] [--cat execucao|shell|dominio|diretiva] [--escopo projeto|raiz|global]`
+	fs := flag.NewFlagSet("lembrar", flag.ContinueOnError)
+	do := fs.String("faca", "", "o que fazer em vez disso")
+	cat := fs.String("cat", "dominio", "categoria: execucao, shell, dominio ou diretiva")
+	scope := fs.String("escopo", "projeto", "escopo: projeto, raiz ou global")
+	pos, err := c.parse(fs, args)
+	if err != nil {
+		return err
+	}
+	rule := joinText(pos)
+	if rule == "" {
+		return usagef(u)
+	}
+	r, err := c.client().Remember(ctx(), rule, *do, *cat, *scope)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Memória #%d gravada (%s).\n", r.ID, *scope)
+	for _, s := range r.Similar {
+		fmt.Fprintf(c.out, "Parecida com #%d: %s\n", s.ID, s.Rule)
+	}
+	return nil
+}
+
+func (c *cli) memorias(args []string) error {
+	pos, err := c.parse(flag.NewFlagSet("memorias", flag.ContinueOnError), args)
+	if err != nil {
+		return err
+	}
+	list, err := c.client().Memories(ctx(), joinText(pos))
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		fmt.Fprintln(c.out, "Nenhuma memória.")
+		return nil
+	}
+	for _, m := range list {
+		line := fmt.Sprintf("#%d [%s] (%s) %s", m.ID, m.Category, m.Scope, m.Rule)
+		if m.Do != "" {
+			line += " → " + m.Do
+		}
+		fmt.Fprintln(c.out, line)
+	}
+	return nil
+}

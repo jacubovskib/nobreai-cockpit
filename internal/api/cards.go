@@ -191,6 +191,7 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
+	oldColumn := c.Column
 	if in.Column != nil {
 		if !validColumn(*in.Column) {
 			writeError(w, http.StatusBadRequest, "coluna inválida")
@@ -289,6 +290,9 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 	if err := s.st.UpdateCard(c); err != nil {
 		writeStoreError(w, err, msgCardNotFound)
 		return
+	}
+	if c.Column == domain.Concluido && oldColumn != domain.Concluido {
+		s.cardMemoryCandidates(c)
 	}
 	s.publish("cards")
 	s.writeCard(w, http.StatusOK, c.Key)
