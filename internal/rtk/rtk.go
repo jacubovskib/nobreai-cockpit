@@ -28,9 +28,14 @@ const (
 	backupPrefix  = "settings.json.bak-rtk-"
 	keepBackups   = 3
 	gainTTL       = 60 * time.Second
+	gainErrTTL    = 15 * time.Second // falha também fica em cache, por menos tempo
 	shortTimeout  = 5 * time.Second
 	initTimeout   = 20 * time.Second
 )
+
+// DetailNotInstalled é o Detail do Check quando o hook falta e o binário
+// também: o monitor usa para não oferecer "religar" sem o RTK instalado.
+const DetailNotInstalled = "RTK não instalado"
 
 // KV é o armazenamento chave-valor (config do store).
 type KV interface {
@@ -77,8 +82,17 @@ type Tool struct {
 	applyMu sync.Mutex // serializa Apply (backup + init)
 	gainMu  sync.Mutex // protege só os campos do cache do gain
 	gain    []GainDay
+	gainErr error
 	gainAt  time.Time
-	gainOK  bool
+	gainSet bool
+	gainRun *gainFlight // execução em andamento; as chamadas concorrentes esperam por ela
+}
+
+// gainFlight é uma execução do `rtk gain` compartilhada por quem chega enquanto ela roda.
+type gainFlight struct {
+	done chan struct{}
+	days []GainDay
+	err  error
 }
 
 func (t *Tool) now() time.Time {
@@ -130,6 +144,8 @@ func (t *Tool) run(bin string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// Sem WaitDelay, um neto que herdou a saída segura o Wait além do timeout.
+	cmd.WaitDelay = time.Second
 	cmd.Env = os.Environ()
 	if t.Home != "" {
 		cmd.Env = append(cmd.Env, "HOME="+t.Home)
@@ -218,8 +234,10 @@ func (t *Tool) Status(withVersion bool) Status {
 	return s
 }
 
-// Check é o item do checklist de integrações. Se o hook está ativo sem
-// intervalo aberto (ativação manual), abre um; só o Apply fecha.
+// Check é o item do checklist de integrações e mantém os intervalos em dia:
+// hook ativo com binário e sem intervalo aberto (ativação manual) abre um;
+// settings.json legível sem o hook (removido fora do Cockpit) fecha o aberto.
+// settings.json ausente ou ilegível não mexe nos intervalos.
 func (t *Tool) Check() adapter.Check {
 	c := adapter.Check{Key: "rtk", Label: "RTK ativo no Claude Code"}
 	bin := t.Find()
@@ -232,11 +250,12 @@ func (t *Tool) Check() adapter.Check {
 		c.Code = "missing"
 		c.Detail = "hook do RTK não está ativo"
 		if bin == "" {
-			c.Detail = "RTK não instalado"
+			c.Detail = DetailNotInstalled
 		}
+		t.closeIfOpen()
 	case bin == "":
+		// Hook sem binário não comprime nada: não abre intervalo.
 		c.Code, c.Detail = "dead_binary", "hook ativo, mas o binário rtk não foi encontrado"
-		t.openIfNone()
 	default:
 		c.OK = true
 		c.Detail = bin
@@ -257,6 +276,23 @@ func (t *Tool) openIfNone() {
 		return
 	}
 	_ = t.saveLocked(append(iv, Interval{On: t.now()}))
+}
+
+// closeIfOpen fecha o intervalo aberto, se houver, quando o hook sumiu.
+func (t *Tool) closeIfOpen() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	iv, err := t.loadLocked()
+	if err != nil {
+		return
+	}
+	n := len(iv)
+	if n == 0 || iv[n-1].Off != nil {
+		return
+	}
+	off := t.now()
+	iv[n-1].Off = &off
+	_ = t.saveLocked(iv)
 }
 
 func (t *Tool) loadLocked() ([]Interval, error) {
@@ -302,7 +338,7 @@ func (t *Tool) Preview(action string) (string, error) {
 	}
 	bin := t.Find()
 	if bin == "" {
-		return "", errors.New("RTK não instalado")
+		return "", errors.New(DetailNotInstalled)
 	}
 	out, err := t.run(bin, append(args, "--dry-run")...)
 	if err != nil {
@@ -322,7 +358,7 @@ func (t *Tool) Apply(action string) (out string, backup string, err error) {
 	defer t.applyMu.Unlock()
 	bin := t.Find()
 	if bin == "" {
-		return "", "", errors.New("RTK não instalado")
+		return "", "", errors.New(DetailNotInstalled)
 	}
 	if _, serr := os.Stat(t.SettingsPath); serr != nil {
 		if action == "activate" || !errors.Is(serr, os.ErrNotExist) {
@@ -410,20 +446,48 @@ func (t *Tool) prune(dir, keep string) {
 	}
 }
 
-// Gain devolve os dias de `rtk gain --daily --format json`, com cache de 60 s.
-// O subprocesso roda fora de qualquer trava compartilhada com os intervalos.
+// Gain devolve os dias de `rtk gain --daily --format json`, com cache de 60 s
+// (15 s para falha). Chamadas concorrentes esperam a mesma execução, então um
+// rtk lento não empilha subprocessos. O subprocesso roda fora de qualquer
+// trava compartilhada com os intervalos.
 func (t *Tool) Gain() ([]GainDay, error) {
-	now := t.now()
 	t.gainMu.Lock()
-	if t.gainOK && now.Sub(t.gainAt) < gainTTL && now.Sub(t.gainAt) >= 0 {
-		out := append([]GainDay(nil), t.gain...)
-		t.gainMu.Unlock()
-		return out, nil
+	if t.gainSet {
+		ttl := gainTTL
+		if t.gainErr != nil {
+			ttl = gainErrTTL
+		}
+		if age := t.now().Sub(t.gainAt); age >= 0 && age < ttl {
+			days, err := append([]GainDay(nil), t.gain...), t.gainErr
+			t.gainMu.Unlock()
+			return days, err
+		}
 	}
+	if f := t.gainRun; f != nil {
+		t.gainMu.Unlock()
+		<-f.done
+		return append([]GainDay(nil), f.days...), f.err
+	}
+	f := &gainFlight{done: make(chan struct{})}
+	t.gainRun = f
 	t.gainMu.Unlock()
+
+	defer func() {
+		t.gainMu.Lock()
+		t.gain, t.gainErr, t.gainAt, t.gainSet = f.days, f.err, t.now(), true
+		t.gainRun = nil
+		t.gainMu.Unlock()
+		close(f.done)
+	}()
+	f.days, f.err = t.fetchGain()
+	return append([]GainDay(nil), f.days...), f.err
+}
+
+// fetchGain roda o `rtk gain` e decodifica a saída.
+func (t *Tool) fetchGain() ([]GainDay, error) {
 	bin := t.Find()
 	if bin == "" {
-		return nil, errors.New("RTK não instalado")
+		return nil, errors.New(DetailNotInstalled)
 	}
 	out, err := t.run(bin, "gain", "--daily", "--format", "json")
 	if err != nil {
@@ -435,8 +499,5 @@ func (t *Tool) Gain() ([]GainDay, error) {
 	if err := json.Unmarshal(out, &doc); err != nil {
 		return nil, fmt.Errorf("saída do rtk gain inválida: %v", err)
 	}
-	t.gainMu.Lock()
-	t.gain, t.gainAt, t.gainOK = doc.Daily, now, true
-	t.gainMu.Unlock()
-	return append([]GainDay(nil), doc.Daily...), nil
+	return doc.Daily, nil
 }

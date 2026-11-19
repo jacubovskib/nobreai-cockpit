@@ -3,9 +3,12 @@ package rtk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -207,11 +210,58 @@ func TestCheck_OpensIntervalForManualActivation(t *testing.T) {
 	if iv, _ := e.tool.Activations(); len(iv) != 1 {
 		t.Fatalf("duplicou: %+v", iv)
 	}
-	// hook inativo: Check não fecha
-	os.WriteFile(e.settings, []byte(`{}`), 0o644)
-	e.tool.Check()
+	// ilegível ou ausente: não fecha (não dá para saber se o hook saiu)
+	os.WriteFile(e.settings, []byte(`{x`), 0o644)
+	if c := e.tool.Check(); c.Code != "unreadable" {
+		t.Fatalf("check = %+v", c)
+	}
 	if iv, _ := e.tool.Activations(); len(iv) != 1 || iv[0].Off != nil {
-		t.Fatalf("Check fechou o intervalo: %+v", iv)
+		t.Fatalf("unreadable fechou o intervalo: %+v", iv)
+	}
+	os.Remove(e.settings)
+	if c := e.tool.Check(); c.Code != "no_settings" {
+		t.Fatalf("check = %+v", c)
+	}
+	if iv, _ := e.tool.Activations(); len(iv) != 1 || iv[0].Off != nil {
+		t.Fatalf("no_settings fechou o intervalo: %+v", iv)
+	}
+	// hook removido fora do Cockpit: Check fecha no Now
+	os.WriteFile(e.settings, []byte(`{}`), 0o644)
+	e.now = e.now.Add(time.Hour)
+	if c := e.tool.Check(); c.Code != "missing" {
+		t.Fatalf("check = %+v", c)
+	}
+	iv, _ = e.tool.Activations()
+	if len(iv) != 1 || iv[0].Off == nil || !iv[0].Off.Equal(e.now) {
+		t.Fatalf("Check deveria fechar o intervalo: %+v", iv)
+	}
+	// de novo: nada muda
+	e.now = e.now.Add(time.Hour)
+	e.tool.Check()
+	if iv2, _ := e.tool.Activations(); len(iv2) != 1 || !iv2[0].Off.Equal(*iv[0].Off) {
+		t.Fatalf("fechou de novo: %+v", iv2)
+	}
+}
+
+func TestCheck_MissingWithoutBinaryCloses(t *testing.T) {
+	e := novo(t, false, `{}`)
+	on := e.now.Add(-time.Hour)
+	e.kv.PutKV(kvActivations, []Interval{{On: on}})
+	if c := e.tool.Check(); c.Code != "missing" || c.Detail != DetailNotInstalled {
+		t.Fatalf("check = %+v", c)
+	}
+	if iv, _ := e.tool.Activations(); len(iv) != 1 || iv[0].Off == nil {
+		t.Fatalf("intervalos = %+v", iv)
+	}
+}
+
+func TestCheck_DeadBinaryOpensNothing(t *testing.T) {
+	e := novo(t, false, hookBash)
+	if c := e.tool.Check(); c.Code != "dead_binary" {
+		t.Fatalf("check = %+v", c)
+	}
+	if iv, _ := e.tool.Activations(); len(iv) != 0 {
+		t.Fatalf("dead_binary abriu intervalo: %+v", iv)
 	}
 }
 
@@ -403,5 +453,68 @@ func TestGain(t *testing.T) {
 	e.now = e.now.Add(2 * time.Minute)
 	if _, err := e.tool.Gain(); err == nil {
 		t.Fatal("saída inválida deveria falhar")
+	}
+}
+
+func TestGain_ConcurrentCallsShareOneRun(t *testing.T) {
+	e := novo(t, true, `{}`)
+	var calls atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	e.tool.Run = func(ctx context.Context, bin string, args ...string) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return []byte(gainJSON), nil
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 10)
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			days, err := e.tool.Gain()
+			if err == nil && len(days) != 1 {
+				err = errors.New("sem dias")
+			}
+			errs <- err
+		}()
+	}
+	<-started
+	time.Sleep(20 * time.Millisecond) // deixa as outras chamadas chegarem enquanto roda
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("rtk gain rodou %d vezes, quer 1", n)
+	}
+}
+
+func TestGain_FailureCachedBriefly(t *testing.T) {
+	e := novo(t, true, `{}`)
+	var calls atomic.Int32
+	e.tool.Run = func(ctx context.Context, bin string, args ...string) ([]byte, error) {
+		calls.Add(1)
+		return []byte("boom"), errors.New("exit 1")
+	}
+	if _, err := e.tool.Gain(); err == nil {
+		t.Fatal("deveria falhar")
+	}
+	e.now = e.now.Add(10 * time.Second)
+	if _, err := e.tool.Gain(); err == nil {
+		t.Fatal("falha em cache deveria voltar como erro")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("rodou %d vezes dentro de 15 s, quer 1", n)
+	}
+	e.now = e.now.Add(6 * time.Second)
+	e.tool.Gain()
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("rodou %d vezes depois de 15 s, quer 2", n)
 	}
 }
