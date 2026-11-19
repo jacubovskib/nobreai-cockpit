@@ -29,6 +29,19 @@ describe('RtkCard', () => {
     expect(screen.getByRole('button', { name: 'Copiar comando' })).toBeInTheDocument()
   })
 
+  it('sem binário mostra o link do projeto e, sem hook, nenhum aviso', async () => {
+    mock({ '/api/rtk': { ...base, installed: false, path: '', version: '' } })
+    show()
+    expect(await screen.findByRole('link', { name: 'https://github.com/rtk-ai/rtk' })).toHaveAttribute('href', 'https://github.com/rtk-ai/rtk')
+    expect(screen.queryByText(/binário sumiu/)).not.toBeInTheDocument()
+  })
+
+  it('hook ainda no settings sem binário avisa', async () => {
+    mock({ '/api/rtk': { ...base, installed: false, active: true, path: '', version: '' } })
+    show()
+    expect(await screen.findByText('O hook do RTK continua no settings.json, mas o binário sumiu: reinstale ou remova o hook.')).toBeInTheDocument()
+  })
+
   it('ativa só depois de confirmar a prévia', async () => {
     const fn = mock({
       '/api/rtk': base,

@@ -31,6 +31,10 @@ export function logPhrase(e: ConfigLogEntry, projects: Project[]): string {
       return `${items(d)}: alerta ignorado`
     case 'integration_removed':
       return `${items(d)} removido por você`
+    case 'rtk_on':
+      return 'RTK ativado no Claude Code'
+    case 'rtk_off':
+      return 'RTK desativado'
     case 'agent_notified':
       return `Sessão ${str(d.session).replace(/^[^:]+:/, '').slice(0, 8)} avisada`
     default:

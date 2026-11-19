@@ -391,4 +391,4 @@ export interface RtkApplied { output: string; backup: string; status: RtkStatus 
 // GET /api/rtk/savings
 export interface RtkGain { available: boolean; commands: number; input_tokens: number; saved_tokens: number; savings_pct: number; oldest_day: string }
 export interface RtkCompare { key: string; before_count: number; before_avg: number; after_count: number; after_avg: number; change_pct: number }
-export interface RtkSavings { gain: RtkGain; compare: RtkCompare[]; activations: RtkActivation[] }
+export interface RtkSavings { installed: boolean; gain: RtkGain; compare: RtkCompare[]; activations: RtkActivation[] }

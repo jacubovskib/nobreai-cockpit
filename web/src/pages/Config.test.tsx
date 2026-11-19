@@ -194,6 +194,15 @@ describe('Config sessões avisadas e histórico', () => {
     expect(await within(sec).findByText('2 sessões abertas vão receber o aviso no próximo passo.')).toBeInTheDocument()
     expect(calls(fn, 'PATCH', '/api/projects/1')).toEqual([{ capture: false }])
   })
+  it('config log names the RTK on and off', async () => {
+    mock({ ...routes(), '/api/config-log?limit=50': [
+      { id: 3, at: '2026-11-17T10:30:00Z', kind: 'rtk_on', data: { version: '1.2.0', backup: '/b' } },
+      { id: 4, at: '2026-11-17T10:40:00Z', kind: 'rtk_off', data: { version: '1.2.0', backup: '/b' } },
+    ] })
+    wrap(<Config />)
+    expect(await screen.findByText(/RTK ativado no Claude Code/)).toBeInTheDocument()
+    expect(screen.getByText(/RTK desativado/)).toBeInTheDocument()
+  })
   it('config log empty', async () => {
     mock({ ...routes(), '/api/config-log?limit=50': [] })
     wrap(<Config />)

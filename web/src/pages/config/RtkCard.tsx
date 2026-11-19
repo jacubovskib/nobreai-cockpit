@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useRtk, useRtkApply, useRtkPreview } from '../../api/queries'
 import { ErrorLine, btn, btnPrimary, muted, panel } from '../card/shared'
 
-const INSTALL_CMD = 'cargo install --git https://github.com/rtk-ai/rtk --branch master rtk'
+const REPO_URL = 'https://github.com/rtk-ai/rtk'
+const INSTALL_CMD = `cargo install --git ${REPO_URL} --branch master rtk`
 
 function InstallHint() {
   const [msg, setMsg] = useState('')
@@ -47,7 +48,13 @@ export function RtkCard() {
       {s && !s.installed && (
         <>
           <strong style={{ fontWeight: 600 }}>RTK não instalado</strong>
+          {s.active && (
+            <p role="alert" style={{ margin: 0, color: 'var(--warn)' }}>O hook do RTK continua no settings.json, mas o binário sumiu: reinstale ou remova o hook.</p>
+          )}
           <InstallHint />
+          <p style={{ ...muted, margin: 0 }}>
+            Projeto: <a href={REPO_URL} target="_blank" rel="noreferrer">{REPO_URL}</a>
+          </p>
         </>
       )}
       {s?.installed && (
