@@ -196,3 +196,19 @@ type Prompt struct {
 	Uses             int        `json:"uses"`
 	LastUsedAt       *time.Time `json:"last_used_at"`
 }
+
+// Memory é uma regra curta do agente com escopo: ProjectID nil = global.
+type Memory struct {
+	ID          int64     `json:"id"`
+	ProjectID   *int64    `json:"project_id"` // nil = global
+	Category    string    `json:"category"`
+	Rule        string    `json:"rule"`
+	Do          string    `json:"do"`
+	Status      string    `json:"status"`
+	Source      string    `json:"source"`
+	SourceRef   string    `json:"source_ref"` // chave do card ou caminhos do napkin
+	Position    int       `json:"position"`
+	NeedsReview bool      `json:"needs_review"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}

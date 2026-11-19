@@ -32,6 +32,8 @@ type Settings struct {
 	AgentCreatesCards bool `json:"agent_creates_cards"`
 	// InjectPausedCards: o SessionStart lista os cards pausados do repositório.
 	InjectPausedCards bool `json:"inject_paused_cards"`
+	// MemoryBudgetTokens é o teto de tokens do bloco de memórias injetado na sessão (0 desliga).
+	MemoryBudgetTokens int `json:"memory_budget_tokens"`
 }
 
 // DefaultSettings devolve os padrões do piloto.
@@ -51,6 +53,7 @@ func DefaultSettings() Settings {
 		PlanWarnPct:           80,
 		AgentCreatesCards:     true,
 		InjectPausedCards:     true,
+		MemoryBudgetTokens:    1500,
 	}
 }
 
