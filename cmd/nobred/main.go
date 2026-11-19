@@ -25,6 +25,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/resources"
+	"github.com/nobretech/nobreai-cockpit/internal/rtk"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -117,6 +118,11 @@ func run(dbPath string, seedDemo bool) error {
 	paths.SearchPATH = func() string { return userPATH.Get(time.Minute) }
 	go userPATH.Get(0) // já na partida, sem atrasar o servidor
 	claudeAdapter.SetPaths(paths)
+	// RTK: comprime a saída dos comandos do Claude Code; o hook mora no mesmo
+	// settings.json. Sem demo o Tool existe, mas o monitor não roda.
+	home, _ := os.UserHomeDir()
+	rtkTool := &rtk.Tool{SettingsPath: paths.SettingsPath, Home: home,
+		SearchPATH: func() string { return userPATH.Get(time.Minute) }, Store: st, Now: time.Now}
 	// As leituras de transcript em segundo plano terminam antes de st.Close
 	// (defers rodam em ordem inversa).
 	defer claudeAdapter.Wait()
@@ -133,7 +139,13 @@ func run(dbPath string, seedDemo bool) error {
 	var mon *integration.Monitor
 	if !seedDemo {
 		mon = &integration.Monitor{
-			Health:      claudeAdapter.Health,
+			Health: func() []adapter.Check {
+				checks := claudeAdapter.Health()
+				if checks == nil { // sem settings.json do Claude: nada a vigiar
+					return nil
+				}
+				return append(checks, rtkTool.Check())
+			},
 			Files:       claudeAdapter.WatchedFiles,
 			NobreBin:    claudeAdapter.NobreBinary,
 			Store:       st,

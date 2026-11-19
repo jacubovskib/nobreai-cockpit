@@ -44,6 +44,7 @@ const (
 	ActionRestart     Action = "restart"
 	ActionMakeInstall Action = "make_install"
 	ActionConfig      Action = "config"
+	ActionRTK         Action = "rtk" // religar o hook do RTK
 )
 
 // Problem é um item da integração que funcionava e parou.
@@ -270,6 +271,12 @@ func (m *Monitor) problemFor(c adapter.Check) Problem {
 		if c.Code == "outdated" && m.binaryNewerThanDaemon() {
 			p.Action = ActionRestart
 		}
+	case "rtk":
+		// missing: o hook saiu e o RTK segue instalado, dá para religar;
+		// dead_binary: só reinstalando o binário (fora do Cockpit).
+		if c.Code == "missing" {
+			p.Action = ActionRTK
+		}
 	case "statusline":
 		if c.Code != "unreadable" && c.Code != "no_settings" {
 			p.Action = ActionStatusline
@@ -306,6 +313,10 @@ func problemText(c adapter.Check, p Problem) string {
 		return "A status line do Cockpit aponta para um nobre que não existe mais (" + bin + ")."
 	case c.Key == "statusline":
 		return "A status line do Cockpit foi trocada por outro comando."
+	case c.Key == "rtk" && c.Code == "dead_binary":
+		return "O RTK está ativo no Claude Code, mas o binário sumiu. Reinstale com cargo install --git https://github.com/rtk-ai/rtk --branch master rtk."
+	case c.Key == "rtk" && c.Code == "missing":
+		return "O hook do RTK sumiu do ~/.claude/settings.json; os comandos voltam a sair sem compressão."
 	case c.Key == "cli":
 		return "O claude não foi encontrado no PATH."
 	}
