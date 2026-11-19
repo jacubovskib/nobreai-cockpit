@@ -89,7 +89,12 @@ func (s *server) rtkApply(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Falhou: o hook pode não ter mudado, então o monitor confere de novo.
 		if s.deps.Integration != nil {
-			s.deps.Integration.CheckNow()
+			if in.Action == "deactivate" && t.Status(false).Active {
+				// O hook segue ativo: a marca de remoção deliberada não vale.
+				s.deps.Integration.Fixed([]string{"rtk"}, nil)
+			} else {
+				s.deps.Integration.CheckNow()
+			}
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

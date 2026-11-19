@@ -155,6 +155,11 @@ func run(dbPath string, seedDemo bool) error {
 		}
 		integ = mon
 	}
+	// A demonstração nunca mexe no settings.json real: sem RTK, as rotas dão 503.
+	apiRTK := rtkTool
+	if seedDemo {
+		apiRTK = nil
+	}
 	handler := api.New(st, api.Deps{
 		Integration: integ,
 		Now:         time.Now,
@@ -166,7 +171,7 @@ func run(dbPath string, seedDemo bool) error {
 		UserPATH:    userPATH,
 		Resources:   monitor,
 		Terminals:   terms,
-		RTK:         rtkTool,
+		RTK:         apiRTK,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.

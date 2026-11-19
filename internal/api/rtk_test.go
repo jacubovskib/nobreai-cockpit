@@ -53,7 +53,7 @@ func novoRTK(t *testing.T, settings string, gainFails bool) *rtkEnv {
 	script := "#!/bin/sh\ncase \"$1\" in\n" +
 		"--version) echo 'rtk 1.2.0';;\n" +
 		"gain) " + gain + ";;\n" +
-		"init) case \"$*\" in\n" +
+		"init) if [ -f " + filepath.Join(dir, "fail") + " ]; then echo 'falhou'; exit 1; fi; case \"$*\" in\n" +
 		"*--dry-run*) echo 'prévia';;\n" +
 		"*--uninstall*) echo '{}' > " + e.settings + "; echo 'removido';;\n" +
 		"*) echo '" + rtkHookSettings + "' > " + e.settings + "; echo 'feito';;\n" +
@@ -104,11 +104,7 @@ func TestRTKApply_Activate(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
-	var out struct {
-		Output, Backup string
-		Status         rtk.Status
-	}
-	out = decode[struct {
+	out := decode[struct {
 		Output, Backup string
 		Status         rtk.Status
 	}](t, rec)
@@ -209,5 +205,25 @@ func TestRTK_NoTool(t *testing.T) {
 		if rec := a.do(t, c[0], c[1], map[string]string{"action": "activate"}, 0); rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("%v: code = %d", c, rec.Code)
 		}
+	}
+}
+
+func TestRTKDeactivate_FailedKeepsAlerting(t *testing.T) {
+	e := novoRTK(t, rtkHookSettings, false)
+	if p := e.mon.CheckNow(); len(p) != 0 {
+		t.Fatalf("%+v", p)
+	}
+	if err := os.WriteFile(filepath.Join(e.dir, "fail"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if rec := e.do(t, "POST", "/api/rtk", map[string]string{"action": "deactivate"}, 0); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	// O hook continuou ativo; se sumir depois, não foi de propósito: alerta.
+	if err := os.WriteFile(e.settings, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if p := e.mon.CheckNow(); len(p) != 1 || p[0].Key != "rtk" {
+		t.Errorf("problems = %+v", p)
 	}
 }
