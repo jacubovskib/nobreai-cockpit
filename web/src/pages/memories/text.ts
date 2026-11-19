@@ -20,13 +20,23 @@ export function normalize(s: string): string {
     .trim()
 }
 
+// Palavras vazias do português, como em internal/memory/memory.go.
+const STOPWORDS = new Set(['a', 'o', 'as', 'os', 'um', 'uma', 'de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas', 'e', 'ou', 'para', 'por', 'com', 'que'])
+
+function wordSet(s: string): Set<string> {
+  const all = normalize(s).split(' ').filter(Boolean)
+  const m = new Set(all.filter((w) => !STOPWORDS.has(w)))
+  return m.size === 0 ? new Set(all) : m
+}
+
 export function jaccard(a: string, b: string): number {
-  const x = new Set(normalize(a).split(' ').filter(Boolean))
-  const y = new Set(normalize(b).split(' ').filter(Boolean))
-  if (x.size === 0 || y.size === 0) return 0
+  const x = wordSet(a)
+  const y = wordSet(b)
+  if (x.size === 0 && y.size === 0) return 1
   let inter = 0
   for (const w of x) if (y.has(w)) inter++
-  return inter / (x.size + y.size - inter)
+  const union = x.size + y.size - inter
+  return union === 0 ? 0 : inter / union
 }
 
 export interface Similar { kind: 'duplicada' | 'parecida'; id: number }

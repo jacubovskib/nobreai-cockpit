@@ -194,3 +194,74 @@ describe('Memórias: arquivadas, importação e criação', () => {
     expect(calls(fn, 'POST', '/api/memories')[0]).toEqual({ project_id: 1, category: 'diretiva', rule: 'nunca rode x', do: 'rode y' })
   })
 })
+
+describe('Memórias: ajustes de revisão', () => {
+  it('rascunho da nova memória sobrevive a refetch que muda a lista', async () => {
+    let data = [mem({ id: 1 })]
+    const fn = vi.fn(async (url: string) => {
+      const body = url === '/api/projects' ? projects : url.includes('/preview') ? preview : url.startsWith('/api/memories') ? data : {}
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fn)
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={qc}><MemoryRouter initialEntries={['/?projeto=1']}><Memories /></MemoryRouter></QueryClientProvider>)
+    const form = await screen.findByRole('region', { name: 'Nova memória' })
+    fireEvent.change(within(form).getByLabelText('Regra'), { target: { value: 'rascunho' } })
+    data = [mem({ id: 1 }), mem({ id: 2, rule: 'outra regra' })]
+    await qc.invalidateQueries({ queryKey: ['memories'] })
+    await screen.findByText('outra regra')
+    expect((within(screen.getByRole('region', { name: 'Nova memória' })).getByLabelText('Regra') as HTMLTextAreaElement).value).toBe('rascunho')
+  })
+
+  it('edita item herdado da raiz e move para o app', async () => {
+    const fn = mock({ ...base([mem({ id: 7, project_id: 1, inherited: true, rule: 'da raiz' })], 2), 'PATCH /api/memories/7': {} })
+    wrap('/?projeto=1&app=2')
+    const ativas = await screen.findByRole('region', { name: 'Memórias ativas' })
+    const row = within(ativas).getByText('da raiz', { selector: 'strong' }).closest('li')!
+    fireEvent.click(within(row).getByRole('button', { name: 'Editar' }))
+    const scope = within(row).getByLabelText('Escopo') as HTMLSelectElement
+    expect([...scope.options].map((o) => `${o.text}:${o.value}`)).toEqual(['este projeto:2', 'raiz:1', 'global:g'])
+    expect(scope.value).toBe('1')
+    fireEvent.change(scope, { target: { value: '2' } })
+    fireEvent.click(within(row).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls(fn, 'PATCH', '/api/memories/7')[0]).toMatchObject({ project_id: 2 }))
+  })
+
+  it('candidata duplicada de uma ativa é marcada', async () => {
+    mock(base([mem({ id: 1, rule: 'use rtk' }), mem({ id: 2, status: 'candidata', rule: 'Use RTK.', source: 'napkin' })]))
+    wrap()
+    const fila = await screen.findByRole('region', { name: 'Fila de candidatas' })
+    expect(within(fila).getByText('Duplicada de #1')).toBeInTheDocument()
+  })
+
+  it('prévia com limite 0 e erro da prévia', async () => {
+    mock({ ...base([]), '/api/settings': { memory_budget_tokens: 0 } })
+    wrap()
+    expect(await screen.findByText('Memórias desligadas (limite 0 na Configuração)')).toBeInTheDocument()
+  })
+
+  it('mostra erro quando a prévia falha', async () => {
+    const r = base([]) as Record<string, unknown>
+    delete r['/api/memories/preview?project=1']
+    mock({ ...r, '/api/settings': { memory_budget_tokens: 1500 } })
+    wrap()
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+  })
+
+  it('o "revisar" some depois de salvar quando o servidor limpa needs_review', async () => {
+    let data = [mem({ id: 3, status: 'candidata', needs_review: true, rule: 'a'.repeat(312) })]
+    const fn = vi.fn(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'PATCH') { data = [mem({ id: 3, status: 'candidata', needs_review: false, rule: 'curta' })]; return new Response('{}', { status: 200 }) }
+      const body = url === '/api/projects' ? projects : url.includes('/preview') ? preview : url.startsWith('/api/memories') ? data : {}
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fn)
+    wrap()
+    const fila = await screen.findByRole('region', { name: 'Fila de candidatas' })
+    expect(within(fila).getByText('revisar')).toBeInTheDocument()
+    fireEvent.click(within(fila).getByRole('button', { name: 'Editar' }))
+    fireEvent.change(within(fila).getByLabelText('Regra'), { target: { value: 'curta' } })
+    fireEvent.click(within(fila).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(within(fila).queryByText('revisar')).not.toBeInTheDocument())
+  })
+})

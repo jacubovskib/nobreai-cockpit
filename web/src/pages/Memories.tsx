@@ -1,7 +1,7 @@
-import { useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { del, patch, post } from '../api/client'
-import { useMemories, useMemoryPreview, useProjects } from '../api/queries'
+import { useMemories, useMemoryPreview, useProjects, useSettings } from '../api/queries'
 import type { Memory, MemoryBatch, MemoryImport } from '../api/types'
 import { useProjectFilter } from '../app/project'
 import { ErrorLine, btn, btnPrimary, h2, input, muted, panel } from './card/shared'
@@ -71,15 +71,23 @@ function Editor({ draft, scopes, submit, cancel, busy, submitLabel }: {
 
 export function Memories() {
   const qc = useQueryClient()
-  const { projectId, root } = useProjectFilter()
+  const { projectId } = useProjectFilter()
   const projectsQ = useProjects()
   const projects = projectsQ.data ?? []
   const memories = useMemories(projectId)
   const preview = useMemoryPreview(projectId)
+  const budget = useSettings().data?.memory_budget_tokens
+  const [formKey, setFormKey] = useState(0)
   const [selected, setSelected] = useState<number[]>([])
   const [editing, setEditing] = useState<number | null>(null)
   const [confirming, setConfirming] = useState<number | null>(null)
   const [refused, setRefused] = useState<MemoryBatch['refused']>([])
+  useEffect(() => {
+    setSelected([])
+    setRefused([])
+    setEditing(null)
+    setConfirming(null)
+  }, [projectId])
   const [imported, setImported] = useState<MemoryImport | null>(null)
 
   const act = useMutation<unknown, Error, () => Promise<unknown>>({
@@ -99,12 +107,13 @@ export function Memories() {
   const scopesFor = (m: Memory | null): Scope[] => {
     const out: Scope[] = []
     const add = (value: string, label: string) => { if (!out.some((s) => s.value === value)) out.push({ value, label }) }
-    const own = m?.project_id ?? projectId
-    if (own !== null) add(String(own), 'este projeto')
-    const ref = projects.find((p) => p.id === (projectId ?? m?.project_id ?? -1))
-    const parent = ref?.parent_id ?? (root && projectId !== null && root.id !== projectId ? root.id : null)
-    if (parent != null) add(String(parent), 'raiz')
+    // "este projeto" é o projeto/app da página; em Todos, o do próprio item.
+    const here = projectId ?? m?.project_id ?? null
+    if (here !== null) add(String(here), 'este projeto')
+    const parent = projects.find((p) => p.id === here)?.parent_id ?? null
+    if (parent !== null) add(String(parent), 'raiz')
     add('g', 'global')
+    if (m && m.project_id !== null) add(String(m.project_id), 'outro projeto')
     return out
   }
   const scopeValue = (m: Memory | null) => (m ? (m.project_id === null ? 'g' : String(m.project_id)) : projectId === null ? 'g' : String(projectId))
@@ -146,7 +155,7 @@ export function Memories() {
       setSelected(selected.filter((id) => r.refused.some((x) => x.id === id)))
     })
 
-  if (projectsQ.isPending || memories.isPending) return <p style={muted}>Carregando…</p>
+  if (projectsQ.isPending || !memories.data) return <p style={muted}>Carregando…</p>
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ ...bar, justifyContent: 'space-between' }}>
@@ -241,7 +250,7 @@ export function Memories() {
 
       <section style={panel} aria-label="Prévia da sessão">
         <h2 style={h2}>Prévia da sessão</h2>
-        {projectId === null ? <p style={muted}>Escolha um projeto para ver a prévia.</p> : !preview.data ? <p style={muted}>Carregando…</p> : (
+        {projectId === null ? <p style={muted}>Escolha um projeto para ver a prévia.</p> : budget === 0 ? <p style={muted}>Memórias desligadas (limite 0 na Configuração)</p> : preview.error ? <ErrorLine error={preview.error} /> : !preview.data ? <p style={muted}>Carregando…</p> : (
           <>
             <p style={{ margin: 0 }}>Entram {preview.data.chosen} de {preview.data.chosen + preview.data.left} memórias (~{preview.data.tokens} tokens) na próxima sessão deste projeto</p>
             {preview.data.block && (
@@ -257,12 +266,12 @@ export function Memories() {
       <section style={panel} aria-label="Nova memória">
         <h2 style={h2}>Nova memória</h2>
         <Editor
-          key={`${projectId}-${all.length}`}
+          key={`${projectId}-${formKey}`}
           draft={{ rule: '', do: '', category: 'dominio', scope: scopeValue(null) }}
           scopes={scopesFor(null)}
           busy={act.isPending}
           submitLabel="Criar"
-          submit={(d) => run(() => post('/api/memories', { project_id: pid(d.scope), category: d.category, rule: d.rule, do: d.do }))}
+          submit={(d) => run(() => post('/api/memories', { project_id: pid(d.scope), category: d.category, rule: d.rule, do: d.do }), () => setFormKey((k) => k + 1))}
         />
       </section>
 

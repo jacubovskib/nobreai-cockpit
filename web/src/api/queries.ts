@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { get, post } from './client'
 import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits, ContextTop, ContextDetail, RtkStatus, RtkApplied, RtkSavings, Memory, MemoryPreview } from './types'
 
@@ -128,6 +128,7 @@ export const useRtkSavings = (from?: string, to?: string, project?: number | nul
 
 export const useMemories = (projectId: number | null) =>
   useQuery({
+    placeholderData: keepPreviousData,
     queryKey: ['memories', 'list', projectId],
     queryFn: () => get<Memory[]>(projectId === null ? '/api/memories' : `/api/memories?project=${projectId}`),
   })
