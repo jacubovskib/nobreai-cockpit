@@ -80,6 +80,12 @@ func (s *server) rtkApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `action deve ser "activate" ou "deactivate"`)
 		return
 	}
+	if t.Find() == "" {
+		// Sem binário não há o que rodar; e a marca de remoção não pode
+		// ficar valendo sem o hook ter mudado.
+		writeError(w, http.StatusBadRequest, rtk.DetailNotInstalled)
+		return
+	}
 	if in.Action == "deactivate" && s.deps.Integration != nil {
 		// A marca de remoção deliberada vem antes de o arquivo mudar, para o
 		// monitor não alertar a desativação que o usuário acabou de pedir.
@@ -88,6 +94,7 @@ func (s *server) rtkApply(w http.ResponseWriter, r *http.Request) {
 	out, backup, err := t.Apply(in.Action)
 	if err != nil {
 		// Falhou: o hook pode não ter mudado, então o monitor confere de novo.
+		// Nada além da linha do próprio Fixed vai para o histórico.
 		if s.deps.Integration != nil {
 			if in.Action == "deactivate" && t.Status(false).Active {
 				// O hook segue ativo: a marca de remoção deliberada não vale.
@@ -151,9 +158,9 @@ func gainTotals(days []rtk.GainDay, from, to time.Time) rtkGainTotals {
 	return g
 }
 
-// rtkSavings: GET /api/rtk/savings?from=&to=&project=&exact=1 — a economia
-// medida pelo RTK no período e o antes/depois da ativação (todo o histórico,
-// só o projeto filtra).
+// rtkSavings: GET /api/rtk/savings?from=&to=&project=&exact=1 — se o RTK está
+// instalado, a economia medida por ele no período e o antes/depois da
+// ativação (todo o histórico, só o projeto filtra).
 func (s *server) rtkSavings(w http.ResponseWriter, r *http.Request) {
 	t, ok := s.rtkTool(w)
 	if !ok {
@@ -180,5 +187,5 @@ func (s *server) rtkSavings(w http.ResponseWriter, r *http.Request) {
 	if acts == nil {
 		acts = []rtk.Interval{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"gain": gain, "compare": cmp, "activations": acts})
+	writeJSON(w, http.StatusOK, map[string]any{"installed": t.Find() != "", "gain": gain, "compare": cmp, "activations": acts})
 }

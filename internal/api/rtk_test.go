@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/integration"
 	"github.com/nobretech/nobreai-cockpit/internal/rtk"
 )
@@ -165,10 +166,14 @@ func TestRTKSavings(t *testing.T) {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
 	out := decode[struct {
+		Installed   bool
 		Gain        rtkGainTotals
 		Compare     []any
 		Activations []any
 	}](t, rec)
+	if !out.Installed {
+		t.Errorf("installed = false: %s", rec.Body.String())
+	}
 	g := out.Gain
 	if !g.Available || g.Commands != 5 || g.InputTokens != 1000 || g.SavedTokens != 100 || g.SavingsPct != 10 || g.OldestDay != "2026-11-05" {
 		t.Errorf("gain = %+v", g)
@@ -225,5 +230,49 @@ func TestRTKDeactivate_FailedKeepsAlerting(t *testing.T) {
 	}
 	if p := e.mon.CheckNow(); len(p) != 1 || p[0].Key != "rtk" {
 		t.Errorf("problems = %+v", p)
+	}
+	// Falhar não grava rtk_off nem linha extra além da do Fixed.
+	log, _ := e.st.RecentConfigLog(20)
+	fixed := 0
+	for _, l := range log {
+		switch l.Kind {
+		case domain.LogRTKOff, domain.LogRTKOn:
+			t.Errorf("falha não deveria logar %s", l.Kind)
+		case domain.LogIntegrationFixed:
+			fixed++
+		}
+	}
+	if fixed != 1 {
+		t.Errorf("integration_fixed = %d, quer 1: %+v", fixed, log)
+	}
+}
+
+func TestRTKApply_NotInstalled(t *testing.T) {
+	e := novoRTK(t, rtkHookSettings, false)
+	if p := e.mon.CheckNow(); len(p) != 0 {
+		t.Fatalf("%+v", p)
+	}
+	if err := os.Remove(filepath.Join(e.dir, "home", ".cargo", "bin", "rtk")); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"deactivate", "activate"} {
+		rec := e.do(t, "POST", "/api/rtk", map[string]string{"action": action}, 0)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "RTK não instalado") {
+			t.Fatalf("%s: %d %s", action, rec.Code, rec.Body.String())
+		}
+	}
+	log, _ := e.st.RecentConfigLog(10)
+	for _, l := range log {
+		if l.Kind == domain.LogIntegrationRemoved || l.Kind == domain.LogRTKOff {
+			t.Errorf("sem binário não marca remoção nem desativa: %+v", log)
+		}
+	}
+	// O hook segue no arquivo sem binário: alerta, a marca não foi gravada.
+	if p := e.mon.CheckNow(); len(p) != 1 || p[0].Key != "rtk" {
+		t.Errorf("problems = %+v", p)
+	}
+	rec := e.do(t, "GET", "/api/rtk/savings", nil, 0)
+	if out := decode[struct{ Installed bool }](t, rec); out.Installed {
+		t.Errorf("savings deveria dizer não instalado: %s", rec.Body.String())
 	}
 }

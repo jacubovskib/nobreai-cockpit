@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/rtk"
 )
 
 type fakeStore struct {
@@ -457,6 +459,18 @@ func TestRTK_DeadBinary(t *testing.T) {
 	p := m.CheckNow()
 	want := "O RTK está ativo no Claude Code, mas o binário sumiu. Reinstale com cargo install --git https://github.com/rtk-ai/rtk --branch master rtk."
 	if len(p) != 1 || p[0].Action != ActionConfig || p[0].Text != want {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestRTK_MissingWithoutBinary(t *testing.T) {
+	e := newEnv(t)
+	m := e.monitor()
+	e.checks = []adapter.Check{ok("rtk")}
+	m.CheckNow()
+	e.checks = []adapter.Check{bad("rtk", "missing", rtk.DetailNotInstalled)}
+	p := m.CheckNow()
+	if len(p) != 1 || p[0].Action != ActionConfig || !strings.Contains(p[0].Text, "Reinstale") {
 		t.Fatalf("%+v", p)
 	}
 }
