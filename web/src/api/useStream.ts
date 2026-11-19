@@ -8,8 +8,8 @@ const KIND_KEYS: Record<string, string[]> = {
   // Sem 'context': sessions sai a cada hook, e o contexto medido sempre
   // publica usage.
   sessions: ['sessions', 'card', 'cards', 'overview', 'usage', 'events', 'worktrees'],
-  config: ['settings', 'limits', 'prices', 'projects', 'overview', 'worktrees'],
-  usage: ['usage', 'context', 'overview', 'cards', 'card'],
+  config: ['settings', 'limits', 'prices', 'projects', 'overview', 'worktrees', 'rtk'],
+  usage: ['usage', 'context', 'overview', 'cards', 'card', 'rtk'],
   prompts: ['prompts', 'continue-preview'],
   terminals: ['terminals'],
   plan: ['plan', 'overview'],

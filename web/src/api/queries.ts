@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
-import { get } from './client'
-import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits, ContextTop, ContextDetail } from './types'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { get, post } from './client'
+import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits, ContextTop, ContextDetail, RtkStatus, RtkApplied, RtkSavings } from './types'
 
 export const useHealth = () =>
   useQuery({ queryKey: ['health'], queryFn: () => get<Health>('/api/health'), refetchInterval: 15000, retry: false })
@@ -89,4 +89,37 @@ export const useContextSession = (id: string | null) =>
     queryKey: ['context', 'session', id],
     queryFn: () => get<ContextDetail>(`/api/context/sessions/${encodeURIComponent(id!)}`),
     enabled: id !== null,
+  })
+
+export const useRtk = () =>
+  useQuery({ queryKey: ['rtk'], queryFn: () => get<RtkStatus>('/api/rtk') })
+
+export const useRtkPreview = (action: 'activate' | 'deactivate' | null) =>
+  useQuery({
+    queryKey: ['rtk', 'preview', action],
+    queryFn: () => get<{ output: string }>(`/api/rtk/preview?action=${action}`),
+    enabled: action !== null,
+    gcTime: 0,
+    retry: false,
+  })
+
+export function useRtkApply() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (action: 'activate' | 'deactivate') => post<RtkApplied>('/api/rtk', { action }),
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: ['rtk'] }), qc.invalidateQueries({ queryKey: ['overview'] }), qc.invalidateQueries({ queryKey: ['config-log'] })]),
+  })
+}
+
+export const useRtkSavings = (from?: string, to?: string, project?: number | null, exact = false) =>
+  useQuery({
+    queryKey: ['rtk', 'savings', from ?? '', to ?? '', project ?? null, exact],
+    queryFn: () => {
+      const q = new URLSearchParams()
+      if (from) q.set('from', from)
+      if (to) q.set('to', to)
+      if (project != null) q.set('project', String(project))
+      if (project != null && exact) q.set('exact', '1')
+      return get<RtkSavings>(`/api/rtk/savings?${q}`)
+    },
   })

@@ -59,8 +59,9 @@ function IntegrationActions({ alert, onInstalled }: { alert: Alert; onInstalled:
     onSuccess: async (r) => { setPlan(null); onInstalled(r); await refresh() },
   })
   const statusline = useMutation({ mutationFn: () => post('/api/agents/claude/statusline', { action: 'install' }), onSuccess: refresh })
+  const rtk = useMutation({ mutationFn: () => post('/api/rtk', { action: 'activate' }), onSuccess: refresh })
   const ignore = useMutation({ mutationFn: () => post(`/api/integration/${encodeURIComponent(info.key)}/ignore`), onSuccess: refresh })
-  const busy = preview.isPending || install.isPending || statusline.isPending || ignore.isPending
+  const busy = preview.isPending || install.isPending || statusline.isPending || rtk.isPending || ignore.isPending
   const canIgnore = info.action !== 'restart' && info.action !== 'make_install'
   return (
     <>
@@ -74,6 +75,9 @@ function IntegrationActions({ alert, onInstalled }: { alert: Alert; onInstalled:
             <button type="button" style={btn} disabled={busy} onClick={() => ignore.mutate()}>Manter a atual</button>
           </>
         )}
+        {info.action === 'rtk' && (
+          <button type="button" style={btnPrimary} disabled={busy} onClick={() => rtk.mutate()}>Reativar</button>
+        )}
         {info.action === 'config' && <Link to={withP('/config')} style={btn}>Ver Configuração</Link>}
         {canIgnore && (
           <button type="button" style={btn} disabled={busy} onClick={() => ignore.mutate()}>Ignorar</button>
@@ -86,7 +90,7 @@ function IntegrationActions({ alert, onInstalled }: { alert: Alert; onInstalled:
           <button type="button" style={btn} onClick={() => setPlan(null)}>Cancelar</button>
         </div>
       )}
-      <div style={{ flexBasis: '100%' }}><ErrorLine error={preview.error ?? install.error ?? statusline.error ?? ignore.error} /></div>
+      <div style={{ flexBasis: '100%' }}><ErrorLine error={preview.error ?? install.error ?? statusline.error ?? rtk.error ?? ignore.error} /></div>
     </>
   )
 }

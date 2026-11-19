@@ -284,6 +284,17 @@ describe('ControlRoom · projeto', () => {
     ...overview, alerts: [{ kind: 'integration', card_key: '', agent: 'claude', text, integration: { key, text, action, again: false } }],
   })
 
+  it('integration alert rtk reativa direto', async () => {
+    const fn = mock({
+      '/api/overview': integ('rtk', 'rtk', 'O hook do RTK sumiu do ~/.claude/settings.json.'),
+      '/api/settings': {},
+      'POST /api/rtk': { output: 'ok', backup: '/b', status: {} },
+    })
+    wrap(<ControlRoom />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reativar' }))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/rtk')).toEqual([{ action: 'activate' }]))
+  })
+
   it('integration alert asks before reinstalling', async () => {
     const fn = mock({
       '/api/overview': integ('hooks', 'reinstall', 'Os hooks do Cockpit sumiram do ~/.claude/settings.json.'),
