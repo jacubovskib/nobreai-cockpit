@@ -166,6 +166,7 @@ func run(dbPath string, seedDemo bool) error {
 		UserPATH:    userPATH,
 		Resources:   monitor,
 		Terminals:   terms,
+		RTK:         rtkTool,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// Streams SSE abertos impediriam o Shutdown de terminar.
