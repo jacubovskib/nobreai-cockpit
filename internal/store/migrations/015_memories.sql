@@ -9,6 +9,8 @@ CREATE TABLE memories (
   category TEXT NOT NULL CHECK (category IN ('execucao','shell','dominio','diretiva')),
   rule TEXT NOT NULL,
   rule_norm TEXT NOT NULL,
+  -- Regra normalizada original: não muda na edição, para a reimportação não recriar o que o usuário editou.
+  origin_norm TEXT NOT NULL DEFAULT '',
   do_text TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK (status IN ('ativa','candidata','arquivada','descartada')),
   source TEXT NOT NULL CHECK (source IN ('agente','usuario','napkin','card')),
@@ -20,3 +22,4 @@ CREATE TABLE memories (
 );
 CREATE INDEX idx_memories_scope ON memories(project_id, status);
 CREATE INDEX idx_memories_norm ON memories(rule_norm);
+CREATE INDEX idx_memories_origin ON memories(origin_norm);

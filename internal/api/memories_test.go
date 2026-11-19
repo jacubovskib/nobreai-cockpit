@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,14 +208,7 @@ func TestBatchMemories(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
 	}
-	var res struct {
-		Done    []int64 `json:"done"`
-		Refused []struct {
-			ID    int64  `json:"id"`
-			Error string `json:"error"`
-		} `json:"refused"`
-	}
-	res = decode[struct {
+	res := decode[struct {
 		Done    []int64 `json:"done"`
 		Refused []struct {
 			ID    int64  `json:"id"`
@@ -395,7 +389,7 @@ func TestImportNapkins(t *testing.T) {
 	d1, d2, d3 := t.TempDir(), t.TempDir(), t.TempDir()
 	p1, _ := a.st.CreateProject("um", d1)
 	p2, _ := a.st.CreateProject("dois", d2)
-	p3, _ := a.st.CreateProject("sem-napkin", d3)
+	a.st.CreateProject("sem-napkin", d3)
 	a.st.CreateProject("grupo", "") // sem pasta: ignorado
 	long := strings.Repeat("palavra ", 60)
 	writeNapkin(t, d1, "## Shell & Commands\n1. **[2026-01-01] Rodar go vet antes do commit**\n   Do instead: go vet ./...\n"+
@@ -419,7 +413,6 @@ func TestImportNapkins(t *testing.T) {
 	if res.Created != 3 || res.Skipped != 0 || len(res.Files) != 2 || res.Files[0].ProjectID != p1.ID || res.Files[0].Items != 3 || res.Files[1].ProjectID != p2.ID {
 		t.Fatalf("res = %+v", res)
 	}
-	_ = p3
 	list := decode[[]memJSON](t, a.do(t, "GET", "/api/memories?status=candidata", nil, 0))
 	if len(list) != 3 {
 		t.Fatalf("list = %+v", list)
@@ -520,3 +513,155 @@ func TestNobreDoneDoesNotCreateCandidates(t *testing.T) {
 }
 
 func storeFilterAll() store.MemoryFilter { return store.MemoryFilter{} }
+
+type importRes struct {
+	Created int `json:"created"`
+	Skipped int `json:"skipped"`
+	Files   []struct {
+		ProjectID int64  `json:"project_id"`
+		Path      string `json:"path"`
+		Items     int    `json:"items"`
+		Error     string `json:"error"`
+	} `json:"files"`
+}
+
+func TestImportAfterEditDoesNotRecreate(t *testing.T) {
+	a := newTestAPI(t)
+	d := t.TempDir()
+	a.st.CreateProject("um", d)
+	writeNapkin(t, d, "## Shell\n1. **[2026-01-01] Rodar go vet antes do commit**\n   Do instead: go vet\n")
+	if r := decode[importRes](t, a.do(t, "POST", "/api/memories/import", nil, 0)); r.Created != 1 {
+		t.Fatalf("r = %+v", r)
+	}
+	l, _ := a.st.ListMemories(store.MemoryFilter{})
+	if rec := a.do(t, "PATCH", fmt.Sprintf("/api/memories/%d", l[0].ID), map[string]any{"rule": "Vet sempre"}, 0); rec.Code != 200 {
+		t.Fatal(rec.Body)
+	}
+	if r := decode[importRes](t, a.do(t, "POST", "/api/memories/import", nil, 0)); r.Created != 0 || r.Skipped != 1 {
+		t.Fatalf("reimport = %+v", r)
+	}
+}
+
+func TestConcurrentImportsNoDuplicates(t *testing.T) {
+	a := newTestAPI(t)
+	d := t.TempDir()
+	a.st.CreateProject("um", d)
+	writeNapkin(t, d, "## Shell\n1. **Regra A**\n   Do instead: a\n2. **Regra B**\n   Do instead: b\n")
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.do(t, "POST", "/api/memories/import", nil, 0)
+		}()
+	}
+	wg.Wait()
+	if l, _ := a.st.ListMemories(store.MemoryFilter{}); len(l) != 2 {
+		t.Fatalf("l = %+v", l)
+	}
+}
+
+func TestImportReadErrors(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root lê qualquer arquivo")
+	}
+	a := newTestAPI(t)
+	d1, d2 := t.TempDir(), t.TempDir()
+	p1, _ := a.st.CreateProject("fechado", d1)
+	a.st.CreateProject("bom", d2)
+	writeNapkin(t, d1, "## Shell\n1. **X**\n")
+	file := filepath.Join(d1, ".claude", "napkin.md")
+	os.Chmod(file, 0)
+	defer os.Chmod(file, 0o644)
+	writeNapkin(t, d2, "## Shell\n1. **Y**\n   Do instead: y\n")
+	r := decode[importRes](t, a.do(t, "POST", "/api/memories/import", nil, 0))
+	if r.Created != 1 || len(r.Files) != 2 || r.Files[0].ProjectID != p1.ID || r.Files[0].Error == "" || r.Files[1].Error != "" {
+		t.Fatalf("r = %+v", r)
+	}
+}
+
+func TestImportLongLine(t *testing.T) {
+	a := newTestAPI(t)
+	d := t.TempDir()
+	a.st.CreateProject("um", d)
+	writeNapkin(t, d, "## Shell\n1. **"+strings.Repeat("a", 2<<20)+"**\n   Do instead: x\n")
+	r := decode[importRes](t, a.do(t, "POST", "/api/memories/import", nil, 0))
+	// 2 MB passa do teto de 4000: o clamp de segurança corta, mas a linha lê.
+	if len(r.Files) != 1 || r.Files[0].Error != "" || r.Files[0].Items != 1 || r.Created != 1 {
+		t.Fatalf("r = %+v", r)
+	}
+}
+
+func TestImportSharedPathRootClaims(t *testing.T) {
+	a := newTestAPI(t)
+	d := t.TempDir()
+	// O app é cadastrado primeiro (menor id) mas a raiz tem a pasta.
+	root, _ := a.st.CreateProject("raiz", d)
+	app, _, err := a.st.CreateChild("app", d+"/sub", root.ID)
+	if err != nil {
+		t.Skip("filho em pasta própria:", err)
+	}
+	_ = app
+	writeNapkin(t, d, "## Shell\n1. **Só uma**\n   Do instead: x\n")
+	r := decode[importRes](t, a.do(t, "POST", "/api/memories/import", nil, 0))
+	if len(r.Files) != 1 || r.Files[0].ProjectID != root.ID {
+		t.Fatalf("r = %+v", r)
+	}
+}
+
+func TestNapkinOwnersPrefersRoot(t *testing.T) {
+	pid := int64(1)
+	got := napkinOwners([]domain.Project{
+		{ID: 2, Path: "/x", ParentID: &pid},
+		{ID: 3, Path: "/x"},
+	})
+	if got["/x/.claude/napkin.md"] != 3 {
+		t.Fatalf("got = %v", got)
+	}
+}
+
+func TestSessionWithoutProjectGetsGlobals(t *testing.T) {
+	a := newTestAPI(t)
+	g := a.mem(t, nil, "regra global", "ativa")
+	if err := a.st.StartSession(domain.Session{ID: "claude:solta", Agent: "claude", PID: 5050, Cwd: "/fora", StartedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	list := decode[[]memJSON](t, a.do(t, "GET", "/api/me/memories", nil, 5050))
+	if len(list) != 1 || list[0].ID != g.ID || list[0].Scope != "global" {
+		t.Fatalf("list = %+v", list)
+	}
+	rec := a.do(t, "POST", "/api/me/remember", map[string]string{"rule": "regra global", "scope": "global"}, 5050)
+	m := decode[memJSON](t, rec)
+	if rec.Code != 201 || len(m.Similar) != 1 || m.Scope != "global" {
+		t.Fatalf("m = %+v %s", m, rec.Body)
+	}
+}
+
+func TestPatchClearsNeedsReview(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	long, _ := a.st.CreateMemory(domain.Memory{ProjectID: &p.ID, Category: "dominio", Rule: strings.Repeat("c", 350), Do: "faça", Status: "candidata", Source: "napkin"})
+	path := fmt.Sprintf("/api/memories/%d", long.ID)
+	if m := decode[memJSON](t, a.do(t, "PATCH", path, map[string]any{"rule": "curta agora"}, 0)); m.NeedsReview || m.Status != "candidata" {
+		t.Fatalf("m = %+v", m)
+	}
+	noDo, _ := a.st.CreateMemory(domain.Memory{ProjectID: &p.ID, Category: "dominio", Rule: "sem acao", Status: "candidata", Source: "napkin", NeedsReview: true})
+	path = fmt.Sprintf("/api/memories/%d", noDo.ID)
+	if m := decode[memJSON](t, a.do(t, "PATCH", path, map[string]any{"rule": "sem acao editada"}, 0)); !m.NeedsReview {
+		t.Fatalf("sem ação deve manter a marca: %+v", m)
+	}
+	if m := decode[memJSON](t, a.do(t, "PATCH", path, map[string]any{"do": "agora tem"}, 0)); m.NeedsReview {
+		t.Fatalf("com ação limpa: %+v", m)
+	}
+	flagged, _ := a.st.CreateMemory(domain.Memory{ProjectID: &p.ID, Category: "dominio", Rule: "aprovar", Status: "candidata", Source: "napkin", NeedsReview: true})
+	if m := decode[memJSON](t, a.do(t, "PATCH", fmt.Sprintf("/api/memories/%d", flagged.ID), map[string]any{"status": "ativa"}, 0)); m.NeedsReview || m.Status != "ativa" {
+		t.Fatalf("aprovar: %+v", m)
+	}
+}
+
+func TestListMemoriesInvalidStatus(t *testing.T) {
+	a := newTestAPI(t)
+	if rec := a.do(t, "GET", "/api/memories?status=xx", nil, 0); rec.Code != 400 {
+		t.Fatalf("= %d", rec.Code)
+	}
+}

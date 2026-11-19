@@ -36,7 +36,7 @@ Agente (use dentro de uma sessão de agente):
   nobre block <KEY> [--why "<motivo>"]                    marca o card que bloqueia este (nobre block --clear remove)
   nobre test "<como testar>"                              registra como testar
   nobre done [--force]                                    marca o card como pronto para revisão
-  nobre lembrar "<regra>" [--faca "<ação>"] [--cat execucao|shell|dominio|diretiva] [--escopo projeto|raiz|global]  grava uma memória para as próximas sessões
+  nobre lembrar "<regra>" [--faca "<ação>"]               grava uma memória para as próximas sessões (--cat execucao|shell|dominio|diretiva; --escopo projeto|raiz|global)
   nobre memorias [termo]                                  lista as memórias que valem para esta sessão
   nobre status                                            mostra o card e a prontidão do handoff
 

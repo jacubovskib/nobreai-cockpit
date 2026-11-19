@@ -241,7 +241,7 @@ func TestMemoriesForSession(t *testing.T) {
 		t.Fatalf("solto: %v | %s | %s", a, rules(r), rules(g))
 	}
 	a, r, g, err = s.MemoriesForSession(domain.Session{})
-	if err != nil || a == nil || r == nil || g == nil || len(a)+len(r)+len(g) != 0 {
+	if err != nil || a == nil || r == nil || g == nil || len(a)+len(r) != 0 || rules(g) != "global" {
 		t.Fatalf("vazio: %v %v %v %v", a, r, g, err)
 	}
 }
@@ -271,5 +271,58 @@ func TestLongCandidateAndApproval(t *testing.T) {
 	u, err := s.UpdateMemory(c)
 	if err != nil || u.NeedsReview || u.Status != "ativa" {
 		t.Fatalf("u = %+v err = %v", u, err)
+	}
+}
+
+func TestDeleteProjectCascadesMemories(t *testing.T) {
+	s := newTestStore(t)
+	p1, _ := s.CreateProject("um", "/w/um")
+	p2, _ := s.CreateProject("dois", "/w/dois")
+	s.CreateMemory(mem(&p1.ID, "shell", "do um"))
+	s.CreateMemory(mem(&p2.ID, "shell", "do dois"))
+	s.CreateMemory(mem(nil, "shell", "global"))
+	if err := s.DeleteProject(p1.ID); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := s.ListMemories(MemoryFilter{})
+	if len(l) != 2 || l[0].Rule != "do dois" || l[1].Rule != "global" {
+		t.Fatalf("l = %+v", l)
+	}
+}
+
+func TestMemoryExistsMatchesOriginAfterEdit(t *testing.T) {
+	s := newTestStore(t)
+	m, _ := s.CreateMemory(mem(nil, "shell", "Regra Original!"))
+	m.Rule = "outra coisa"
+	if _, err := s.UpdateMemory(m); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []string{"regra original", "OUTRA coisa"} {
+		if ok, _ := s.MemoryExists(nil, r); !ok {
+			t.Fatalf("%q deveria existir", r)
+		}
+	}
+}
+
+func TestMemoriesForSessionWithoutProjectGetsGlobals(t *testing.T) {
+	s := newTestStore(t)
+	s.CreateMemory(mem(nil, "shell", "global"))
+	app, root, global, err := s.MemoriesForSession(domain.Session{})
+	if err != nil || len(app) != 0 || len(root) != 0 || len(global) != 1 {
+		t.Fatalf("%v %v %v %v", app, root, global, err)
+	}
+}
+
+func TestImportMemoriesRollsBack(t *testing.T) {
+	s := newTestStore(t)
+	_, _, err := s.ImportMemories([]domain.Memory{
+		{Category: "shell", Rule: "ok", Status: "candidata", Source: "napkin"},
+		{Category: "zzz", Rule: "ruim", Status: "candidata", Source: "napkin"},
+	})
+	if err == nil {
+		t.Fatal("esperava erro")
+	}
+	if l, _ := s.ListMemories(MemoryFilter{}); len(l) != 0 {
+		t.Fatalf("não desfez: %+v", l)
 	}
 }

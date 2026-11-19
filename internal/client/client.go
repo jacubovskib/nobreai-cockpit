@@ -392,6 +392,7 @@ type AddedProject struct {
 // RememberResult é a memória gravada por `nobre lembrar` e as parecidas que já existiam.
 type RememberResult struct {
 	domain.Memory
+	Scope   string `json:"scope"` // app, raiz ou global
 	Similar []struct {
 		ID   int64  `json:"id"`
 		Rule string `json:"rule"`

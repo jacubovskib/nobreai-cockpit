@@ -1,6 +1,11 @@
 package memory
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestGroupImportRepetidaViraGlobal(t *testing.T) {
 	per := map[int64][]NapkinItem{
@@ -47,5 +52,26 @@ func TestGroupImportVazio(t *testing.T) {
 	global, local := GroupImport(nil)
 	if len(global) != 0 || len(local) != 0 || local == nil {
 		t.Fatalf("%+v %+v", global, local)
+	}
+}
+
+func TestGroupImportDesempenho(t *testing.T) {
+	vocab := make([]string, 3000)
+	for i := range vocab {
+		vocab[i] = fmt.Sprintf("palavra%d", i)
+	}
+	per := map[int64][]NapkinItem{}
+	for n := 0; n < 500; n++ {
+		var b strings.Builder
+		for k := 0; k < 350; k++ {
+			b.WriteString(vocab[(n*37+k*11)%len(vocab)])
+			b.WriteByte(' ')
+		}
+		per[int64(n%5)+1] = append(per[int64(n%5)+1], NapkinItem{Rule: b.String()})
+	}
+	start := time.Now()
+	GroupImport(per)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("GroupImport levou %v", d)
 	}
 }

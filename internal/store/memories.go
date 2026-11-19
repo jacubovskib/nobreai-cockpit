@@ -106,9 +106,9 @@ func insertMemoryTx(q querier, m domain.Memory) (domain.Memory, error) {
 	}
 	now := time.Now().UTC()
 	m.CreatedAt, m.UpdatedAt = now, now
-	res, err := q.Exec(`INSERT INTO memories(project_id, category, rule, rule_norm, do_text, status, source, source_ref, position, needs_review, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ProjectID, m.Category, m.Rule, memory.Normalize(m.Rule), m.Do, m.Status, m.Source, m.SourceRef,
+	res, err := q.Exec(`INSERT INTO memories(project_id, category, rule, rule_norm, origin_norm, do_text, status, source, source_ref, position, needs_review, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ProjectID, m.Category, m.Rule, memory.Normalize(m.Rule), memory.Normalize(m.Rule), m.Do, m.Status, m.Source, m.SourceRef,
 		m.Position, m.NeedsReview, fmtTime(now), fmtTime(now))
 	if err != nil {
 		return m, fmt.Errorf("criar memória: %w", err)
@@ -146,10 +146,10 @@ func (s *Store) UpdateMemory(m domain.Memory) (domain.Memory, error) {
 	if err != nil {
 		return m, err
 	}
-	// Texto que estava acima dos limites e agora cabe: a revisão está feita.
-	wasOver := utf8.RuneCountInString(curRule) > maxMemoryRule || utf8.RuneCountInString(curDo) > maxMemoryDo
+	// Texto editado que agora cabe nos limites e tem ação: a revisão está feita.
+	// Sem ação o motivo de revisão continua.
 	nowOver := utf8.RuneCountInString(m.Rule) > maxMemoryRule || utf8.RuneCountInString(m.Do) > maxMemoryDo
-	if wasOver && !nowOver {
+	if (m.Rule != curRule || m.Do != curDo) && !nowOver && m.Do != "" {
 		m.NeedsReview = false
 	}
 	sameScope := (curProject == nil && m.ProjectID == nil) ||
@@ -307,8 +307,9 @@ func (s *Store) ListMemories(f MemoryFilter) ([]domain.Memory, error) {
 
 func memoryExistsTx(q querier, projectID *int64, rule string) (bool, error) {
 	var ok bool
-	err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM memories WHERE project_id IS ? AND rule_norm=?)`,
-		projectID, memory.Normalize(rule)).Scan(&ok)
+	norm := memory.Normalize(rule)
+	err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM memories WHERE project_id IS ? AND (rule_norm=? OR origin_norm=?))`,
+		projectID, norm, norm).Scan(&ok)
 	return ok, err
 }
 
@@ -387,32 +388,13 @@ func (s *Store) CardMemoryCandidates(cardID int64) (int, error) {
 // volta vazio (nunca nil).
 func (s *Store) MemoriesForSession(sess domain.Session) (app, root, global []domain.Memory, err error) {
 	app, root, global = []domain.Memory{}, []domain.Memory{}, []domain.Memory{}
-	var eff *int64
-	if sess.CardID != nil {
-		var pid int64
-		err = s.DB.QueryRow(`SELECT project_id FROM cards WHERE id=?`, *sess.CardID).Scan(&pid)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			err = nil
-		case err != nil:
-			return nil, nil, nil, err
-		default:
-			eff = &pid
-		}
-	}
-	if eff == nil {
-		eff = sess.ProjectID
-	}
-	if eff == nil {
-		return app, root, global, nil
-	}
-	p, err := getProjectTx(s.DB, *eff)
+	p0, err := s.EffectiveProject(sess)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	rootID := p.ID
-	if p.ParentID != nil {
-		rootID = *p.ParentID
+	var eff *int64
+	if p0 != nil {
+		eff = &p0.ID
 	}
 	list := func(pid *int64) ([]domain.Memory, error) {
 		rows, err := s.DB.Query(`SELECT `+memoryCols+` FROM memories WHERE project_id IS ? AND status='ativa'
@@ -431,18 +413,87 @@ func (s *Store) MemoriesForSession(sess domain.Session) (app, root, global []dom
 		}
 		return out, rows.Err()
 	}
-	if p.ParentID != nil {
-		if app, err = list(&p.ID); err != nil {
+	// Sem projeto a sessão ainda recebe as globais.
+	if eff != nil {
+		p, err := getProjectTx(s.DB, *eff)
+		if err != nil {
 			return nil, nil, nil, err
 		}
-	}
-	if root, err = list(&rootID); err != nil {
-		return nil, nil, nil, err
+		if p.ParentID != nil {
+			if app, err = list(&p.ID); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		rootID := RootID(p)
+		if root, err = list(&rootID); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	if global, err = list(nil); err != nil {
 		return nil, nil, nil, err
 	}
 	return app, root, global, nil
+}
+
+// RootID é o id da raiz da família do projeto (o pai, ou o próprio se já for raiz).
+func RootID(p domain.Project) int64 {
+	if p.ParentID != nil {
+		return *p.ParentID
+	}
+	return p.ID
+}
+
+// EffectiveProject é o projeto do card da sessão, senão o da sessão (nil = nenhum).
+func (s *Store) EffectiveProject(sess domain.Session) (*domain.Project, error) {
+	var eff *int64
+	if sess.CardID != nil {
+		var pid int64
+		err := s.DB.QueryRow(`SELECT project_id FROM cards WHERE id=?`, *sess.CardID).Scan(&pid)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return nil, err
+		default:
+			eff = &pid
+		}
+	}
+	if eff == nil {
+		eff = sess.ProjectID
+	}
+	if eff == nil {
+		return nil, nil
+	}
+	p, err := getProjectTx(s.DB, *eff)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// ImportMemories cria as candidatas numa transação só: as que já existem no
+// escopo (regra ou origem normalizada igual, qualquer status) são puladas. Um
+// erro desfaz tudo. Devolve quantas criou e quantas pulou.
+func (s *Store) ImportMemories(items []domain.Memory) (created, skipped int, err error) {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+	for _, m := range items {
+		exists, err := memoryExistsTx(tx, m.ProjectID, m.Rule)
+		if err != nil {
+			return 0, 0, err
+		}
+		if exists {
+			skipped++
+			continue
+		}
+		if _, err := insertMemoryTx(tx, m); err != nil {
+			return 0, 0, err
+		}
+		created++
+	}
+	return created, skipped, tx.Commit()
 }
 
 // GetMemory devolve a memória pelo id (qualquer status).

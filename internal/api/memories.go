@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/memory"
@@ -83,14 +85,6 @@ func (s *server) memoryProjectParam(w http.ResponseWriter, r *http.Request, requ
 	return p, true
 }
 
-// rootOf devolve o id da raiz da família (o pai, ou o próprio se já for raiz).
-func rootOf(p domain.Project) int64 {
-	if p.ParentID != nil {
-		return *p.ParentID
-	}
-	return p.ID
-}
-
 type memoryOut struct {
 	domain.Memory
 	Inherited bool `json:"inherited"`
@@ -102,11 +96,17 @@ func (s *server) listMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := store.MemoryFilter{Status: r.URL.Query().Get("status"), Term: r.URL.Query().Get("q")}
+	switch f.Status {
+	case "", "ativa", "candidata", "arquivada", "descartada":
+	default:
+		writeError(w, http.StatusBadRequest, "status inválido")
+		return
+	}
 	exact := r.URL.Query().Get("exact") == "1"
 	if p != nil {
 		f.ProjectIDs = []int64{p.ID}
 		if !exact {
-			if root := rootOf(*p); root != p.ID {
+			if root := store.RootID(*p); root != p.ID {
 				f.ProjectIDs = append(f.ProjectIDs, root)
 			}
 			f.Global = true
@@ -223,6 +223,9 @@ func (s *server) patchMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.NeedsReview != nil {
 		m.NeedsReview = *in.NeedsReview
+	}
+	if in.Status != nil && *in.Status == "ativa" {
+		m.NeedsReview = false // aprovar é revisar
 	}
 	m, err = s.st.UpdateMemory(m)
 	if err != nil {
@@ -363,73 +366,82 @@ type importFile struct {
 	ProjectID int64  `json:"project_id"`
 	Path      string `json:"path"`
 	Items     int    `json:"items"`
+	Error     string `json:"error,omitempty"`
+}
+
+// importMu faz as importações andarem uma de cada vez.
+var importMu sync.Mutex
+
+// napkinOwners diz qual projeto responde por cada napkin.md: com a pasta
+// repetida, a raiz (projeto sem pai) vale antes dos apps, depois o menor id.
+func napkinOwners(projects []domain.Project) map[string]int64 {
+	owner := map[string]int64{}
+	rootOwned := map[string]bool{}
+	for _, p := range projects {
+		if p.Path == "" {
+			continue
+		}
+		path := filepath.Join(p.Path, ".claude", "napkin.md")
+		isRoot := p.ParentID == nil
+		if _, ok := owner[path]; !ok || (isRoot && !rootOwned[path]) {
+			owner[path] = p.ID
+			rootOwned[path] = isRoot
+		}
+	}
+	return owner
 }
 
 func (s *server) importMemories(w http.ResponseWriter, r *http.Request) {
+	importMu.Lock()
+	defer importMu.Unlock()
 	projects, err := s.st.ListProjects()
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
 	}
+	owner := napkinOwners(projects)
 	perProject := map[int64][]memory.NapkinItem{}
 	paths := map[int64]string{}
-	seen := map[string]bool{}
 	files := []importFile{}
 	for _, p := range projects {
 		if p.Path == "" {
 			continue
 		}
 		path := filepath.Join(p.Path, ".claude", "napkin.md")
-		if seen[path] { // app que aponta para a pasta do pai: um arquivo só
-			continue
+		if owner[path] != p.ID {
+			continue // pasta repetida: um arquivo só
 		}
-		f, err := os.Open(path)
-		if err != nil {
+		items, err := readNapkin(path)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue // sem napkin: segue em silêncio
 		}
-		items, err := memory.ParseNapkin(f)
-		f.Close()
 		if err != nil {
+			log.Printf("importar memórias: %s: %v", path, err)
+			files = append(files, importFile{ProjectID: p.ID, Path: path, Error: err.Error()})
 			continue
 		}
-		seen[path] = true
 		perProject[p.ID], paths[p.ID] = items, path
-		files = append(files, importFile{p.ID, path, len(items)})
+		files = append(files, importFile{ProjectID: p.ID, Path: path, Items: len(items)})
 	}
 	global, local := memory.GroupImport(perProject)
-	created, skipped := 0, 0
 	// Texto vai inteiro (só o teto de segurança do store); acima de 300/400 a
 	// candidata sai com needs_review.
-	create := func(pid *int64, it memory.NapkinItem, ref string) error {
+	var batch []domain.Memory
+	add := func(pid *int64, it memory.NapkinItem, ref string) {
 		rule, _ := memory.CleanText(it.Rule, 4000)
 		do, _ := memory.CleanText(it.Do, 4000)
 		if rule == "" {
-			return nil
+			return
 		}
-		exists, err := s.st.MemoryExists(pid, rule)
-		if err != nil {
-			return err
-		}
-		if exists {
-			skipped++
-			return nil
-		}
-		_, err = s.st.CreateMemory(domain.Memory{ProjectID: pid, Category: string(it.Category), Rule: rule, Do: do,
+		batch = append(batch, domain.Memory{ProjectID: pid, Category: string(it.Category), Rule: rule, Do: do,
 			Status: "candidata", Source: "napkin", SourceRef: ref, NeedsReview: it.NeedsReview})
-		if err == nil {
-			created++
-		}
-		return err
 	}
 	for _, g := range global {
 		var refs []string
 		for _, id := range g.ProjectIDs {
 			refs = append(refs, paths[id])
 		}
-		if err := create(nil, g.Item, strings.Join(refs, "; ")); err != nil {
-			writeMemoryError(w, err)
-			return
-		}
+		add(nil, g.Item, strings.Join(refs, "; "))
 	}
 	ids := make([]int64, 0, len(local))
 	for id := range local {
@@ -439,11 +451,13 @@ func (s *server) importMemories(w http.ResponseWriter, r *http.Request) {
 	for _, id := range ids {
 		pid := id
 		for _, it := range local[id] {
-			if err := create(&pid, it, paths[id]); err != nil {
-				writeMemoryError(w, err)
-				return
-			}
+			add(&pid, it, paths[id])
 		}
+	}
+	created, skipped, err := s.st.ImportMemories(batch)
+	if err != nil {
+		writeMemoryError(w, err)
+		return
 	}
 	if created > 0 {
 		s.publish("memories")
@@ -451,29 +465,16 @@ func (s *server) importMemories(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"created": created, "skipped": skipped, "files": files})
 }
 
-// --- rotas do agente ---
-
-// effectiveProject é o projeto do card da sessão, senão o da sessão (nil = nenhum).
-func (s *server) effectiveProject(sess domain.Session) (*domain.Project, error) {
-	var pid *int64
-	if sess.CardID != nil {
-		c, err := s.st.GetCardByID(*sess.CardID)
-		switch {
-		case err == nil:
-			id := c.ProjectID
-			pid = &id
-		case !errors.Is(err, store.ErrNotFound):
-			return nil, err
-		}
+func readNapkin(path string) ([]memory.NapkinItem, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
-	if pid == nil {
-		pid = sess.ProjectID
-	}
-	if pid == nil {
-		return nil, nil
-	}
-	return s.projectByID(*pid)
+	defer f.Close()
+	return memory.ParseNapkin(f)
 }
+
+// --- rotas do agente ---
 
 type similarOut struct {
 	ID   int64  `json:"id"`
@@ -504,7 +505,7 @@ func (s *server) meRemember(w http.ResponseWriter, r *http.Request, sess domain.
 	switch in.Scope {
 	case "global":
 	case "projeto", "raiz":
-		p, err := s.effectiveProject(sess)
+		p, err := s.st.EffectiveProject(sess)
 		if err != nil {
 			writeStoreError(w, err, "")
 			return
@@ -515,7 +516,7 @@ func (s *server) meRemember(w http.ResponseWriter, r *http.Request, sess domain.
 		}
 		id := p.ID
 		if in.Scope == "raiz" {
-			id = rootOf(*p)
+			id = store.RootID(*p)
 		}
 		pid = &id
 	default:
@@ -541,11 +542,19 @@ func (s *server) meRemember(w http.ResponseWriter, r *http.Request, sess domain.
 			}
 		}
 	}
+	scope := "global" // o escopo gravado, no mesmo vocabulário de nobre memorias
+	if m.ProjectID != nil {
+		scope = "app"
+		if p, _ := s.st.EffectiveProject(sess); p != nil && *m.ProjectID == store.RootID(*p) {
+			scope = "raiz"
+		}
+	}
 	s.publish("memories")
 	writeJSON(w, http.StatusCreated, struct {
 		domain.Memory
+		Scope   string       `json:"scope"`
 		Similar []similarOut `json:"similar"`
-	}{m, similar})
+	}{m, scope, similar})
 }
 
 type sessionMemory struct {

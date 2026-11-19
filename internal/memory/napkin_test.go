@@ -92,3 +92,11 @@ func TestParseNapkin_Irregular(t *testing.T) {
 		t.Errorf("longa: %+v", long)
 	}
 }
+
+func TestParseNapkinLinhaGrande(t *testing.T) {
+	big := strings.Repeat("a", 5<<20)
+	items, err := ParseNapkin(strings.NewReader("## Shell\n1. **" + big + "**\n   Do instead: x\n"))
+	if err != nil || len(items) != 1 || len(items[0].Rule) != len(big) || !items[0].NeedsReview {
+		t.Fatalf("err=%v n=%d", err, len(items))
+	}
+}

@@ -341,7 +341,7 @@ func TestCLILembrar(t *testing.T) {
 	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
 		bs, _ := io.ReadAll(r.Body)
 		last, body = r.Method+" "+r.URL.Path, string(bs)
-		w.Write([]byte(`{"id":7,"similar":[{"id":3,"rule":"regra parecida"}]}`))
+		w.Write([]byte(`{"id":7,"scope":"raiz","similar":[{"id":3,"rule":"regra parecida"}]}`))
 	})
 	r := runCLI(t, addr, "", nil, "lembrar", "usar", "rtk", "--faca", "rtk git status", "--cat", "shell", "--escopo", "raiz")
 	if r.code != 0 || last != "POST /api/me/remember" {
@@ -366,7 +366,9 @@ func TestCLILembrar(t *testing.T) {
 }
 
 func TestCLILembrarSemParecida(t *testing.T) {
-	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"id":2,"similar":[]}`)) })
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":2,"scope":"global","similar":[]}`))
+	})
 	if r := runCLI(t, addr, "", nil, "lembrar", "x", "--escopo", "global"); r.stdout != "Memória #2 gravada (global).\n" {
 		t.Fatalf("%+v", r)
 	}

@@ -13,7 +13,54 @@ type Grouped struct {
 
 type cluster struct {
 	rep     NapkinItem
+	words   []int32 // palavras da regra representante, ordenadas
 	members map[int64][]NapkinItem
+}
+
+// internWords troca as palavras por números ordenados: a comparação vira uma
+// interseção de listas, sem tabelas hash.
+func internWords(ids map[string]int32, s string) []int32 {
+	out := []int32{}
+	for w := range Words(s) {
+		id, ok := ids[w]
+		if !ok {
+			id = int32(len(ids))
+			ids[w] = id
+		}
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// similarSets é o Jaccard de duas listas ordenadas, com o corte por tamanho:
+// Jaccard >= limiar exige min/max >= limiar.
+func similarSets(a, b []int32) bool {
+	la, lb := len(a), len(b)
+	if la == 0 && lb == 0 {
+		return true
+	}
+	lo, hi := la, lb
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	if float64(lo) < similarImport*float64(hi) {
+		return false
+	}
+	inter, i, j := 0, 0, 0
+	for i < la && j < lb {
+		switch {
+		case a[i] == b[j]:
+			inter++
+			i++
+			j++
+		case a[i] < b[j]:
+			i++
+		default:
+			j++
+		}
+	}
+	return float64(inter)/float64(la+lb-inter) >= similarImport
 }
 
 // GroupImport separa os itens lidos dos napkin.md: regra igual ou parecida
@@ -27,19 +74,21 @@ func GroupImport(perProject map[int64][]NapkinItem) (global []Grouped, local map
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	var clusters []*cluster
+	wordIDs := map[string]int32{}
 	for _, id := range ids {
 		for _, it := range perProject[id] {
 			var hit *cluster
-			if Normalize(it.Rule) != "" {
+			words := internWords(wordIDs, it.Rule)
+			if len(words) > 0 { // regra sem palavras nunca se junta a outra
 				for _, c := range clusters {
-					if Similarity(c.rep.Rule, it.Rule) >= similarImport {
+					if len(c.words) > 0 && similarSets(c.words, words) {
 						hit = c
 						break
 					}
 				}
 			}
 			if hit == nil {
-				hit = &cluster{rep: it, members: map[int64][]NapkinItem{}}
+				hit = &cluster{rep: it, words: words, members: map[int64][]NapkinItem{}}
 				clusters = append(clusters, hit)
 			}
 			hit.members[id] = append(hit.members[id], it)

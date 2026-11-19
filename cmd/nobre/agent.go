@@ -360,7 +360,7 @@ func (c *cli) lembrar(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(c.out, "Memória #%d gravada (%s).\n", r.ID, *scope)
+	fmt.Fprintf(c.out, "Memória #%d gravada (%s).\n", r.ID, r.Scope)
 	for _, s := range r.Similar {
 		fmt.Fprintf(c.out, "Parecida com #%d: %s\n", s.ID, s.Rule)
 	}

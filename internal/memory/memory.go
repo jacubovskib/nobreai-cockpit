@@ -57,7 +57,10 @@ func Normalize(s string) string {
 
 // Similarity é o Jaccard das palavras normalizadas (1 = iguais, 0 = nada em comum).
 func Similarity(a, b string) float64 {
-	wa, wb := wordSet(a), wordSet(b)
+	return jaccard(wordSet(a), wordSet(b))
+}
+
+func jaccard(wa, wb map[string]bool) float64 {
 	if len(wa) == 0 && len(wb) == 0 {
 		return 1
 	}
@@ -73,6 +76,10 @@ func Similarity(a, b string) float64 {
 	}
 	return float64(inter) / float64(union)
 }
+
+// Words devolve as palavras significativas (normalizadas, sem palavras vazias)
+// usadas na similaridade; quem compara muitas vezes calcula uma vez só.
+func Words(s string) map[string]bool { return wordSet(s) }
 
 // stopwords são palavras vazias do português ignoradas na similaridade; sem
 // isso "antes do commit" x "antes de commitar" ficaria abaixo do limiar 0,6.

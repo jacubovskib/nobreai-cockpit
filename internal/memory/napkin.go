@@ -16,6 +16,9 @@ type NapkinItem struct {
 	NeedsReview bool   // acima de 300/400 caracteres ou sem ação
 }
 
+// maxNapkinLine é a maior linha aceita (8 MB e folga).
+const maxNapkinLine = 9 << 20
+
 const (
 	maxRule = 300
 	maxDo   = 400
@@ -66,7 +69,7 @@ func ParseNapkin(r io.Reader) ([]NapkinItem, error) {
 	}
 
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), maxNapkinLine)
 	for sc.Scan() {
 		line := sc.Text()
 		trim := strings.TrimSpace(line)
