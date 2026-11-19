@@ -12,6 +12,7 @@ const KIND_KEYS: Record<string, string[]> = {
   // Só a economia do RTK: o estado ('rtk') roda rtk --version e a prévia não muda com o uso.
   usage: ['usage', 'context', 'overview', 'cards', 'card', 'rtk-savings'],
   prompts: ['prompts', 'continue-preview'],
+  memories: ['memories'],
   terminals: ['terminals'],
   plan: ['plan', 'overview'],
   // 'rtk': o hook pode ter saído do settings.json fora do Cockpit.
