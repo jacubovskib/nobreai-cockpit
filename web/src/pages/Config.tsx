@@ -256,12 +256,15 @@ function CardCreation({ settings }: { settings: Settings }) {
   const [n, setN] = useState(String(settings.reminder_edit_threshold > 0 ? settings.reminder_edit_threshold : 3))
   const [creates, setCreates] = useState(settings.agent_creates_cards !== false)
   const [inject, setInject] = useState(settings.inject_paused_cards !== false)
+  const [mem, setMem] = useState(String(settings.memory_budget_tokens ?? 1500))
   const [bad, setBad] = useState<Error | null>(null)
   const submit = () => {
     const v = parseNum(n)
     if (on && !(Number.isInteger(v) && v >= 1)) return setBad(new Error('Informe um número inteiro de arquivos (1 ou mais).'))
+    const m = parseNum(mem)
+    if (!(Number.isInteger(m) && m >= 0 && m <= 6000)) return setBad(new Error('O limite das memórias deve ficar entre 0 e 6000 tokens.'))
     setBad(null)
-    save.mutate({ reminder_edit_threshold: on ? v : 0, agent_creates_cards: creates, inject_paused_cards: inject })
+    save.mutate({ reminder_edit_threshold: on ? v : 0, agent_creates_cards: creates, inject_paused_cards: inject, memory_budget_tokens: m })
   }
   return (
     <Section id="cards" title="Criação de cards" hint="Toda sessão é registrada, com tokens e custo. Um card só nasce quando o trabalho precisa de histórico.">
@@ -285,6 +288,10 @@ function CardCreation({ settings }: { settings: Settings }) {
       <label style={check}>
         <input type="checkbox" checked={inject} onChange={(e) => setInject(e.target.checked)} />
         <span>Mostrar cards pausados no início da sessão<br /><span style={muted}>O agente recebe os cards pausados do mesmo repositório e branch e pode retomar um deles em vez de criar outro.</span></span>
+      </label>
+      <label style={field}>Limite das memórias por sessão (tokens)
+        <input style={small} inputMode="numeric" value={mem} onChange={(e) => setMem(e.target.value)} />
+        <span style={muted}>0 desliga</span>
       </label>
       <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} onSave={submit} notified={save.data?.notified_sessions} />
     </Section>

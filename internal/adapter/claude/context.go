@@ -3,6 +3,7 @@ package claude
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/memory"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
@@ -146,6 +148,13 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	if notFound != "" {
 		fmt.Fprintf(&b, "\n\nO card %s não foi encontrado; a sessão segue sem card.", notFound)
 	}
+	// Memórias logo depois das instruções; usam o card final da sessão (o
+	// retomado já está em sess.CardID). Falha só vai para o log.
+	if sess.FullCapture {
+		if blk := a.memoriesBlock(sess, set); blk != "" {
+			b.WriteString("\n\n" + strings.TrimRight(blk, "\n"))
+		}
+	}
 	if sess.FullCapture {
 		apps, err := a.appsGuidance(sess)
 		if err != nil {
@@ -195,6 +204,28 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		"hookEventName":     "SessionStart",
 		"additionalContext": b.String(),
 	}})
+}
+
+// memoriesBlock é o bloco de memórias do projeto efetivo da sessão ("" com o
+// limite em 0, sem memórias ou se a leitura falhar: o hook nunca falha por isso).
+func (a *Adapter) memoriesBlock(sess domain.Session, set domain.Settings) string {
+	if set.MemoryBudgetTokens <= 0 {
+		return ""
+	}
+	app, root, global, err := a.st.MemoriesForSession(sess)
+	if err != nil {
+		log.Printf("hook claude: memórias da sessão %s: %v", sess.ID, err)
+		return ""
+	}
+	var items []memory.Item
+	for scope, ms := range [][]domain.Memory{app, root, global} {
+		for _, m := range ms {
+			items = append(items, memory.Item{ID: m.ID, Scope: scope, Position: m.Position,
+				Category: memory.Category(m.Category), Rule: m.Rule, Do: m.Do})
+		}
+	}
+	chosen, left := memory.Select(items, set.MemoryBudgetTokens)
+	return memory.FormatBlock(chosen, left)
 }
 
 // unregisteredFolderPhrase abre o aviso numa pasta que não é git mas tem

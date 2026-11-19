@@ -126,6 +126,7 @@ export interface Settings {
   demo: boolean
   agent_creates_cards: boolean
   inject_paused_cards: boolean
+  memory_budget_tokens: number
 }
 
 export interface ReadinessItem { rule: string; label: string; ok: boolean }

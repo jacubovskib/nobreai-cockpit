@@ -59,6 +59,15 @@ Quando o contexto trouxer a frase "NobreAI Cockpit: esta pasta não está cadast
 - `nobre project add <pasta>`: numa pasta que não é git e tem repositórios dentro, cadastra um grupo com pasta e lista os repositórios como sub-projetos sugeridos. Pergunte ao usuário antes de cadastrar a pasta; depois, mostre a lista e só cadastre um deles (`nobre project add <repo> --pai <id do grupo>`) se ele pedir.
 - `nobre status`: mostra o card, "Onde parei" e o que falta para o handoff.
 
+## Memórias
+
+O contexto da sessão traz as memórias do projeto: regras curtas que valem além de um card. Siga-as; não leia nem edite `.claude/napkin.md`.
+
+- Grave com `nobre lembrar "<regra>" --faca "<o que fazer>" --cat shell`: regra que se repete, armadilha recorrente ou diretiva do usuário, sempre com um "faça assim" acionável.
+- Não grave log de sessão nem detalhe de um card só: isso vai no card (`nobre note`, `nobre decide`).
+- O escopo padrão é o projeto (`--escopo raiz` para o monorepo todo); use `--escopo global` só para algo que vale em todo projeto.
+- Busque com `nobre memorias <termo>` (também mostra as que ficaram fora do limite).
+
 ## Como manter o card útil
 
 - Atualize "Onde parei" com `nobre note` a cada passo relevante e antes de parar. Escreva o essencial: o que está feito, o que vem agora e qualquer armadilha.

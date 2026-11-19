@@ -30,7 +30,7 @@ const settings = {
   rules: { goal: true, where_stopped: true, essential_file: true, todo_open: true, how_to_test: true, no_open_questions: false },
   where_stopped_ttl_min: 15, grace_min: 15, reminder_edit_threshold: 3, launch_mode: 'terminal', terminal_cmd: ['x-terminal-emulator', '-e'],
   currency: 'USD', brl_rate: 0, incomplete_action: 'ask_agent', demo: false,
-  agent_creates_cards: true, inject_paused_cards: true,
+  agent_creates_cards: true, inject_paused_cards: true, memory_budget_tokens: 1500,
 }
 const routes = (s: object = settings) => ({
   '/api/settings': s, '/api/limits': [], '/api/projects': [], '/api/cards': [], '/api/prices': [],
@@ -52,6 +52,18 @@ describe('Config opções reais', () => {
     fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
     await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
     expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ agent_creates_cards: true, inject_paused_cards: false, reminder_edit_threshold: 3 })
+  })
+
+  it('salva o limite das memórias', async () => {
+    const fn = mock(routes())
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Criação de cards' })
+    const f = within(sec).getByLabelText(/Limite das memórias por sessão/)
+    expect(f).toHaveValue('1500')
+    fireEvent.change(f, { target: { value: '0' } })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
+    expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ memory_budget_tokens: 0 })
   })
 
   it('salva carência e comando do terminal', async () => {

@@ -27,6 +27,15 @@ func TestSettingsPutMergesOverCurrent(t *testing.T) {
 	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"incomplete_action": "x"}, 0); rec.Code != http.StatusBadRequest {
 		t.Fatalf("ação inválida = %d", rec.Code)
 	}
+	for _, v := range []int{-1, 6001} {
+		rec := a.do(t, "PUT", "/api/settings", map[string]any{"memory_budget_tokens": v}, 0)
+		if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "limite das memórias deve ficar entre 0 e 6000" {
+			t.Fatalf("limite %d = %d %s", v, rec.Code, rec.Body)
+		}
+	}
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"memory_budget_tokens": 0}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("limite 0 = %d", rec.Code)
+	}
 }
 
 func TestLimitsPricesProjects(t *testing.T) {
