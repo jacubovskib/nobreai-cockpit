@@ -12,7 +12,7 @@ import (
 
 // promptKey é o resumo (sha256) do texto normalizado do prompt
 // (memory.Normalize: sem acento, pontuação nem espaço repetido). É o que vai
-// para window_prompts.text_norm: o texto nunca é gravado (sessão sem captura
+// para window_prompts.text_hash: o texto nunca é gravado (sessão sem captura
 // completa não guarda prompt). Texto que normaliza para vazio dá "".
 func promptKey(text string) string {
 	n := memory.Normalize(text)
@@ -103,7 +103,7 @@ func nearestPrompt(open []store.WindowPrompt, taken map[int64]bool, key string, 
 		return best
 	}
 	for i, p := range open {
-		if taken[p.ID] || p.TextNorm != key {
+		if taken[p.ID] || p.TextHash != key {
 			continue
 		}
 		d := p.At.Sub(at)

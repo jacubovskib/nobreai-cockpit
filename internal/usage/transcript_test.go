@@ -121,31 +121,39 @@ func TestParseSkipsZeroTokenMessages(t *testing.T) {
 	}
 }
 
-// Until para no limite dado (a leitura de contexto chegou até ali) e não lê
-// nada com o limite no offset ou antes dele.
+// Until para no limite dado (a leitura de contexto chegou até ali): com o
+// limite no fim da 4ª linha só msg_1 sai (a última das suas linhas) e msg_2,
+// depois do limite, fica para a próxima leitura; limite no meio de uma linha
+// não lê a linha cortada; limite no offset não lê nada.
 func TestParseUntilStopsAtLimit(t *testing.T) {
 	p := copyFixture(t)
-	all, size, err := ParseClaudeTranscript(p, 0)
+	b, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := os.ReadFile(p)
-	first := int64(0)
+	var nl []int64 // posição logo depois de cada \n
 	for i, c := range b {
 		if c == '\n' {
-			first = int64(i + 1)
-			break
+			nl = append(nl, int64(i+1))
 		}
 	}
-	rows, off, err := ParseClaudeTranscriptUntil(p, 0, first)
-	if err != nil || off > first || len(rows) > len(all) {
-		t.Fatalf("rows=%d off=%d first=%d err=%v", len(rows), off, first, err)
+	limit := nl[3]
+	rows, off, err := ParseClaudeTranscriptUntil(p, 0, limit)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if rows, off, err := ParseClaudeTranscriptUntil(p, off, off); err != nil || len(rows) != 0 || off > first {
-		t.Fatalf("limite no offset: rows=%d off=%d err=%v", len(rows), off, err)
+	if off != limit || len(rows) != 1 || rows[0].MessageID != "msg_1" || rows[0].Output != 290 {
+		t.Fatalf("até o limite: off=%d (quer %d) rows=%+v", off, limit, rows)
 	}
-	rest, off2, err := ParseClaudeTranscriptUntil(p, off, -1)
-	if err != nil || off2 != size || len(rest) == 0 {
-		t.Fatalf("resto: rows=%d off=%d size=%d err=%v", len(rest), off2, size, err)
+	if rows, off2, err := ParseClaudeTranscriptUntil(p, off, off); err != nil || len(rows) != 0 || off2 != off {
+		t.Fatalf("limite no offset: rows=%d off=%d err=%v", len(rows), off2, err)
+	}
+	mid := nl[len(nl)-2] + 10 // dentro da linha de msg_2
+	if rows, off2, err := ParseClaudeTranscriptUntil(p, off, mid); err != nil || len(rows) != 0 || off2 != nl[len(nl)-2] {
+		t.Fatalf("limite no meio da linha: rows=%+v off=%d err=%v", rows, off2, err)
+	}
+	rest, off3, err := ParseClaudeTranscriptUntil(p, off, -1)
+	if err != nil || off3 != int64(len(b)) || len(rest) != 1 || rest[0].MessageID != "msg_2" {
+		t.Fatalf("resto: rows=%+v off=%d size=%d err=%v", rest, off3, len(b), err)
 	}
 }

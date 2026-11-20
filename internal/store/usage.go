@@ -155,7 +155,8 @@ type Total struct {
 
 // Totals agrega o uso por grupo; o custo é calculado em Go (usage.Cost) com a
 // tabela de preços, de modo que a regra "sem preço" fica num só lugar. O card
-// de cada linha é o gravado no uso (usage.card_id), não o card atual da sessão.
+// de cada linha é o gravado no uso (usage.card_id), não o card atual da sessão;
+// a sessão é a janela dona (window_session_id, senão session_id).
 func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 	switch f.GroupBy {
 	case "agent", "card", "session", "day_agent", "model", "project":
@@ -171,7 +172,9 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 		pm[prices[i].Model] = &prices[i]
 	}
 
-	q := `SELECT u.session_id, u.model, u.input, u.output, u.cache_write, u.cache_read, u.at, s.agent, COALESCE(c.key, ''), COALESCE(c.project_id, s.project_id)
+	// A sessão de cada linha é a janela dona (a filha grava o uso com o id da
+	// principal): por sessão, cada janela tem o seu custo e a sua contagem.
+	q := `SELECT COALESCE(NULLIF(u.window_session_id,''), u.session_id), u.model, u.input, u.output, u.cache_write, u.cache_read, u.at, s.agent, COALESCE(c.key, ''), COALESCE(c.project_id, s.project_id)
 		FROM usage u JOIN sessions s ON s.id = u.session_id LEFT JOIN cards c ON c.id = u.card_id WHERE 1=1`
 	var args []any
 	if f.CardID != nil {

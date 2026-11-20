@@ -1,12 +1,15 @@
 package claude
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/usage"
 )
 
 // Linhas de transcript para a atribuição por janela. Os horários são
@@ -43,7 +46,7 @@ func wResult(uuid, parent, toolID string, at time.Duration) string {
 }
 
 // windowEnv abre a principal (PID 100) no card NAC-1 sem prompt nenhum e
-// zera o transcript (os testes escrevem o seu). As filhas nascem no primeiro
+// zera o transcript, sem subagente (os testes escrevem o seu). As filhas nascem no primeiro
 // prompt de outro PID vivo (ver prompt).
 func windowEnv(t *testing.T) (*env, domain.Card) {
 	t.Helper()
@@ -56,6 +59,10 @@ func windowEnv(t *testing.T) (*env, domain.Card) {
 	}
 	e.call(t, "session_start", withPID(100), withEnv("NOBRE_RESUME", c.Key))
 	if err := os.WriteFile(e.transcript, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Sem o subagente do fixture: o uso dele somaria na principal.
+	if err := os.Remove(strings.TrimSuffix(e.transcript, ".jsonl") + "/subagents/agent-a1.jsonl"); err != nil {
 		t.Fatal(err)
 	}
 	return e, c
@@ -200,6 +207,21 @@ func TestWindow_TwoWindowsSplitByBranch(t *testing.T) {
 	if err := e.st.DB.QueryRow(`SELECT COUNT(*) FROM window_prompts WHERE used=0`).Scan(&unused); err != nil || unused != 0 {
 		t.Fatalf("prompts não usados = %d %v", unused, err)
 	}
+	// Total por sessão de cada card: a janela dona, com o custo dela.
+	zero := 0.0
+	if err := e.st.PutPrice(domain.Price{Model: "claude-opus-5-5", InputPerM: 1, CacheWritePerM: &zero, CacheReadPerM: &zero}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		card domain.Card
+		sess string
+	}{{mc, sessID}, {cc, child}} {
+		ts, err := e.st.Totals(store.TotalsFilter{GroupBy: "session", CardID: &c.card.ID})
+		if err != nil || len(ts) != 1 || ts[0].Key != c.sess || ts[0].Sessions != 1 || ts[0].Input != 2_000_000 ||
+			ts[0].CostUSD < 1.999 || ts[0].CostUSD > 2.001 || ts[0].Unpriced {
+			t.Errorf("total do card %s = %+v %v", c.card.Key, ts, err)
+		}
+	}
 	// O card da filha lista só a filha (o uso dela tem o id da principal).
 	ss, err := e.st.SessionsForCard(cc.ID)
 	if err != nil || len(ss) != 1 || ss[0].ID != child {
@@ -311,12 +333,18 @@ func TestWindow_AttachAfterIngestFollowsWindow(t *testing.T) {
 }
 
 // O hook registra o prompt de cada janela (a sessão roteada) só como resumo
-// do texto normalizado, nunca o texto; registros com mais de 24 h somem.
+// do texto normalizado, nunca o texto, num insert só; a leitura do transcript
+// apaga os registros com mais de 24 h.
 func TestWindow_HookRegistersPromptDigest(t *testing.T) {
 	e, _ := windowEnv(t)
 	e.prompt(t, 100, "Investigue o LOGIN!", time.Minute)
 	e.prompt(t, 200, "revise o readme", 25*time.Hour)
-	rows, err := e.st.DB.Query(`SELECT session_id, text_norm, at FROM window_prompts ORDER BY id`)
+	var n int
+	if err := e.st.DB.QueryRow(`SELECT COUNT(*) FROM window_prompts`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("hook apagou ou não gravou: %d %v", n, err)
+	}
+	e.read(t)
+	rows, err := e.st.DB.Query(`SELECT session_id, text_hash, at FROM window_prompts ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,4 +404,50 @@ func TestWindow_MainRootUnderChildLeafSurvivesReread(t *testing.T) {
 	}
 	e.read(t)
 	wantWindows(t, "turno (releitura)", e.turnWindows(t), want)
+}
+
+// O modelo de cada sessão é o do último uso da própria janela.
+func TestWindow_ModelPerWindow(t *testing.T) {
+	e, _ := windowEnv(t)
+	e.prompt(t, 100, "investigue o login", time.Minute)
+	e.prompt(t, 200, "revise o readme", time.Minute+5*time.Second)
+	sonnet := strings.Replace(wAssistant("ca1", "cu1", "c1", "", time.Minute+8*time.Second), "claude-opus-5-5", "claude-sonnet-4-5", 1)
+	appendFile(t, e.transcript, wPrompt("mu1", "", "investigue o login", time.Minute)+
+		wPrompt("cu1", "", "revise o readme", time.Minute+5*time.Second)+
+		wAssistant("ma1", "mu1", "m1", "", time.Minute+7*time.Second)+sonnet)
+	e.read(t)
+	m, _ := e.st.GetSession(sessID)
+	c, _ := e.st.GetSession(childID(200))
+	if m.Model != "claude-opus-5-5" || c.Model != "claude-sonnet-4-5" {
+		t.Fatalf("modelos: principal %q, filha %q", m.Model, c.Model)
+	}
+}
+
+// Falha (erro ou pânico) na leitura de contexto não pula o uso: ele é lido
+// até o fim e fica com a principal.
+func TestWindow_ContextFailureStillReadsUsage(t *testing.T) {
+	for _, mode := range []string{"erro", "pânico"} {
+		t.Run(mode, func(t *testing.T) {
+			e, c := windowEnv(t)
+			e.prompt(t, 200, "revise o readme", time.Minute)
+			orig := parseContext
+			t.Cleanup(func() { parseContext = orig })
+			parseContext = func(path string, off int64, st usage.ContextState) ([]usage.ToolOutput, []usage.ContextTurn, []usage.Prompt, []usage.LineRef, int64, usage.ContextState, bool, error) {
+				if mode == "pânico" {
+					panic("leitor quebrado")
+				}
+				return nil, nil, nil, nil, off, st, false, errors.New("leitor quebrado")
+			}
+			appendFile(t, e.transcript, wPrompt("cu1", "", "revise o readme", time.Minute)+
+				wAssistant("ca1", "cu1", "c1", "", time.Minute+2*time.Second)+
+				wAssistant("ca2", "ca1", "c2", "", time.Minute+3*time.Second))
+			e.read(t)
+			wantWindows(t, "uso", e.usageWindows(t), map[string]string{"c1": "", "c2": ""})
+			wantWindows(t, "card do uso", e.usageCards(t), map[string]string{"c1": c.Key, "c2": c.Key})
+			info, _ := os.Stat(e.transcript)
+			if off, _ := e.st.FileOffset(sessID, e.transcript); off != info.Size() {
+				t.Fatalf("offset do uso = %d, quer %d", off, info.Size())
+			}
+		})
+	}
 }

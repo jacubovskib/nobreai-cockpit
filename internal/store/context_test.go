@@ -229,7 +229,7 @@ func TestMigration017_Schema(t *testing.T) {
 		`SELECT window_session_id FROM tool_outputs`,
 		`SELECT window_session_id FROM usage`,
 		`SELECT session_id, path, uuid, window_session_id FROM window_lines`,
-		`SELECT id, session_id, text_norm, at, used FROM window_prompts`,
+		`SELECT id, session_id, text_hash, at, used FROM window_prompts`,
 		`SELECT session_id, warned_pct, warned_segment, big_outputs, child_notice_sent FROM session_alerts`,
 	} {
 		rows, err := s.DB.Query(q)

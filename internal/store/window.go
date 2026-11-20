@@ -19,33 +19,36 @@ import (
 const windowPromptTTL = 24 * time.Hour
 
 // WindowPrompt é um prompt recebido no hook UserPromptSubmit de uma janela,
-// ainda não casado com uma linha do transcript. TextNorm é o resumo do texto
+// ainda não casado com uma linha do transcript. TextHash é o resumo do texto
 // normalizado (o texto em si nunca é gravado).
 type WindowPrompt struct {
 	ID        int64
 	SessionID string
-	TextNorm  string
+	TextHash  string
 	At        time.Time
 }
 
-// AddWindowPrompt registra o prompt da sessão sessionID (a janela roteada) e
-// apaga, de passagem, os registros com mais de 24 h. textNorm vazio não é
-// registrado.
-func (s *Store) AddWindowPrompt(sessionID, textNorm string, at time.Time) error {
-	if textNorm == "" {
+// AddWindowPrompt registra o prompt da sessão sessionID (a janela roteada):
+// um insert só, no caminho do hook. textHash vazio não é registrado.
+func (s *Store) AddWindowPrompt(sessionID, textHash string, at time.Time) error {
+	if textHash == "" {
 		return nil
 	}
-	if _, err := s.DB.Exec(`DELETE FROM window_prompts WHERE at < ?`, fmtTime(at.Add(-windowPromptTTL))); err != nil {
-		return err
-	}
-	_, err := s.DB.Exec(`INSERT INTO window_prompts (session_id, text_norm, at) VALUES (?,?,?)`, sessionID, textNorm, fmtTime(at))
+	_, err := s.DB.Exec(`INSERT INTO window_prompts (session_id, text_hash, at) VALUES (?,?,?)`, sessionID, textHash, fmtTime(at))
+	return err
+}
+
+// PruneWindowPrompts apaga os prompts registrados há mais de 24 h antes de
+// now (usados ou não): a leitura do transcript vem no fim do turno.
+func (s *Store) PruneWindowPrompts(now time.Time) error {
+	_, err := s.DB.Exec(`DELETE FROM window_prompts WHERE julianday(at) < julianday(?)`, fmtTime(now.Add(-windowPromptTTL)))
 	return err
 }
 
 // OpenWindowPrompts devolve os prompts ainda não usados da conversa da sessão
 // principal mainID (dela e das filhas), em ordem de registro.
 func (s *Store) OpenWindowPrompts(mainID string) ([]WindowPrompt, error) {
-	rows, err := s.DB.Query(`SELECT id, session_id, text_norm, at FROM window_prompts
+	rows, err := s.DB.Query(`SELECT id, session_id, text_hash, at FROM window_prompts
 		WHERE used=0 AND (session_id=? OR session_id IN (SELECT id FROM sessions WHERE parent_session_id=?))
 		ORDER BY id`, mainID, mainID)
 	if err != nil {
@@ -56,7 +59,7 @@ func (s *Store) OpenWindowPrompts(mainID string) ([]WindowPrompt, error) {
 	for rows.Next() {
 		var p WindowPrompt
 		var at string
-		if err := rows.Scan(&p.ID, &p.SessionID, &p.TextNorm, &at); err != nil {
+		if err := rows.Scan(&p.ID, &p.SessionID, &p.TextHash, &at); err != nil {
 			return nil, err
 		}
 		if p.At, err = time.Parse(time.RFC3339Nano, at); err != nil {

@@ -65,13 +65,14 @@ func (a *Adapter) readLocked(sessionID, path string) (changed bool, err error) {
 // fim, e fica com a principal.
 func (a *Adapter) readTranscripts(sessionID, mainPath string) (bool, error) {
 	changed, ctxChanged := false, false
+	// Fora do hook: os prompts velhos de window_prompts somem a cada leitura.
+	if err := a.st.PruneWindowPrompts(a.deps.Now()); err != nil {
+		log.Printf("hook claude: limpar prompts das janelas: %v", err)
+	}
 	for i, path := range append([]string{mainPath}, usage.SubagentTranscripts(mainPath)...) {
-		// Falha na medição de contexto não interrompe a leitura do uso.
-		n, wins, end, err := a.readContext(sessionID, path, i == 0)
-		if err != nil {
-			log.Printf("hook claude: contexto do transcript %s: %v", path, err)
-			wins, end = nil, -1
-		}
+		// Falha (erro ou pânico) na medição de contexto não interrompe a
+		// leitura do uso.
+		n, wins, end := a.readContextSafe(sessionID, path, i == 0)
 		ctxChanged = ctxChanged || n > 0
 		off, err := a.st.FileOffset(sessionID, path)
 		if err != nil {
@@ -87,15 +88,46 @@ func (a *Adapter) readTranscripts(sessionID, mainPath string) (bool, error) {
 			}
 		}
 		if i == 0 && len(rows) > 0 {
-			// O modelo da sessão é o do transcript principal (subagentes
-			// podem usar outro).
-			if err := a.st.SetSessionModel(sessionID, rows[len(rows)-1].Model); err != nil {
-				return false, err
+			// O modelo de cada sessão é o do último uso da própria janela no
+			// transcript principal (subagentes podem usar outro).
+			last := map[string]string{} // janela dona → modelo
+			for _, r := range rows {
+				owner := sessionID
+				if r.WindowSessionID != "" {
+					owner = r.WindowSessionID
+				}
+				last[owner] = r.Model
+			}
+			for owner, model := range last {
+				if err := a.st.SetSessionModel(owner, model); err != nil {
+					return false, err
+				}
 			}
 		}
 		changed = changed || len(rows) > 0
 	}
 	return changed || ctxChanged, nil
+}
+
+// parseContext é o leitor de contexto (trocado nos testes para simular falha).
+var parseContext = usage.ParseContext
+
+// readContextSafe roda readContext e transforma erro ou pânico em log com
+// end=-1 (o uso é lido até o fim, com a principal): a medição de contexto
+// nunca impede a leitura do uso.
+func (a *Adapter) readContextSafe(sessionID, path string, main bool) (n int, wins map[string]string, end int64) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("hook claude: pânico no contexto do transcript %s: %v\n%s", path, r, debug.Stack())
+			n, wins, end = 0, nil, -1
+		}
+	}()
+	n, wins, end, err := a.readContext(sessionID, path, main)
+	if err != nil {
+		log.Printf("hook claude: contexto do transcript %s: %v", path, err)
+		return 0, nil, -1
+	}
+	return n, wins, end
 }
 
 // readContext grava saídas e turnos novos do transcript path (medição de
@@ -110,7 +142,7 @@ func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins ma
 	if err != nil {
 		return 0, nil, 0, err
 	}
-	outs, turns, prompts, lines, next, newSt, reset, err := usage.ParseContext(path, off, st)
+	outs, turns, prompts, lines, next, newSt, reset, err := parseContext(path, off, st)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil, -1, nil
 	}
@@ -121,8 +153,12 @@ func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins ma
 	if next == off && !reset && n == 0 {
 		return 0, nil, next, nil
 	}
+	// reset (arquivo truncado ou trocado) apaga as linhas do path: nada de
+	// antes vale, e o contexto relido volta para a principal até um prompt
+	// novo casar. O uso já gravado mantém a janela e o card (nunca são
+	// reescritos).
 	var known map[string]string
-	if !reset { // reset apaga as linhas do path: nada de antes vale
+	if !reset {
 		if known, err = a.st.WindowLines(sessionID, path); err != nil {
 			return 0, nil, 0, err
 		}
