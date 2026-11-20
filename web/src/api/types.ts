@@ -126,6 +126,7 @@ export interface Settings {
   demo: boolean
   agent_creates_cards: boolean
   inject_paused_cards: boolean
+  memory_budget_tokens: number
 }
 
 export interface ReadinessItem { rule: string; label: string; ok: boolean }
@@ -392,3 +393,24 @@ export interface RtkApplied { output: string; backup: string; status: RtkStatus 
 export interface RtkGain { available: boolean; commands: number; input_tokens: number; saved_tokens: number; savings_pct: number; oldest_day: string }
 export interface RtkCompare { key: string; before_count: number; before_avg: number; after_count: number; after_avg: number; change_pct: number }
 export interface RtkSavings { installed: boolean; gain: RtkGain; compare: RtkCompare[]; activations: RtkActivation[] }
+
+export interface Memory {
+  id: number
+  project_id: number | null
+  category: string
+  rule: string
+  do: string
+  status: 'ativa' | 'candidata' | 'arquivada' | 'descartada'
+  source: 'agente' | 'usuario' | 'napkin' | 'card'
+  source_ref: string
+  position: number
+  needs_review: boolean
+  created_at: string
+  updated_at: string
+  inherited: boolean
+}
+
+export interface MemoryPreview { block: string; tokens: number; chosen: number; left: number }
+// merged: itens dos napkin.md unidos numa candidata global.
+export interface MemoryImport { created: number; skipped: number; merged: number; files: { project_id: number; path: string; items: number; error?: string }[] }
+export interface MemoryBatch { done: number[]; refused: { id: number; error: string }[] }

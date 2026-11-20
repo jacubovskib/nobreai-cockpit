@@ -3,16 +3,19 @@ package claude
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/memory"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
@@ -141,11 +144,13 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		}})
 	}
 
-	var b strings.Builder
-	b.WriteString(instructionsFor(set))
+	// O começo (instruções e card não encontrado) e o resto são montados
+	// antes; as memórias entram entre os dois com o espaço que sobrar.
+	head := instructionsFor(set)
 	if notFound != "" {
-		fmt.Fprintf(&b, "\n\nO card %s não foi encontrado; a sessão segue sem card.", notFound)
+		head += fmt.Sprintf("\n\nO card %s não foi encontrado; a sessão segue sem card.", notFound)
 	}
+	var b strings.Builder
 	if sess.FullCapture {
 		apps, err := a.appsGuidance(sess)
 		if err != nil {
@@ -191,10 +196,49 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	if resumed != nil {
 		fmt.Fprintf(&b, "\n\nEsta sessão foi ligada ao card %s. Continue a partir do pacote de retomada; não pergunte o que já está nele.\n\n%s", resumed.Key, pkg)
 	}
+	rest := b.String()
+	// Memórias logo depois das instruções; usam o card final da sessão (o
+	// retomado já está em sess.CardID). O espaço é o que sobra do teto do
+	// contexto depois do resto e do "\n\n" que as separa.
+	text := head + rest
+	if sess.FullCapture {
+		room := maxContextRunes - utf8.RuneCountInString(head) - utf8.RuneCountInString(rest) - 2
+		if blk := a.memoriesBlock(sess, set, room); blk != "" {
+			text = head + "\n\n" + strings.TrimRight(blk, "\n") + rest
+		}
+	}
 	return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 		"hookEventName":     "SessionStart",
-		"additionalContext": b.String(),
+		"additionalContext": text,
 	}})
+}
+
+// maxContextRunes é o teto do contexto do SessionStart com folga: o Claude
+// Code corta o additionalContext em 10.000 caracteres (acima disso o modelo só
+// vê uma prévia de 2.000). As memórias usam o que sobrar abaixo dele.
+const maxContextRunes = 9500
+
+// memoriesBlock é o bloco de memórias do projeto efetivo da sessão, com o
+// limite de tokens da configuração e no máximo room caracteres ("" com o
+// limite em 0, sem memórias, sem espaço ou se a leitura falhar: o hook nunca
+// falha por isso).
+func (a *Adapter) memoriesBlock(sess domain.Session, set domain.Settings, room int) string {
+	if set.MemoryBudgetTokens <= 0 {
+		return ""
+	}
+	app, root, global, err := a.st.MemoriesForSession(sess)
+	if err != nil {
+		log.Printf("hook claude: memórias da sessão %s: %v", sess.ID, err)
+		return ""
+	}
+	var items []memory.Item
+	for scope, ms := range [][]domain.Memory{app, root, global} {
+		for _, m := range ms {
+			items = append(items, memory.Item{ID: m.ID, Scope: scope, Position: m.Position,
+				Category: memory.Category(m.Category), Rule: m.Rule, Do: m.Do})
+		}
+	}
+	return memory.BlockWithin(items, set.MemoryBudgetTokens, room)
 }
 
 // unregisteredFolderPhrase abre o aviso numa pasta que não é git mas tem

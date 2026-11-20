@@ -81,6 +81,7 @@ func New(st *store.Store, deps Deps) http.Handler {
 	mux.Handle("GET /api/stream", s.hub)
 	s.cardRoutes(mux)
 	s.meRoutes(mux)
+	s.memoryRoutes(mux)
 	s.configRoutes(mux)
 	s.promptRoutes(mux)
 	s.usageRoutes(mux)

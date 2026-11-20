@@ -335,3 +335,73 @@ func TestCLIApp(t *testing.T) {
 		t.Fatalf("uso: %+v", r)
 	}
 }
+
+func TestCLILembrar(t *testing.T) {
+	var last, body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		bs, _ := io.ReadAll(r.Body)
+		last, body = r.Method+" "+r.URL.Path, string(bs)
+		w.Write([]byte(`{"id":7,"scope":"raiz","similar":[{"id":3,"rule":"regra parecida"}]}`))
+	})
+	r := runCLI(t, addr, "", nil, "lembrar", "usar", "rtk", "--faca", "rtk git status", "--cat", "shell", "--escopo", "raiz")
+	if r.code != 0 || last != "POST /api/me/remember" {
+		t.Fatalf("%+v last=%s", r, last)
+	}
+	var got map[string]string
+	json.Unmarshal([]byte(body), &got)
+	if got["rule"] != "usar rtk" || got["do"] != "rtk git status" || got["category"] != "shell" || got["scope"] != "raiz" {
+		t.Fatalf("body = %s", body)
+	}
+	if r.stdout != "Memória #7 gravada (raiz).\nParecida com #3: regra parecida\n" {
+		t.Fatalf("stdout = %q", r.stdout)
+	}
+	runCLI(t, addr, "", nil, "lembrar", "só regra", "--faca", "algo")
+	json.Unmarshal([]byte(body), &got)
+	if got["category"] != "dominio" || got["scope"] != "projeto" || got["do"] != "algo" {
+		t.Fatalf("padrões = %s", body)
+	}
+	last = ""
+	for _, args := range [][]string{{"lembrar"}, {"lembrar", "sem ação"}, {"lembrar", "sem ação", "--faca", "  "}} {
+		if r := runCLI(t, addr, "", nil, args...); r.code != 2 || !strings.Contains(r.err, `uso: nobre lembrar "<regra>" --faca`) || last != "" {
+			t.Fatalf("%v: %+v last=%s", args, r, last)
+		}
+	}
+}
+
+func TestCLILembrarSemParecida(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":2,"status":"ativa","scope":"raiz","similar":[]}`))
+	})
+	if r := runCLI(t, addr, "", nil, "lembrar", "x", "--faca", "y", "--escopo", "raiz"); r.stdout != "Memória #2 gravada (raiz).\n" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCLILembrarGlobalVaiParaAprovacao(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":9,"status":"candidata","scope":"global","similar":[]}`))
+	})
+	if r := runCLI(t, addr, "", nil, "lembrar", "x", "--faca", "y", "--escopo", "global"); r.stdout != "Memória global #9 enviada para aprovação na página Memórias.\n" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCLIMemorias(t *testing.T) {
+	var query string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Write([]byte(`[{"id":4,"category":"shell","rule":"usar rtk","do":"rtk git","scope":"raiz"},{"id":5,"category":"dominio","rule":"sem ação","do":"","scope":"global"}]`))
+	})
+	r := runCLI(t, addr, "", nil, "memorias", "rtk")
+	want := "#4 [shell] (raiz) usar rtk → rtk git\n#5 [dominio] (global) sem ação\n"
+	if r.code != 0 || r.stdout != want || query != "q=rtk" {
+		t.Fatalf("%+v query=%q", r, query)
+	}
+	addr = fake(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`[]`)) })
+	if r := runCLI(t, addr, "", nil, "memorias"); r.stdout != "Nenhuma memória.\n" {
+		t.Fatalf("%+v", r)
+	}
+	if r := runCLI(t, addr, "", nil, "lembrar", "--help"); !strings.Contains(r.stdout, "--faca") {
+		t.Fatalf("help = %q", r.stdout)
+	}
+}

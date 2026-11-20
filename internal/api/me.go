@@ -663,6 +663,10 @@ func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Sess
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
+	// Guarda: AgentDone leva a revisao, nunca a concluido; se a regra mudar, o hook já vale.
+	if next == domain.Concluido && c.Column != domain.Concluido {
+		s.cardMemoryCandidates(c)
+	}
 	s.publish("cards")
 	s.recordEvent(sess.ID, domain.EvDone, map[string]any{})
 	s.writeCard(w, http.StatusOK, c.Key)

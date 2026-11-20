@@ -94,7 +94,7 @@ describe('kinds do RTK', () => {
 
   it('config atualiza o estado e a economia', async () => {
     const keys = await keysFor('config')
-    expect(keys).toEqual(expect.arrayContaining(['rtk', 'rtk-savings']))
+    expect(keys).toEqual(expect.arrayContaining(['rtk', 'rtk-savings', 'memories']))
   })
 
   it('integration atualiza o estado (hook removido fora do Cockpit)', async () => {

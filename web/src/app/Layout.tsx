@@ -41,6 +41,10 @@ const NAV: { to: string; label: string; end?: boolean; icon: ReactNode }[] = [
     icon: <svg {...svgProps}><path d="M4 5h16v11H10l-6 4z" /><path d="M8 9h8M8 12h5" /></svg>,
   },
   {
+    to: '/memorias', label: 'Memórias',
+    icon: <svg {...svgProps}><path d="M6 3h12v18l-6-4-6 4z" /><path d="M9 8h6M9 11h4" /></svg>,
+  },
+  {
     to: '/analytics', label: 'Analytics',
     icon: <svg {...svgProps}><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>,
   },

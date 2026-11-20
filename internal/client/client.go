@@ -388,3 +388,34 @@ type AddedProject struct {
 	Moved       Moved                   `json:"moved"`
 	Suggestions []workspaces.Suggestion `json:"suggestions"`
 }
+
+// RememberResult é a memória gravada por `nobre lembrar` e as parecidas que já existiam.
+type RememberResult struct {
+	domain.Memory
+	Scope   string `json:"scope"` // app, raiz ou global
+	Similar []struct {
+		ID   int64  `json:"id"`
+		Rule string `json:"rule"`
+	} `json:"similar"`
+}
+
+// Remember grava uma memória para a sessão: ativa no escopo projeto ou raiz;
+// global vira candidata, à espera da aprovação do usuário.
+func (c *Client) Remember(ctx context.Context, rule, do, category, scope string) (RememberResult, error) {
+	var r RememberResult
+	err := c.Do(ctx, "POST", "/api/me/remember", map[string]string{"rule": rule, "do": do, "category": category, "scope": scope}, &r)
+	return r, err
+}
+
+// SessionMemory é uma memória que vale para a sessão, com o escopo (app, raiz ou global).
+type SessionMemory struct {
+	domain.Memory
+	Scope string `json:"scope"`
+}
+
+// Memories lista as memórias ativas da sessão, filtradas por termo (vazio = todas).
+func (c *Client) Memories(ctx context.Context, term string) ([]SessionMemory, error) {
+	var out []SessionMemory
+	err := c.Do(ctx, "GET", "/api/me/memories?q="+url.QueryEscape(term), nil, &out)
+	return out, err
+}

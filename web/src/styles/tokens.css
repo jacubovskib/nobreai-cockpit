@@ -30,6 +30,9 @@ body {
 a { color: #c9d4e6; }
 a:hover { color: #fff; }
 h1, h2, h3 { margin: 0; }
+/* Botões usam estilo inline (que não tem :disabled); a regra global cobre todos.
+   O !important vence o cursor: pointer inline. */
+button:disabled { opacity: 0.5; cursor: not-allowed !important; }
 
 .shell { display: flex; flex-wrap: wrap; min-height: 100vh; }
 .sidebar {

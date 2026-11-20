@@ -1,6 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { get, post } from './client'
-import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits, ContextTop, ContextDetail, RtkStatus, RtkApplied, RtkSavings } from './types'
+import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits, ContextTop, ContextDetail, RtkStatus, RtkApplied, RtkSavings, Memory, MemoryPreview } from './types'
 
 export const useHealth = () =>
   useQuery({ queryKey: ['health'], queryFn: () => get<Health>('/api/health'), refetchInterval: 15000, retry: false })
@@ -124,4 +124,19 @@ export const useRtkSavings = (from?: string, to?: string, project?: number | nul
       if (project != null && exact) q.set('exact', '1')
       return get<RtkSavings>(`/api/rtk/savings?${q}`)
     },
+  })
+
+// family: numa raiz sem app escolhido, inclui as memórias dos apps (filhos).
+export const useMemories = (projectId: number | null, family = false) =>
+  useQuery({
+    placeholderData: keepPreviousData,
+    queryKey: ['memories', 'list', projectId, family],
+    queryFn: () => get<Memory[]>(projectId === null ? '/api/memories' : `/api/memories?project=${projectId}${family ? '&family=1' : ''}`),
+  })
+
+export const useMemoryPreview = (projectId: number | null) =>
+  useQuery({
+    queryKey: ['memories', 'preview', projectId],
+    enabled: projectId !== null,
+    queryFn: () => get<MemoryPreview>(`/api/memories/preview?project=${projectId}`),
   })
