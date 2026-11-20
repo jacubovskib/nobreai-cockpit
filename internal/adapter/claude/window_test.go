@@ -200,6 +200,11 @@ func TestWindow_TwoWindowsSplitByBranch(t *testing.T) {
 	if err := e.st.DB.QueryRow(`SELECT COUNT(*) FROM window_prompts WHERE used=0`).Scan(&unused); err != nil || unused != 0 {
 		t.Fatalf("prompts não usados = %d %v", unused, err)
 	}
+	// O card da filha lista só a filha (o uso dela tem o id da principal).
+	ss, err := e.st.SessionsForCard(cc.ID)
+	if err != nil || len(ss) != 1 || ss[0].ID != child {
+		t.Fatalf("sessões do card da filha = %+v %v", ss, err)
+	}
 }
 
 // Releitura do começo (versão nova do leitor): os prompts já foram usados,
@@ -349,4 +354,26 @@ func TestWindow_SubagentDoesNotConsumePrompt(t *testing.T) {
 		wAssistant("ca", "cu", "c1", "", time.Minute+3*time.Second))
 	e.read(t)
 	wantWindows(t, "turno", e.turnWindows(t), map[string]string{"c1": childID(200)})
+}
+
+// A principal volta a escrever depois da filha com o pai na folha da filha
+// (o dono saiu e um --resume novo continuou do fim do arquivo): o prompt casa
+// com a principal e a releitura do começo não pode passar o galho para a filha.
+func TestWindow_MainRootUnderChildLeafSurvivesReread(t *testing.T) {
+	e, _ := windowEnv(t)
+	e.prompt(t, 200, "revise o readme", time.Minute)
+	appendFile(t, e.transcript, wPrompt("cu1", "", "revise o readme", time.Minute)+
+		wAssistant("ca1", "cu1", "c1", "", time.Minute+2*time.Second))
+	e.read(t)
+	e.prompt(t, 100, "investigue o login", 2*time.Minute)
+	appendFile(t, e.transcript, wPrompt("mu1", "ca1", "investigue o login", 2*time.Minute)+
+		wAssistant("ma1", "mu1", "m1", "", 2*time.Minute+2*time.Second))
+	e.read(t)
+	want := map[string]string{"c1": childID(200), "m1": ""}
+	wantWindows(t, "turno", e.turnWindows(t), want)
+	if err := e.st.ResetContextCursors(); err != nil {
+		t.Fatal(err)
+	}
+	e.read(t)
+	wantWindows(t, "turno (releitura)", e.turnWindows(t), want)
 }

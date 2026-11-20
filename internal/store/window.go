@@ -9,8 +9,10 @@ import (
 // Atribuição por janela (NAC-40). Dois processos na mesma conversa escrevem
 // no mesmo transcript, que é lido com o id da sessão principal; cada linha
 // pertence a uma janela (a principal ou uma filha, claude:<sid>@<pid>). Nas
-// colunas window_session_id, vazio = a principal (a sessão da linha); só
-// janelas filhas são gravadas com o id.
+// colunas window_session_id de context_turns, tool_outputs e usage, vazio = a
+// principal (a sessão da linha); só janelas filhas são gravadas com o id.
+// window_lines guarda as linhas das filhas e, com o id da principal, as raízes
+// da principal que penduram num galho de filha.
 
 // windowPromptTTL é quanto um prompt recebido no hook espera a leitura do
 // transcript (a leitura vem no fim do turno): os mais velhos são apagados.
@@ -65,9 +67,9 @@ func (s *Store) OpenWindowPrompts(mainID string) ([]WindowPrompt, error) {
 	return out, rows.Err()
 }
 
-// WindowLines devolve as linhas já atribuídas a uma janela filha no
-// transcript path lido pela sessão sessionID (uuid → id da janela). Linha
-// ausente é da principal.
+// WindowLines devolve as linhas já atribuídas no transcript path lido pela
+// sessão sessionID (uuid → id da janela): as das filhas e as raízes da
+// principal guardadas com o id dela. Linha ausente herda do pai.
 func (s *Store) WindowLines(sessionID, path string) (map[string]string, error) {
 	rows, err := s.DB.Query(`SELECT uuid, window_session_id FROM window_lines WHERE session_id=? AND path=?`, sessionID, path)
 	if err != nil {
@@ -98,9 +100,12 @@ func (s *Store) TurnWindow(sessionID, path, messageID string) (window string, ok
 
 // ContextWindows é a atribuição por janela de uma leitura do transcript.
 // ByUUID tem as linhas desta leitura que pertencem a uma janela filha (uuid →
-// id da janela); as demais são da principal. UsedPrompts são os prompts de
-// window_prompts casados nesta leitura.
+// id da janela); as demais são da principal. MainRoots são prompts casados com
+// a principal cujo pai é de uma filha (vão para window_lines com o id da
+// principal, para a releitura não os passar à filha). UsedPrompts são os
+// prompts de window_prompts casados nesta leitura.
 type ContextWindows struct {
 	ByUUID      map[string]string
+	MainRoots   []string
 	UsedPrompts []int64
 }

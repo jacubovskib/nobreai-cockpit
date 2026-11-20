@@ -55,7 +55,8 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 // SaveContextWindows é SaveContext com a atribuição por janela da leitura, na
 // mesma transação: saídas e turnos gravam window_session_id pelo uuid da linha
 // que os criou (w.ByUUID; ausente = principal, ""), as linhas de janela filha
-// vão para window_lines e os prompts casados ficam marcados como usados. A
+// e as raízes da principal (w.MainRoots, com o id da principal) vão para
+// window_lines e os prompts casados ficam marcados como usados. A
 // janela é sempre a da leitura mais recente (é determinística: a raiz do galho
 // fica em window_lines). reset=true apaga também as window_lines do path.
 func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []usage.ToolOutput, turns []usage.ContextTurn, next int64, st usage.ContextState, w ContextWindows) error {
@@ -75,7 +76,14 @@ func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []us
 			return err
 		}
 	}
+	lines := make(map[string]string, len(w.ByUUID)+len(w.MainRoots))
 	for uuid, win := range w.ByUUID {
+		lines[uuid] = win
+	}
+	for _, uuid := range w.MainRoots {
+		lines[uuid] = sessionID
+	}
+	for uuid, win := range lines {
 		if _, err := tx.Exec(`INSERT INTO window_lines (session_id, path, uuid, window_session_id) VALUES (?,?,?,?)
 			ON CONFLICT(session_id, path, uuid) DO UPDATE SET window_session_id=excluded.window_session_id`,
 			sessionID, path, uuid, win); err != nil {

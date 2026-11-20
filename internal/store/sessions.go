@@ -242,11 +242,12 @@ func (s *Store) ProjectsSessionsSince(projectIDs []int64, since time.Time) ([]do
 
 // SessionsForCard lista as sessões do card, da mais antiga para a mais nova:
 // as ligadas a ele agora e as que deixaram uso ou eventos nele (histórico de
-// uma sessão que trocou de card ou foi deslocada).
+// uma sessão que trocou de card ou foi deslocada). O uso conta para a janela
+// dona (a filha grava o uso com o id da principal).
 func (s *Store) SessionsForCard(cardID int64) ([]domain.Session, error) {
 	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
 		WHERE card_id=?
-			OR id IN (SELECT session_id FROM usage WHERE card_id=?)
+			OR id IN (SELECT COALESCE(NULLIF(window_session_id,''), session_id) FROM usage WHERE card_id=?)
 			OR id IN (SELECT session_id FROM events WHERE card_id=?)
 		ORDER BY julianday(started_at), id`, cardID, cardID, cardID)
 }

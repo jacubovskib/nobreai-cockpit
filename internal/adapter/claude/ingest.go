@@ -133,8 +133,8 @@ func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins ma
 			return 0, nil, 0, err
 		}
 	}
-	byUUID, used := assignWindows(sessionID, lines, prompts, known, open)
-	w := store.ContextWindows{ByUUID: byUUID, UsedPrompts: used}
+	byUUID, roots, used := assignWindows(sessionID, lines, prompts, known, open)
+	w := store.ContextWindows{ByUUID: byUUID, MainRoots: roots, UsedPrompts: used}
 	if err := a.st.SaveContextWindows(sessionID, path, reset, outs, turns, next, newSt, w); err != nil {
 		return 0, nil, 0, err
 	}
