@@ -139,7 +139,7 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 	if err != nil {
 		return main, err
 	}
-	sess, child, err := a.route(main, p, pid, event)
+	sess, child, err := a.route(main, pid, event)
 	if err != nil {
 		return sess, err
 	}
@@ -175,9 +175,11 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 //   - senão (PID desconhecido, principal encerrada ou dono morto), a
 //     principal: é o --resume normal, que a reabre com o PID novo.
 //
-// SessionEnd nunca reabre: vai para a sessão desse PID mesmo encerrada. Hook
-// de subagente nunca cria filha.
-func (a *Adapter) route(main domain.Session, p payload, pid int, event string) (sess domain.Session, child bool, err error) {
+// Assim o PID da principal nunca muda enquanto o dono dela está vivo. Hooks de
+// subagente seguem a mesma regra: o subagente roda dentro do processo que o
+// chamou e o hook traz o PID dele (com o PID do dono, fica na principal).
+// SessionEnd nunca reabre: vai para a sessão desse PID mesmo encerrada.
+func (a *Adapter) route(main domain.Session, pid int, event string) (sess domain.Session, child bool, err error) {
 	if pid <= 0 {
 		return main, false, nil
 	}
@@ -189,7 +191,7 @@ func (a *Adapter) route(main domain.Session, p payload, pid int, event string) (
 		return *own, false, nil
 	}
 	shared := main.Live() && main.PID > 0 && main.PID != pid && a.alive(main.PID)
-	if !shared || p.AgentID != "" {
+	if !shared {
 		return main, false, nil
 	}
 	if own != nil && own.ParentSessionID == main.ID {

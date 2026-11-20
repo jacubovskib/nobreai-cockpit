@@ -129,10 +129,34 @@ func TestSession_SubagentNeverForks(t *testing.T) {
 	if n := e.sessionCount(t); n != 1 {
 		t.Fatalf("sessões = %d", n)
 	}
-	// Nem com outro PID vivo: hook de subagente nunca cria filha.
-	e.alive[200] = true
+	if m, _ := e.st.GetSession(sessID); m.PID != 100 {
+		t.Fatalf("principal = %+v", m)
+	}
+}
+
+// O subagente roda dentro do processo que o chamou: o hook dele traz o PID
+// desse processo e segue o mesmo roteamento, mesmo sendo o primeiro hook visto
+// do processo.
+func TestSession_SubagentFromOtherProcessRoutesToChild(t *testing.T) {
+	e := newEnv(t)
+	e.alive[100], e.alive[200] = true, true
+	e.project(t)
+	e.call(t, "session_start", withPID(100))
 	e.call(t, "post_tool_use_read", withPID(200), with("agent_id", "a1"))
-	if n := e.sessionCount(t); n != 1 {
+	ch, err := e.st.GetSession(childID(200))
+	if err != nil || ch.ParentSessionID != sessID || ch.PID != 200 || !ch.Live() {
+		t.Fatalf("filha = %+v %v", ch, err)
+	}
+	if m, _ := e.st.GetSession(sessID); m.PID != 100 || !m.Live() {
+		t.Fatalf("PID da principal trocou: %+v", m)
+	}
+	evs := e.events(t, domain.EvFileRead)
+	if len(evs) != 1 || evs[0].SessionID != childID(200) {
+		t.Fatalf("leituras = %+v", evs)
+	}
+	// Outro hook de subagente do 200: a mesma filha.
+	e.call(t, "post_tool_use_read", withPID(200), with("agent_id", "a1"))
+	if n := e.sessionCount(t); n != 2 {
 		t.Fatalf("sessões = %d", n)
 	}
 }
