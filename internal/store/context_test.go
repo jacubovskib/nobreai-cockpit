@@ -190,25 +190,28 @@ func TestSaveContext_CacheColumns(t *testing.T) {
 	}
 }
 
-func TestResetContextMeasurement(t *testing.T) {
+func TestResetContextCursors(t *testing.T) {
 	s := usageFixture(t)
 	if err := s.SetFileOffset("claude:1", "/p", 999); err != nil {
 		t.Fatal(err)
 	}
 	o := usage.ToolOutput{ItemID: "t1", Tool: "Bash", Key: "x", Bytes: 4, Tokens: 1, At: ctxAt, Result: true}
-	if err := s.SaveContext("claude:1", "/p", false, []usage.ToolOutput{o}, []usage.ContextTurn{{Turn: 0, MessageID: "m", At: ctxAt, Tokens: 1}},
-		500, usage.ContextState{LastTurn: 0, Segment: 2}); err != nil {
+	if err := s.SaveContext("claude:1", "/p", false, []usage.ToolOutput{o}, []usage.ContextTurn{{Turn: 3, MessageID: "m", At: ctxAt, Tokens: 1}},
+		500, usage.ContextState{LastTurn: 3, LastMessageID: "m", Segment: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ResetContextMeasurement(); err != nil {
+	if err := s.ResetContextCursors(); err != nil {
 		t.Fatal(err)
 	}
+	// Nada é apagado: a releitura faz upsert por cima.
 	var o2, tu int
 	s.DB.QueryRow(`SELECT COUNT(*) FROM tool_outputs`).Scan(&o2)
 	s.DB.QueryRow(`SELECT COUNT(*) FROM context_turns`).Scan(&tu)
-	if o2 != 0 || tu != 0 {
+	if o2 != 1 || tu != 1 {
 		t.Fatalf("o=%d tu=%d", o2, tu)
 	}
+	// Cursor no começo: o estado também volta ao começo, mesmo com turnos
+	// gravados (senão a releitura numeraria os turnos depois do último).
 	off, st, err := s.ContextCursor("claude:1", "/p")
 	if err != nil || off != 0 || st != (usage.ContextState{LastTurn: -1}) {
 		t.Fatalf("off=%d st=%+v err=%v", off, st, err)

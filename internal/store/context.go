@@ -10,7 +10,9 @@ import (
 // ContextCursor devolve até onde o transcript path da sessão já foi lido para
 // a medição de contexto (tool_offset) e o estado do leitor: LastTurn e
 // LastMessageID vêm do último turno gravado do path, Segment da linha de
-// transcript_offsets. Sem nada gravado: off 0 e {LastTurn:-1}.
+// transcript_offsets. Sem nada gravado: off 0 e {LastTurn:-1}. Com off 0 o
+// estado é sempre {LastTurn:-1}, mesmo com turnos gravados (releitura depois
+// de ResetContextCursors): a leitura recomeça a numeração do zero.
 func (s *Store) ContextCursor(sessionID, path string) (off int64, st usage.ContextState, err error) {
 	st = usage.ContextState{LastTurn: -1}
 	err = s.DB.QueryRow(`SELECT tool_offset, segment FROM transcript_offsets WHERE session_id=? AND path=?`,
@@ -20,6 +22,9 @@ func (s *Store) ContextCursor(sessionID, path string) (off int64, st usage.Conte
 	}
 	if err != nil {
 		return 0, usage.ContextState{LastTurn: -1}, err
+	}
+	if off == 0 {
+		return 0, usage.ContextState{LastTurn: -1}, nil
 	}
 	err = s.DB.QueryRow(`SELECT turn, message_id FROM context_turns WHERE session_id=? AND path=? ORDER BY turn DESC LIMIT 1`,
 		sessionID, path).Scan(&st.LastTurn, &st.LastMessageID)
@@ -97,26 +102,15 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 	return tx.Commit()
 }
 
-// ResetContextMeasurement apaga toda a medição de contexto (turnos e saídas)
-// e volta o cursor de contexto de todos os transcripts ao começo (tool_offset
-// e segment 0), numa transação, para a próxima leitura refazer tudo. O offset
-// de uso e as linhas de usage não mudam.
-func (s *Store) ResetContextMeasurement() error {
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, q := range []string{
-		`UPDATE transcript_offsets SET tool_offset=0, segment=0`,
-		`DELETE FROM context_turns`,
-		`DELETE FROM tool_outputs`,
-	} {
-		if _, err := tx.Exec(q); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+// ResetContextCursors volta o cursor de contexto de todos os transcripts ao
+// começo (tool_offset e segment 0) para a próxima leitura refazer a medição.
+// Nada é apagado: a releitura faz upsert nas mesmas chaves (turnos por
+// session_id,path,turn, com a numeração determinística do leitor; saídas por
+// session_id,item_id) e preenche as colunas novas. Linhas de transcript que
+// não existe mais ficam como estão. O offset de uso não muda.
+func (s *Store) ResetContextCursors() error {
+	_, err := s.DB.Exec(`UPDATE transcript_offsets SET tool_offset=0, segment=0`)
+	return err
 }
 
 // ClaudeTranscripts devolve o transcript_path de cada sessão do Claude que

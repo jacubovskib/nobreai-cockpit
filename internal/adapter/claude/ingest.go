@@ -99,7 +99,7 @@ func (a *Adapter) readContext(sessionID, path string) (int, error) {
 		return 0, err
 	}
 	// Os prompts ficam para a atribuição por janela.
-	outs, turns, _, next, newSt, reset, err := usage.ParseContext(path, off, st)
+	outs, turns, _, _, next, newSt, reset, err := usage.ParseContext(path, off, st)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
 	}
@@ -125,10 +125,11 @@ const (
 	contextReaderVersionKey = "context_reader_version"
 )
 
-// upgradeReader zera a medição de contexto quando a versão gravada é menor que
-// a atual, e diz se a passada que vem precisa gravar a versão no fim. A versão
-// só é gravada depois de uma passada inteira (sem ctx cancelado): se o daemon
-// cair no meio, a próxima subida zera e relê de novo, sem pular ninguém.
+// upgradeReader volta os cursores de contexto ao começo quando a versão
+// gravada é menor que a atual (sem apagar nada: a releitura faz upsert) e diz
+// se a passada que vem precisa gravar a versão no fim. A versão só é gravada
+// depois de uma passada inteira (sem ctx cancelado): se o daemon cair no meio,
+// a próxima subida volta os cursores e relê de novo, sem pular ninguém.
 func (a *Adapter) upgradeReader() (pending bool, err error) {
 	var v int
 	if _, err := a.st.GetKV(contextReaderVersionKey, &v); err != nil {
@@ -139,7 +140,7 @@ func (a *Adapter) upgradeReader() (pending bool, err error) {
 	}
 	a.readerMu.Lock()
 	defer a.readerMu.Unlock()
-	if err := a.st.ResetContextMeasurement(); err != nil {
+	if err := a.st.ResetContextCursors(); err != nil {
 		return false, err
 	}
 	log.Printf("medição de contexto: leitor v%d → v%d, relendo o histórico", v, contextReaderVersion)
@@ -158,10 +159,11 @@ func (a *Adapter) StartBackfill(ctx context.Context) {
 // BackfillContext lê o histórico: todos os transcripts das sessões do Claude
 // ainda sem medição de contexto (e os já medidos, só do ponto onde pararam).
 // Para entre sessões quando ctx termina; um erro ou pânico numa sessão não
-// interrompe as outras. Com o leitor numa versão antiga, antes zera a medição
-// (upgradeReader) e, se a passada for até o fim, grava a versão nova; erro numa
-// sessão não segura a versão (senão um arquivo ilegível zeraria tudo a cada
-// subida). Transcript que não existe mais perde a medição antiga.
+// interrompe as outras. Com o leitor numa versão antiga, antes volta os
+// cursores ao começo (upgradeReader) e, se a passada for até o fim, grava a
+// versão nova; erro numa sessão não segura a versão (senão um arquivo ilegível
+// faria tudo ser relido a cada subida). Transcript que não existe mais mantém
+// a medição antiga, com as colunas novas zeradas.
 func (a *Adapter) BackfillContext(ctx context.Context) {
 	if ctx.Err() != nil {
 		return

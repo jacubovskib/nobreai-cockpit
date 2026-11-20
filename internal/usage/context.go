@@ -77,6 +77,16 @@ type Prompt struct {
 	At         time.Time
 }
 
+// LineRef é uma linha do transcript com uuid (de qualquer tipo: assistant,
+// user de prompt ou tool_result, attachment, system, resumo de compactação),
+// só com os uuids e o tipo da linha, sem conteúdo. Serve para seguir o galho
+// de parentUuid (atribuição por janela).
+type LineRef struct {
+	UUID       string
+	ParentUUID string
+	Kind       string // o type da linha
+}
+
 // ContextState é o estado que atravessa leituras incrementais do mesmo arquivo.
 type ContextState struct {
 	LastTurn      int // -1 se nenhum
@@ -138,22 +148,23 @@ type ctxLine struct {
 // O tool_use emite um registro (Result false) que o tool_result completa na
 // mesma leitura; se o tool_use ficou numa leitura anterior, o registro sai com
 // Tool/Key vazios e Result true, e o armazenamento faz o upsert por ItemID.
-// prompts são as linhas de prompt do usuário (ver Prompt), na ordem do arquivo.
-func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput, turns []ContextTurn, prompts []Prompt, next int64, newState ContextState, reset bool, err error) {
+// prompts são as linhas de prompt do usuário (ver Prompt) e lines todas as
+// linhas com uuid (ver LineRef), na ordem do arquivo.
+func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput, turns []ContextTurn, prompts []Prompt, lines []LineRef, next int64, newState ContextState, reset bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, nil, offset, st, false, err
+		return nil, nil, nil, nil, offset, st, false, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, nil, nil, offset, st, false, err
+		return nil, nil, nil, nil, offset, st, false, err
 	}
 	if offset > info.Size() {
 		offset, st, reset = 0, ContextState{LastTurn: -1}, true
 	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, nil, nil, offset, st, reset, err
+		return nil, nil, nil, nil, offset, st, reset, err
 	}
 	next = offset
 	outIdx := map[string]int{} // tool_use_id -> posição em outs
@@ -165,12 +176,15 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 			if errors.Is(rerr, io.EOF) {
 				break // linha sem \n final não é lida
 			}
-			return outs, turns, prompts, next, st, reset, rerr
+			return outs, turns, prompts, lines, next, st, reset, rerr
 		}
 		next += int64(len(line))
 		var l ctxLine
 		if json.Unmarshal(line, &l) != nil {
 			continue
+		}
+		if l.UUID != "" {
+			lines = append(lines, LineRef{UUID: l.UUID, ParentUUID: l.ParentUUID, Kind: l.Type})
 		}
 		at, perr := time.Parse(time.RFC3339Nano, l.Timestamp)
 		if perr != nil {
@@ -249,7 +263,7 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 			}
 		}
 	}
-	return outs, turns, prompts, next, st, reset, nil
+	return outs, turns, prompts, lines, next, st, reset, nil
 }
 
 // promptText devolve o texto de um prompt do usuário (regra em Prompt):

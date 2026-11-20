@@ -81,7 +81,7 @@ func TestParseContext_Basic(t *testing.T) {
 		userResult("t1", quote(strings.Repeat("a", 400)), false),
 		asst("m2", 1, 200, 0),
 	)
-	outs, turns, _, _, st, reset, err := ParseContext(p, 0, zero)
+	outs, turns, _, _, _, st, reset, err := ParseContext(p, 0, zero)
 	if err != nil || reset {
 		t.Fatal(err, reset)
 	}
@@ -104,7 +104,7 @@ func TestParseContext_Basic(t *testing.T) {
 
 func TestParseContext_ZeroTokenMessage(t *testing.T) {
 	p := writeLines(t, asst("m1", 1, 1, 1), asst("m0", 0, 0, 0), asst("m2", 2, 2, 2))
-	_, turns, _, _, _, _, _ := ParseContext(p, 0, zero)
+	_, turns, _, _, _, _, _, _ := ParseContext(p, 0, zero)
 	if len(turns) != 2 || turns[0].MessageID != "m1" || turns[1].MessageID != "m2" || turns[1].Turn != 1 {
 		t.Fatalf("turns %+v", turns)
 	}
@@ -113,7 +113,7 @@ func TestParseContext_ZeroTokenMessage(t *testing.T) {
 func TestParseContext_ListContentAndImage(t *testing.T) {
 	c := `[{"type":"text","text":"12345678"},{"type":"image","source":{}},{"type":"tool_reference","tool_name":"x"}]`
 	p := writeLines(t, asst("m1", 1, 1, 1, toolUse("t1", "Read", `{"file_path":"/a/b.go"}`)), userResult("t1", c, true))
-	outs, _, _, _, _, _, _ := ParseContext(p, 0, zero)
+	outs, _, _, _, _, _, _, _ := ParseContext(p, 0, zero)
 	if len(outs) != 1 || outs[0].Bytes != 8 || outs[0].Tokens != 1602 || !outs[0].IsError {
 		t.Fatalf("outs %+v", outs)
 	}
@@ -125,12 +125,12 @@ func TestParseContext_SplitMessageAcrossReads(t *testing.T) {
 	p := writeLines(t, l1, l2)
 	// primeira leitura só vê a primeira linha
 	mustWrite(t, p, l1+"\n")
-	_, turns, _, next, st, _, _ := ParseContext(p, 0, zero)
+	_, turns, _, _, next, st, _, _ := ParseContext(p, 0, zero)
 	if len(turns) != 1 || turns[0].Tokens != 3 {
 		t.Fatalf("turns %+v", turns)
 	}
 	appendTo(t, p, l2+"\n")
-	_, turns, _, _, st, _, _ = ParseContext(p, next, st)
+	_, turns, _, _, _, st, _, _ = ParseContext(p, next, st)
 	if len(turns) != 1 || turns[0].Turn != 0 || turns[0].Tokens != 60 || st.LastTurn != 0 {
 		t.Fatalf("turns %+v st %+v", turns, st)
 	}
@@ -139,7 +139,7 @@ func TestParseContext_SplitMessageAcrossReads(t *testing.T) {
 func TestParseContext_Compaction(t *testing.T) {
 	hook := hookLine("h1", "SessionStart", "/x/nobre hook claude SessionStart", `{"hookSpecificOutput":{"additionalContext":"abcd"}}`)
 	p := writeLines(t, asst("m1", 1, 1, 1), compactLine, hook, asst("m2", 2, 2, 2))
-	outs, turns, _, _, st, _, _ := ParseContext(p, 0, zero)
+	outs, turns, _, _, _, st, _, _ := ParseContext(p, 0, zero)
 	if len(outs) != 1 || outs[0].Turn != 0 || outs[0].Segment != 1 {
 		t.Fatalf("outs %+v", outs)
 	}
@@ -148,12 +148,12 @@ func TestParseContext_Compaction(t *testing.T) {
 	}
 	// compact_boundary como última linha de uma leitura
 	p2 := writeLines(t, asst("m1", 1, 1, 1), compactLine)
-	_, _, _, next, st, _, _ := ParseContext(p2, 0, zero)
+	_, _, _, _, next, st, _, _ := ParseContext(p2, 0, zero)
 	if st.Segment != 1 {
 		t.Fatalf("st %+v", st)
 	}
 	appendTo(t, p2, asst("m2", 2, 2, 2)+"\n")
-	_, turns, _, _, _, _, _ = ParseContext(p2, next, st)
+	_, turns, _, _, _, _, _, _ = ParseContext(p2, next, st)
 	if len(turns) != 1 || turns[0].Segment != 1 {
 		t.Fatalf("turns %+v", turns)
 	}
@@ -173,7 +173,7 @@ func TestParseContext_Hooks(t *testing.T) {
 		hookLine("h6", "UserPromptSubmit", "/x/other.sh", "abcde"),
 		"{isto nao e json",
 	)
-	outs, _, _, _, _, _, _ := ParseContext(p, 0, zero)
+	outs, _, _, _, _, _, _, _ := ParseContext(p, 0, zero)
 	if len(outs) != 5 {
 		t.Fatalf("outs %+v", outs)
 	}
@@ -202,7 +202,7 @@ func TestParseContext_Keys(t *testing.T) {
 		userResult("d", `"x"`, false), userResult("e", `"x"`, false), userResult("f", `"x"`, false),
 		userResult("zzz", `"x"`, false),
 	)
-	outs, _, _, _, _, _, _ := ParseContext(p, 0, zero)
+	outs, _, _, _, _, _, _, _ := ParseContext(p, 0, zero)
 	want := []string{"Read .go", "Read sem extensão", "Agent Explore", "Agent geral", "Skill napkin", "Grep", ""}
 	if len(outs) != len(want) {
 		t.Fatalf("outs %+v", outs)
@@ -219,7 +219,7 @@ func TestParseContext_Keys(t *testing.T) {
 
 func TestParseContext_Truncated(t *testing.T) {
 	p := writeLines(t, asst("m1", 1, 1, 1))
-	_, turns, _, _, _, reset, _ := ParseContext(p, 1<<30, ContextState{LastTurn: 5, LastMessageID: "old", Segment: 3})
+	_, turns, _, _, _, _, reset, _ := ParseContext(p, 1<<30, ContextState{LastTurn: 5, LastMessageID: "old", Segment: 3})
 	if !reset || len(turns) != 1 || turns[0].Turn != 0 || turns[0].Segment != 0 {
 		t.Fatalf("reset %v turns %+v", reset, turns)
 	}
@@ -229,7 +229,7 @@ func TestParseContext_PartialLastLine(t *testing.T) {
 	l1 := asst("m1", 1, 1, 1)
 	p := filepath.Join(t.TempDir(), "t.jsonl")
 	mustWrite(t, p, l1+"\n"+asst("m2", 2, 2, 2))
-	_, turns, _, next, _, _, _ := ParseContext(p, 0, zero)
+	_, turns, _, _, next, _, _, _ := ParseContext(p, 0, zero)
 	if len(turns) != 1 || next != int64(len(l1)+1) {
 		t.Fatalf("turns %+v next %d", turns, next)
 	}
@@ -283,13 +283,13 @@ func TestParseContext_UseAndResultAcrossReads(t *testing.T) {
 	l1 := asst("m1", 1, 1, 1, toolUse("t1", "Bash", input))
 	p := filepath.Join(t.TempDir(), "t.jsonl")
 	mustWrite(t, p, l1+"\n")
-	outs, _, _, next, st, _, _ := ParseContext(p, 0, zero)
+	outs, _, _, _, next, st, _, _ := ParseContext(p, 0, zero)
 	if len(outs) != 1 || outs[0].Result || outs[0].Tool != "Bash" || outs[0].Key != "git status" ||
 		outs[0].InTokens == 0 || outs[0].Bytes != 0 || outs[0].Turn != 0 {
 		t.Fatalf("outs %+v", outs)
 	}
 	appendTo(t, p, userResult("t1", quote("abcdefgh"), false)+"\n")
-	outs, _, _, _, _, _, _ = ParseContext(p, next, st)
+	outs, _, _, _, _, _, _, _ = ParseContext(p, next, st)
 	if len(outs) != 1 || outs[0].ItemID != "t1" || outs[0].Tool != "" || !outs[0].Result || outs[0].Bytes != 8 || outs[0].Turn != 0 {
 		t.Fatalf("outs %+v", outs)
 	}
@@ -297,7 +297,7 @@ func TestParseContext_UseAndResultAcrossReads(t *testing.T) {
 
 func TestParseContext_UseWithoutResult(t *testing.T) {
 	p := writeLines(t, asst("m1", 1, 1, 1, toolUse("t1", "Write", `{"file_path":"/a","content":"xxxxxxxx"}`)))
-	outs, _, _, _, _, _, _ := ParseContext(p, 0, zero)
+	outs, _, _, _, _, _, _, _ := ParseContext(p, 0, zero)
 	if len(outs) != 1 || outs[0].Result || outs[0].InTokens == 0 || outs[0].Tokens != 0 || outs[0].Key != "Write" {
 		t.Fatalf("outs %+v", outs)
 	}
@@ -309,7 +309,7 @@ func TestParseContext_EmptyIDsSkipped(t *testing.T) {
 		userResult("", `"abc"`, false),
 		hookLine("", "SessionStart", "/x/nobre hook", `{"hookSpecificOutput":{"additionalContext":"abcd"}}`),
 	)
-	outs, _, _, _, _, _, _ := ParseContext(p, 0, zero)
+	outs, _, _, _, _, _, _, _ := ParseContext(p, 0, zero)
 	if len(outs) != 0 {
 		t.Fatalf("outs %+v", outs)
 	}
@@ -333,7 +333,7 @@ func TestParseContext_CacheDetailAndTTL(t *testing.T) {
 		line("assistant", "a2", "a1", asstMsg("m2", u5m, "")),
 		line("assistant", "a3", "a2", asstMsg("m3", uNone, "")),
 	)
-	_, turns, _, _, _, _, err := ParseContext(p, 0, zero)
+	_, turns, _, _, _, _, _, err := ParseContext(p, 0, zero)
 	if err != nil || len(turns) != 3 {
 		t.Fatalf("turns %+v err %v", turns, err)
 	}
@@ -362,7 +362,7 @@ func TestParseContext_UUIDs(t *testing.T) {
 		line("user", "r2", "r1", `"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t9","content":"xy"}]}`),
 		line("attachment", "h1", "r2", `"attachment":{"type":"hook_success","hookEvent":"SessionStart","command":"x","stdout":"oi"}`),
 	)
-	outs, turns, _, _, _, _, err := ParseContext(p, 0, zero)
+	outs, turns, _, _, _, _, _, err := ParseContext(p, 0, zero)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestParseContext_Prompts(t *testing.T) {
 		line("user", "e1", "s1", `"message":{"role":"user","content":"   "}`),
 		line("user", "p3", "e1", `"message":{"role":"user","content":"terceiro"}`),
 	)
-	_, _, prompts, _, _, _, err := ParseContext(p, 0, zero)
+	_, _, prompts, _, _, _, _, err := ParseContext(p, 0, zero)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,6 +414,41 @@ func TestParseContext_Prompts(t *testing.T) {
 		g := prompts[i]
 		if g.UUID != w.UUID || g.ParentUUID != w.ParentUUID || g.Text != w.Text || g.At.IsZero() {
 			t.Fatalf("prompt %d: %+v, quer %+v", i, g, w)
+		}
+	}
+}
+
+func TestParseContext_Lines(t *testing.T) {
+	u := `{"input_tokens":1,"cache_read_input_tokens":1,"cache_creation_input_tokens":1,"output_tokens":1}`
+	p := writeLines(t,
+		line("user", "p1", "", `"message":{"role":"user","content":"faça x"}`),
+		line("assistant", "a1", "p1", asstMsg("m1", u, `{"type":"thinking","thinking":"..."}`)),
+		line("assistant", "a2", "a1", asstMsg("m1", u, toolUse("t1", "Bash", `{"command":"ls"}`))),
+		line("user", "r1", "a2", `"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"abcd"}]}`),
+		line("attachment", "h1", "r1", `"attachment":{"type":"hook_success","hookEvent":"PostToolUse","command":"x","stdout":""}`),
+		`{"type":"system","subtype":"compact_boundary","uuid":"c1","parentUuid":null,"timestamp":"2026-11-18T10:00:03Z"}`,
+		line("user", "s1", "c1", `"isCompactSummary":true,"message":{"role":"user","content":"resumo"}`),
+		`{"type":"summary","summary":"sem uuid"}`,
+	)
+	_, _, _, lines, _, _, _, err := ParseContext(p, 0, zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []LineRef{
+		{UUID: "p1", ParentUUID: "", Kind: "user"},
+		{UUID: "a1", ParentUUID: "p1", Kind: "assistant"},
+		{UUID: "a2", ParentUUID: "a1", Kind: "assistant"},
+		{UUID: "r1", ParentUUID: "a2", Kind: "user"},
+		{UUID: "h1", ParentUUID: "r1", Kind: "attachment"},
+		{UUID: "c1", ParentUUID: "", Kind: "system"},
+		{UUID: "s1", ParentUUID: "c1", Kind: "user"},
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("lines %+v", lines)
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Fatalf("linha %d: %+v, quer %+v", i, lines[i], w)
 		}
 	}
 }

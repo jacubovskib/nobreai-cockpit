@@ -27,7 +27,7 @@ type Adapter struct {
 	wg     sync.WaitGroup
 	// readerMu: leituras de transcript (readLocked) tomam RLock; a troca de
 	// versão do leitor toma Lock, para nenhuma leitura em andamento gravar um
-	// cursor antigo por cima do cursor zerado.
+	// cursor antigo por cima do cursor que voltou ao começo.
 	readerMu sync.RWMutex
 	// repoRoots guarda o topo do repositório de cada diretório de projeto
 	// (chave e valor: string), para traduzir caminhos de worktrees.

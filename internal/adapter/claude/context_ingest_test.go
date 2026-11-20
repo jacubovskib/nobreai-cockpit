@@ -172,21 +172,26 @@ func readerVersion(t *testing.T, e *env) int {
 }
 
 // Medição gravada por um leitor antigo (sem versão): a primeira passada do
-// histórico refaz tudo uma vez; a segunda não relê.
+// histórico relê tudo uma vez por cima (upsert, sem apagar); a segunda não relê.
 func TestBackfillContext_ReaderVersion(t *testing.T) {
 	e, main, sub := ctxEnv(t)
+	// Dois turnos no principal: a releitura do começo tem de renumerar do zero.
+	appendFile(t, main, ctxAssistant("m2", "Grep", "t3")+ctxResult("t3", "xy"))
 	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
 		t.Fatal(err)
 	}
 	var usageRows int
 	e.st.DB.QueryRow(`SELECT COUNT(*) FROM usage WHERE session_id=?`, ctxSess).Scan(&usageRows)
 	usageOff, _ := e.st.FileOffset(ctxSess, main)
-	// Estado do leitor antigo: colunas novas zeradas, um turno a mais e uma
-	// saída que o arquivo não tem.
+	// Estado do leitor antigo: colunas novas zeradas e tokens adulterados; e
+	// medição de um transcript que não existe mais.
+	gone := filepath.Join(t.TempDir(), "sumiu.jsonl")
 	for _, q := range []string{
-		`UPDATE context_turns SET tokens=777, input=0, cache_read=0`,
-		`INSERT INTO context_turns(session_id, path, turn, message_id, at, tokens) VALUES ('` + ctxSess + `', '` + main + `', 9, 'velho', 'x', 1)`,
-		`INSERT INTO tool_outputs(session_id, path, item_id, tool, key, bytes, tokens, turn, at) VALUES ('` + ctxSess + `', '` + main + `', 'velho', 'Bash', 'x', 1, 1, 0, 'x')`,
+		`UPDATE context_turns SET tokens=777, input=0, cache_read=0, cache_write=0`,
+		`UPDATE tool_outputs SET bytes=1, tokens=1`,
+		`INSERT INTO context_turns(session_id, path, turn, message_id, at, tokens) VALUES ('` + ctxSess + `', '` + gone + `', 0, 'velho', 'x', 5)`,
+		`INSERT INTO tool_outputs(session_id, path, item_id, tool, key, bytes, tokens, turn, at) VALUES ('` + ctxSess + `', '` + gone + `', 'velho', 'Bash', 'x', 8, 2, 0, 'x')`,
+		`INSERT INTO transcript_offsets(session_id, path, offset, tool_offset) VALUES ('` + ctxSess + `', '` + gone + `', 0, 50)`,
 	} {
 		if _, err := e.st.DB.Exec(q); err != nil {
 			t.Fatal(err)
@@ -196,23 +201,32 @@ func TestBackfillContext_ReaderVersion(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	e.a.BackfillContext(cancelled)
-	if readerVersion(t, e) >= contextReaderVersion || ctxCount(t, e, "context_turns", main) != 2 {
-		t.Fatal("ctx cancelado mexeu na medição ou na versão")
+	if off, _, _ := e.st.ContextCursor(ctxSess, main); readerVersion(t, e) >= contextReaderVersion || off == 0 {
+		t.Fatal("ctx cancelado mexeu nos cursores ou na versão")
 	}
 
 	e.a.BackfillContext(context.Background())
 	if v := readerVersion(t, e); v != contextReaderVersion {
 		t.Fatalf("versão = %d", v)
 	}
-	for _, p := range []string{main, sub} {
-		if ctxCount(t, e, "tool_outputs", p) != 1 || ctxCount(t, e, "context_turns", p) != 1 {
-			t.Fatalf("%s: releitura não refez a medição", p)
-		}
+	// Relido por cima: mesmas chaves, nada duplicado, colunas novas cheias.
+	if ctxCount(t, e, "tool_outputs", main) != 2 || ctxCount(t, e, "context_turns", main) != 2 ||
+		ctxCount(t, e, "tool_outputs", sub) != 1 || ctxCount(t, e, "context_turns", sub) != 1 {
+		t.Fatal("releitura duplicou ou perdeu")
 	}
 	var tok, in, cr int64
 	if err := e.st.DB.QueryRow(`SELECT tokens, input, cache_read FROM context_turns WHERE session_id=? AND path=? AND turn=0`, ctxSess, main).
 		Scan(&tok, &in, &cr); err != nil || tok != 110 || in != 10 || cr != 100 {
 		t.Fatalf("turno relido: tokens=%d input=%d cache_read=%d err=%v", tok, in, cr, err)
+	}
+	var ob int64
+	var tool string
+	if err := e.st.DB.QueryRow(`SELECT bytes, tool FROM tool_outputs WHERE session_id=? AND item_id='t1'`, ctxSess).Scan(&ob, &tool); err != nil || ob != 8 || tool != "Bash" {
+		t.Fatalf("saída relida: bytes=%d tool=%q err=%v", ob, tool, err)
+	}
+	// O transcript que sumiu mantém a medição antiga.
+	if ctxCount(t, e, "context_turns", gone) != 1 || ctxCount(t, e, "tool_outputs", gone) != 1 {
+		t.Fatal("medição de transcript inexistente foi apagada")
 	}
 	// O uso não é relido nem duplicado.
 	var usageAfter int
@@ -227,7 +241,7 @@ func TestBackfillContext_ReaderVersion(t *testing.T) {
 	}
 	e.a.BackfillContext(context.Background())
 	e.st.DB.QueryRow(`SELECT tokens FROM context_turns WHERE session_id=? AND path=? AND turn=0`, ctxSess, main).Scan(&tok)
-	if tok != 777 || ctxCount(t, e, "tool_outputs", main) != 1 || ctxCount(t, e, "context_turns", main) != 1 {
+	if tok != 777 || ctxCount(t, e, "tool_outputs", main) != 2 || ctxCount(t, e, "context_turns", main) != 2 {
 		t.Fatalf("releu de novo ou duplicou: tokens=%d", tok)
 	}
 }
