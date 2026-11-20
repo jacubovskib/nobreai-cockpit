@@ -79,6 +79,39 @@ func TestSessionByPID(t *testing.T) {
 	}
 }
 
+func TestSessionByProviderPID(t *testing.T) {
+	s := newTestStore(t)
+	main := newSession("claude:S", 100)
+	main.ProviderSessionID = "S"
+	main.StartedAt = time.Now().UTC().Add(-time.Hour)
+	child := newSession("claude:S@200", 200)
+	child.ProviderSessionID, child.ParentSessionID = "S", "claude:S"
+	other := newSession("claude:T", 200)
+	other.ProviderSessionID = "T"
+	for _, x := range []domain.Session{main, child, other} {
+		if err := s.StartSession(x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.SessionByProviderPID("S", 200)
+	if err != nil || got == nil || got.ID != "claude:S@200" || got.ParentSessionID != "claude:S" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if got, _ := s.SessionByProviderPID("S", 100); got == nil || got.ID != "claude:S" || got.ParentSessionID != "" {
+		t.Fatalf("got %+v", got)
+	}
+	// Encerrada continua achada (viva ou não).
+	if err := s.EndSession("claude:S@200", "exit", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.SessionByProviderPID("S", 200); got == nil || got.ID != "claude:S@200" {
+		t.Fatalf("got %+v", got)
+	}
+	if got, err := s.SessionByProviderPID("S", 300); err != nil || got != nil {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
 func TestAttachSessionOneOwner(t *testing.T) {
 	s := newTestStore(t)
 	c := seedCard(t, s, domain.Backlog)

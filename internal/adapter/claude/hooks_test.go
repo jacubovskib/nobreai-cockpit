@@ -35,6 +35,9 @@ type env struct {
 	a          *Adapter
 	now        time.Time
 	transcript string
+	// alive diz quais PIDs estão vivos (os demais são dados como mortos):
+	// os testes nunca dependem do /proc real.
+	alive map[int]bool
 
 	mu   sync.Mutex
 	pubs []string
@@ -47,7 +50,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	e := &env{st: st, now: t0}
+	e := &env{st: st, now: t0, alive: map[int]bool{}}
 	e.a = New(st, adapter.Deps{
 		Now: func() time.Time { return e.now },
 		Git: fakeGit{branch: "main"},
@@ -57,6 +60,7 @@ func newEnv(t *testing.T) *env {
 			e.mu.Unlock()
 		},
 	})
+	e.a.SetAlive(func(pid int) bool { return e.alive[pid] })
 	t.Cleanup(e.a.Wait)
 	e.transcript = copyTranscript(t)
 	return e

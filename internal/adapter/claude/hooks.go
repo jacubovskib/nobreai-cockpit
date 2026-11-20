@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,7 +109,7 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 		return notice, nil
 	case "Stop":
 		reply, err := a.stop(sess, p, now)
-		a.ingestAsync(sess.ID, transcriptPath(p, sess))
+		a.ingestAsync(ingestID(sess), transcriptPath(p, sess))
 		return reply, err
 	case "SessionEnd":
 		a.outsideSwitch.Delete(sess.ID)
@@ -124,19 +125,28 @@ func transcriptPath(p payload, sess domain.Session) string {
 	return sess.TranscriptPath
 }
 
-// session devolve a sessão do evento, criando-a se não existe. Sessão que
-// não está viva (encerrada ou com o processo dado como morto) e volta a mandar
-// eventos é reaberta, com o PID novo; SessionEnd nunca reabre. As demais
-// apenas têm a última atividade atualizada.
+// session devolve a sessão do evento, criando-a se não existe. Cada processo
+// vivo da conversa tem a sua (ver route): o segundo processo ganha uma sessão
+// filha. Sessão que não está viva (encerrada ou com o processo dado como
+// morto) e volta a mandar eventos é reaberta, com o PID novo; SessionEnd nunca
+// reabre. As demais apenas têm a última atividade atualizada.
 func (a *Adapter) session(p payload, pid int, event string, now time.Time) (domain.Session, error) {
 	id := "claude:" + p.SessionID
-	sess, err := a.st.GetSession(id)
+	main, err := a.st.GetSession(id)
 	if errors.Is(err, store.ErrNotFound) {
 		return a.createSession(id, p, pid, now)
 	}
 	if err != nil {
+		return main, err
+	}
+	sess, child, err := a.route(main, p, pid, event)
+	if err != nil {
 		return sess, err
 	}
+	if child {
+		return a.createChild(main, p, pid, event, now)
+	}
+	id = sess.ID
 	if event != "SessionEnd" && (!sess.Live() || (pid > 0 && pid != sess.PID)) {
 		if err := a.st.ReopenSession(id, pid, now); err != nil {
 			return sess, err
@@ -148,31 +158,98 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 		}
 		// claude --resume depois de um git switch no terminal: o SessionStart
 		// (cards pausados do branch) já precisa do branch atual.
-		if p.AgentID == "" && mainOnlyEvents[event] {
-			if p.Cwd != "" && p.Cwd != sess.Cwd {
-				return a.moveSession(sess, p.Cwd)
-			}
-			return a.followBranch(sess, false), nil
-		}
-		return sess, nil
+		return a.followMain(sess, p, event)
 	}
 	if err := a.st.TouchSession(id, now); err != nil {
 		return sess, err
 	}
 	sess.LastEventAt = now
-	// Subagentes com isolation: worktree mandam hooks com o cwd do worktree
-	// deles; seguir esses cwds faria a sessão oscilar entre worktrees.
-	if p.Cwd != "" && p.Cwd != sess.Cwd && mainOnlyEvents[event] && p.AgentID == "" {
+	return a.followMain(sess, p, event)
+}
+
+// route escolhe a sessão do processo pid na conversa da principal main:
+//   - a sessão viva da conversa com esse PID (a principal ou uma filha);
+//   - senão, se outro processo ainda vivo é dono da principal viva, a filha
+//     deste processo (child = true quando ela ainda não existe; uma filha
+//     encerrada é devolvida para ser reaberta);
+//   - senão (PID desconhecido, principal encerrada ou dono morto), a
+//     principal: é o --resume normal, que a reabre com o PID novo.
+//
+// SessionEnd nunca reabre: vai para a sessão desse PID mesmo encerrada. Hook
+// de subagente nunca cria filha.
+func (a *Adapter) route(main domain.Session, p payload, pid int, event string) (sess domain.Session, child bool, err error) {
+	if pid <= 0 {
+		return main, false, nil
+	}
+	own, err := a.st.SessionByProviderPID(main.ProviderSessionID, pid)
+	if err != nil {
+		return main, false, err
+	}
+	if own != nil && (own.Live() || event == "SessionEnd") {
+		return *own, false, nil
+	}
+	shared := main.Live() && main.PID > 0 && main.PID != pid && a.alive(main.PID)
+	if !shared || p.AgentID != "" {
+		return main, false, nil
+	}
+	if own != nil && own.ParentSessionID == main.ID {
+		return *own, false, nil
+	}
+	return main, true, nil
+}
+
+// createChild cria a sessão filha do processo pid: herda da principal o
+// projeto, a captura, o local e o transcript, sem card.
+func (a *Adapter) createChild(main domain.Session, p payload, pid int, event string, now time.Time) (domain.Session, error) {
+	id := main.ID + "@" + strconv.Itoa(pid)
+	tp := main.TranscriptPath
+	if tp == "" {
+		tp = p.TranscriptPath
+	}
+	x := domain.Session{ID: id, Agent: main.Agent, ProviderSessionID: main.ProviderSessionID, ParentSessionID: main.ID,
+		PID: pid, ProjectID: main.ProjectID, FullCapture: main.FullCapture, Cwd: main.Cwd, Branch: main.Branch,
+		GitHead: main.GitHead, Worktree: main.Worktree, WorktreeLinked: main.WorktreeLinked, TranscriptPath: tp,
+		StartedAt: now, LastEventAt: now}
+	// Dois hooks simultâneos do mesmo processo: o segundo é ignorado e a
+	// releitura devolve a que ficou.
+	if err := a.st.StartSession(x); err != nil {
+		return x, err
+	}
+	a.publish("sessions")
+	sess, err := a.st.GetSession(id)
+	if err != nil {
+		return sess, err
+	}
+	// A outra janela pode estar noutro diretório (outro worktree).
+	return a.followMain(sess, p, event)
+}
+
+// followMain faz a sessão acompanhar o local do agente principal nos eventos
+// que só ele dispara. Subagentes com isolation: worktree mandam hooks com o
+// cwd do worktree deles; seguir esses cwds faria a sessão oscilar entre
+// worktrees.
+func (a *Adapter) followMain(sess domain.Session, p payload, event string) (domain.Session, error) {
+	if p.AgentID != "" || !mainOnlyEvents[event] {
+		return sess, nil
+	}
+	if p.Cwd != "" && p.Cwd != sess.Cwd {
 		return a.moveSession(sess, p.Cwd)
 	}
 	// Mesmo diretório: o branch pode ter sido trocado fora do agente (no
 	// terminal do usuário, na IDE), sem nenhum Bash que o PostToolUse visse.
 	// Só a sessão acompanha: o usuário pode estar só revisando outro branch, e
 	// o card segue o que o próprio agente faz (Bash, nobre branch/start/resume).
-	if mainOnlyEvents[event] && p.AgentID == "" {
-		return a.followBranch(sess, false), nil
+	return a.followBranch(sess, false), nil
+}
+
+// ingestID é a sessão em que o uso e o contexto do transcript são gravados:
+// a filha divide o transcript com a principal e lê com o id dela (mesmos
+// offsets e linhas, sem contar em dobro).
+func ingestID(sess domain.Session) string {
+	if sess.ParentSessionID != "" {
+		return sess.ParentSessionID
 	}
-	return sess, nil
+	return sess.ID
 }
 
 // moveSession grava o novo diretório da sessão (o agente entrou num worktree,
@@ -592,7 +669,7 @@ func (a *Adapter) sessionEnd(sess domain.Session, p payload, now time.Time) (ada
 	}
 	a.publish("sessions", "cards")
 	a.event(sess.ID, domain.EvSessionEnd, map[string]any{"reason": p.Reason}, now)
-	a.ingestAsync(sess.ID, transcriptPath(p, sess))
+	a.ingestAsync(ingestID(sess), transcriptPath(p, sess))
 	return adapter.HookReply{}, nil
 }
 

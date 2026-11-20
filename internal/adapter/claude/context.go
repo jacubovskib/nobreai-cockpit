@@ -75,6 +75,10 @@ var instructions = instructionsFor(domain.DefaultSettings())
 // continuar um card.
 const resumeEnv = "NOBRE_RESUME"
 
+// childPhrase avisa a sessão filha (segundo processo na mesma conversa) de
+// que os comandos nobre dela não mexem na sessão da outra janela.
+const childPhrase = "Esta conversa também está aberta em outra janela, com sessão própria no Cockpit; os comandos nobre desta janela valem só para ela."
+
 // sessionStart registra o início e injeta o contexto do Cockpit. Com
 // NOBRE_RESUME=<KEY> num início de sessão (source startup), a sessão é ligada
 // ao card (force: o agente foi aberto pelo humano para continuar o card) e o
@@ -151,6 +155,9 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		head += fmt.Sprintf("\n\nO card %s não foi encontrado; a sessão segue sem card.", notFound)
 	}
 	var b strings.Builder
+	if sess.ParentSessionID != "" {
+		b.WriteString("\n\n" + childPhrase)
+	}
 	if sess.FullCapture {
 		apps, err := a.appsGuidance(sess)
 		if err != nil {

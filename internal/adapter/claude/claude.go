@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/proc"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -31,6 +32,9 @@ type Adapter struct {
 	// branch que a sessão tinha antes. Só em memória: perder a marca num
 	// restart só deixa o card onde estava.
 	outsideSwitch sync.Map
+	// alive diz se o processo do agente com esse PID ainda existe (decide
+	// entre sessão filha e retomada); padrão: /proc.
+	alive func(pid int) bool
 }
 
 var _ adapter.Adapter = (*Adapter)(nil)
@@ -41,8 +45,12 @@ func New(st *store.Store, deps adapter.Deps) *Adapter {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &Adapter{st: st, deps: deps}
+	return &Adapter{st: st, deps: deps, alive: func(pid int) bool { return proc.Alive("/proc", pid) }}
 }
+
+// SetAlive troca a verificação de processo vivo (testes, sem /proc real).
+// Chame antes do primeiro hook.
+func (a *Adapter) SetAlive(f func(pid int) bool) { a.alive = f }
 
 func (a *Adapter) Name() string { return "claude" }
 

@@ -97,9 +97,10 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 }
 
 // ClaudeTranscripts devolve o transcript_path de cada sessão do Claude que
-// tem um (id da sessão → caminho).
+// tem um (id da sessão → caminho). Sessões filhas ficam de fora: dividem o
+// transcript com a principal, que é quem o lê.
 func (s *Store) ClaudeTranscripts() (map[string]string, error) {
-	rows, err := s.DB.Query(`SELECT id, transcript_path FROM sessions WHERE agent='claude' AND transcript_path<>''`)
+	rows, err := s.DB.Query(`SELECT id, transcript_path FROM sessions WHERE agent='claude' AND transcript_path<>'' AND parent_session_id=''`)
 	if err != nil {
 		return nil, err
 	}
