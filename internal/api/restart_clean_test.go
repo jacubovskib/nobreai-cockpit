@@ -1,7 +1,9 @@
 package api
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,5 +101,47 @@ func TestRestartCleanChildSessionOwnCard(t *testing.T) {
 	m, _ := a.st.GetSession("claude:main")
 	if c2.Column != domain.Pausado || c1.Column != domain.EmAndamento || f.CardID != nil || m.CardID == nil || len(l.calls) != 1 {
 		t.Fatalf("c1=%s c2=%s filha=%v main=%v calls=%d", c1.Column, c2.Column, f.CardID, m.CardID, len(l.calls))
+	}
+}
+
+type failLauncher struct{}
+
+func (failLauncher) Start([]string) error { return errors.New("boom") }
+
+func TestRestartCleanValidationFailureChangesNothing(t *testing.T) {
+	a, _ := continueAPIDeps(t, &fakeGit{branch: "feat/x", clean: true}, nil, func(d *Deps) { d.Launcher = nil })
+	a.liveSession(t, "claude:s", 4242, "NAC-1")
+	got := restartErr(t, a, "claude:s", http.StatusServiceUnavailable, map[string]any{"where_stopped": "aqui"})
+	if got != "lançador indisponível" {
+		t.Fatalf("erro = %q", got)
+	}
+	s, _ := a.st.GetSession("claude:s")
+	c, _ := a.st.GetCard("NAC-1")
+	if s.CardID == nil || c.Column != domain.EmAndamento {
+		t.Fatalf("mudou algo: card %v coluna %s", s.CardID, c.Column)
+	}
+}
+
+func TestRestartCleanDirtyTreeChangesNothing(t *testing.T) {
+	a, l := continueAPI(t, &fakeGit{branch: "main", clean: false})
+	a.liveSession(t, "claude:s", 4242, "NAC-1")
+	restartErr(t, a, "claude:s", http.StatusConflict, map[string]any{"where_stopped": "aqui"})
+	s, _ := a.st.GetSession("claude:s")
+	if s.CardID == nil || len(l.calls) != 0 {
+		t.Fatal("mudou algo")
+	}
+}
+
+func TestRestartCleanLaunchFailureAfterDetach(t *testing.T) {
+	a, _ := continueAPIDeps(t, &fakeGit{branch: "feat/x", clean: true}, nil, func(d *Deps) { d.Launcher = failLauncher{} })
+	a.liveSession(t, "claude:s", 4242, "NAC-1")
+	got := restartErr(t, a, "claude:s", http.StatusInternalServerError, map[string]any{"where_stopped": "aqui"})
+	if !strings.HasSuffix(got, " — o card ficou pausado; use Continuar no card para abrir de novo.") {
+		t.Fatalf("erro = %q", got)
+	}
+	s, _ := a.st.GetSession("claude:s")
+	c, _ := a.st.GetCard("NAC-1")
+	if s.CardID != nil || c.Column != domain.Pausado {
+		t.Fatalf("card %v coluna %s", s.CardID, c.Column)
 	}
 }

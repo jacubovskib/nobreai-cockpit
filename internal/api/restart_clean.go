@@ -8,6 +8,8 @@ import (
 
 // whereStoppedMaxAge é a idade máxima do "Onde parei" para recomeçar sem
 // registrar um novo.
+const restartLaunchFailed = " — o card ficou pausado; use Continuar no card para abrir de novo."
+
 const whereStoppedMaxAge = 30 * time.Minute
 
 func (s *server) restartCleanRoutes(mux *http.ServeMux) {
@@ -50,12 +52,19 @@ func (s *server) restartClean(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "registre onde parou antes de recomeçar")
 		return
 	}
+	// Validações sem efeito colateral antes de mexer em qualquer coisa: se o
+	// Continuar vai recusar, nada muda. Sem checar sessão viva: a atual ainda
+	// é dona do card e é a que sai.
+	pl, ok := s.prepareContinue(w, c.Key, continueInput{Agent: sess.Agent}, false)
+	if !ok {
+		return
+	}
 	if err := s.st.DetachSessionCard(sess.ID); err != nil {
 		writeStoreError(w, err, "sessão não encontrada")
 		return
 	}
 	s.publish("sessions")
 	s.publish("cards")
-	// Sem force: a sessão atual já não é dona do card. Modo vazio = padrão.
-	s.continueKey(w, c.Key, continueInput{Agent: sess.Agent})
+	// Se a abertura falhar agora, o card já ficou pausado e desligado.
+	s.runContinue(w, pl, restartLaunchFailed)
 }

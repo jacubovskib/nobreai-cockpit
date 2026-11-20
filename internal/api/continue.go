@@ -111,21 +111,47 @@ type continueInput struct {
 	Force      bool   `json:"force"`
 }
 
-// continueKey é o núcleo do Continuar (também usado por Recomeçar limpo):
-// abre o agente do card key e responde em w.
+// continuePlan é tudo o que o Continuar decide antes de abrir o agente.
+type continuePlan struct {
+	in           continueInput
+	c            domain.Card
+	p            *domain.Project
+	background   bool
+	argv         []string
+	dir          string
+	inWorktree   bool
+	skipCheckout bool
+	path         string
+	usedSlug     string
+}
+
+// continueKey é o núcleo do Continuar: valida, abre o agente do card key e
+// responde em w.
 func (s *server) continueKey(w http.ResponseWriter, key string, in continueInput) {
+	pl, ok := s.prepareContinue(w, key, in, true)
+	if !ok {
+		return
+	}
+	s.runContinue(w, pl, "")
+}
+
+// prepareContinue faz as validações do Continuar que não têm efeito colateral
+// (agente, modo, terminal, projeto, sessão viva se checkLive, prompt, argv e
+// árvore suja). Em erro já respondeu e devolve false.
+func (s *server) prepareContinue(w http.ResponseWriter, key string, in continueInput, checkLive bool) (continuePlan, bool) {
+	var none continuePlan
 	if in.Agent == "" {
 		in.Agent = "claude"
 	}
 	ad, ok := s.deps.Adapters[in.Agent]
 	if in.Agent != "claude" || !ok {
 		writeError(w, http.StatusBadRequest, msgAgentUnavailable)
-		return
+		return none, false
 	}
 	set, err := s.st.GetSettings()
 	if err != nil {
 		writeStoreError(w, err, "")
-		return
+		return none, false
 	}
 	mode := in.Mode
 	if mode == "" || mode == "platform" {
@@ -134,21 +160,21 @@ func (s *server) continueKey(w http.ResponseWriter, key string, in continueInput
 	background := mode == "background"
 	if mode != "terminal" && !background {
 		writeError(w, http.StatusBadRequest, msgModeUnavailable)
-		return
+		return none, false
 	}
 	if background {
 		if s.deps.Terminals == nil {
 			writeError(w, http.StatusServiceUnavailable, msgNoTerminals)
-			return
+			return none, false
 		}
 	} else {
 		if msg := validateLaunch(set.LaunchMode, set.TerminalCmd); msg != "" {
 			writeError(w, http.StatusInternalServerError, "configuração do terminal inválida: "+msg)
-			return
+			return none, false
 		}
 		if s.deps.Launcher == nil {
 			writeError(w, http.StatusServiceUnavailable, "lançador indisponível")
-			return
+			return none, false
 		}
 	}
 	// PATH do usuário consultado agora: o adaptador procura o CLI nele (com
@@ -158,39 +184,39 @@ func (s *server) continueKey(w http.ResponseWriter, key string, in continueInput
 	bin := ad.Binary()
 	if bin == "" {
 		writeError(w, http.StatusConflict, msgNoAgentBin)
-		return
+		return none, false
 	}
 	c, err := s.st.GetCard(key)
 	if err != nil {
 		writeStoreError(w, err, msgCardNotFound)
-		return
+		return none, false
 	}
 	p, err := s.projectByID(c.ProjectID)
 	if err != nil {
 		writeStoreError(w, err, "")
-		return
+		return none, false
 	}
 	if p == nil || p.Path == "" {
 		writeError(w, http.StatusConflict, "o card não tem um projeto com diretório definido")
-		return
+		return none, false
 	}
-	if !in.Force {
+	if checkLive && !in.Force {
 		live, err := s.st.HasLiveSession(c.ID)
 		if err != nil {
 			writeStoreError(w, err, "")
-			return
+			return none, false
 		}
 		if live {
 			writeJSON(w, http.StatusConflict, map[string]string{
 				"error": c.Key + " está com uma sessão viva de " + s.liveAgent(c) + ". Encerre-a ou use forçar.",
 				"code":  "live_session",
 			})
-			return
+			return none, false
 		}
 	}
 	initial, usedSlug, ok := s.continuePrompt(w, c, in.PromptSlug)
 	if !ok {
-		return
+		return none, false
 	}
 	// Branch do card aberto num worktree ligado: o agente abre lá, sem
 	// checkout no principal (o git recusaria o branch já aberto).
@@ -212,12 +238,28 @@ func (s *server) continueKey(w http.ResponseWriter, key string, in continueInput
 	for _, a := range argv {
 		if len(a) >= maxArgBytes { // MAX_ARG_STRLEN do Linux é 131072
 			writeError(w, http.StatusUnprocessableEntity, msgPromptTooBig)
-			return
+			return none, false
 		}
 	}
-	if !inWorktree && !skipCheckout {
+	// Árvore suja: a recusa do checkout vale já na validação.
+	if g := s.deps.Git; !inWorktree && !skipCheckout && g != nil && c.Branch != "" &&
+		g.Branch(p.Path) != c.Branch && !g.Clean(p.Path) {
+		writeError(w, http.StatusConflict, msgDirtyTree)
+		return none, false
+	}
+	return continuePlan{in: in, c: c, p: p, background: background, argv: argv, dir: dir,
+		inWorktree: inWorktree, skipCheckout: skipCheckout, path: path, usedSlug: usedSlug}, true
+}
+
+// runContinue abre o agente do plano (checkout do branch, terminal) e
+// responde em w; erros levam o sufixo errSuffix.
+func (s *server) runContinue(w http.ResponseWriter, pl continuePlan, errSuffix string) {
+	c, p, in, argv, dir, path := pl.c, pl.p, pl.in, pl.argv, pl.dir, pl.path
+	background, usedSlug := pl.background, pl.usedSlug
+	fail := func(code int, msg string) { writeError(w, code, msg+errSuffix) }
+	if !pl.inWorktree && !pl.skipCheckout {
 		if err := s.checkoutCardBranch(c, p.Path); err != nil {
-			writeError(w, http.StatusConflict, err.Error())
+			fail(http.StatusConflict, err.Error())
 			return
 		}
 	}
@@ -229,15 +271,15 @@ func (s *server) continueKey(w http.ResponseWriter, key string, in continueInput
 		})
 		switch {
 		case errors.Is(err, pty.ErrTooMany):
-			writeError(w, http.StatusConflict, err.Error())
+			fail(http.StatusConflict, err.Error())
 			return
 		case err != nil:
-			writeError(w, http.StatusInternalServerError, "não consegui iniciar o terminal: "+err.Error())
+			fail(http.StatusInternalServerError, "não consegui iniciar o terminal: "+err.Error())
 			return
 		}
 		terminalID = tm.Info().ID
 	} else if err := s.deps.Launcher.Start(argv); err != nil {
-		writeError(w, http.StatusInternalServerError, "não consegui abrir o terminal: "+err.Error())
+		fail(http.StatusInternalServerError, "não consegui abrir o terminal: "+err.Error())
 		return
 	}
 	if usedSlug != "" {
