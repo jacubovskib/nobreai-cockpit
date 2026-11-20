@@ -54,6 +54,7 @@ type ContextLive struct {
 	IdleSec           int64               `json:"idle_sec"`
 	IdleOverTTL       bool                `json:"idle_over_ttl"` // parada além do cache, com contexto > 200.000
 	TopOutputs        []ContextLiveOutput `json:"top_outputs"`
+	Segment           int                 `json:"-"` // segmento de compactação do último turno (só com Tokens > 0)
 }
 
 // liveRow é um turno lido para o cálculo do medidor.
@@ -138,6 +139,7 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 	if n := len(turns); n > 0 {
 		last := turns[n-1]
 		out.Tokens = last.tokens
+		out.Segment = last.segment
 		// TTL do cache: o gravado mais recentemente (um turno só de leitura não o muda).
 		for i := n - 1; i >= 0; i-- {
 			if turns[i].ttl != "" {

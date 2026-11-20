@@ -104,10 +104,14 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 			log.Printf("hook claude: prompt da janela %s: %v", sess.ID, err)
 		}
 		var child string
-		if _, pending := a.childUnwarned.LoadAndDelete(sess.ID); pending {
-			child = childPhrase // a filha nasceu fora do SessionStart
+		if sess.ParentSessionID != "" {
+			if pending, err := a.st.ClaimChildNotice(sess.ID); err != nil {
+				log.Printf("hook claude: aviso da filha %s: %v", sess.ID, err)
+			} else if pending {
+				child = childPhrase // a filha nasceu fora do SessionStart
+			}
 		}
-		notice, noticed := contextReply(event, child, a.noticeText(sess, p, now))
+		notice, noticed := contextReply(event, child, a.noticeText(sess, p, now), a.contextWarning(sess, p))
 		if sess.FullCapture {
 			a.event(sess.ID, domain.EvPrompt, map[string]any{"text": p.Prompt}, now)
 		} else {
@@ -119,7 +123,7 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 	case "PreToolUse":
 		return a.preToolUse(sess, p, now)
 	case "PostToolUse":
-		notice, _ := a.noticeReply(sess, p, event, now)
+		notice, _ := contextReply(event, a.noticeText(sess, p, now), a.bigOutputWarning(sess, p))
 		if sess.FullCapture {
 			return notice, a.postToolUse(sess, p, now)
 		}
@@ -258,7 +262,9 @@ func (a *Adapter) createChild(main domain.Session, p payload, pid int, event str
 	if event != "SessionStart" {
 		// Sem SessionStart (o daemon foi instalado ou voltou com a conversa
 		// aberta): a linha da filha vai no próximo prompt.
-		a.childUnwarned.Store(id, true)
+		if err := a.st.MarkChildNoticePending(id); err != nil {
+			log.Printf("hook claude: aviso da filha %s: %v", id, err)
+		}
 	}
 	a.publish("sessions")
 	sess, err := a.st.GetSession(id)
