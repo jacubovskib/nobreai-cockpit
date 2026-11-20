@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
 // childID é o id da sessão filha do processo pid na conversa de sessID.
@@ -25,6 +26,11 @@ func sharedEnv(t *testing.T) (*env, domain.Card) {
 		t.Fatal(err)
 	}
 	e.call(t, "session_start", withPID(100), withEnv("NOBRE_RESUME", c.Key))
+	// A principal roda num worktree ligado (o fakeGit não lê worktrees).
+	if err := e.st.UpdateSessionLocation(sessID, store.SessionLocation{Cwd: "/w/api", Branch: "main", GitHead: "abc123",
+		Worktree: "/w/api", WorktreeLinked: true}); err != nil {
+		t.Fatal(err)
+	}
 	e.now = t0.Add(time.Minute)
 	e.call(t, "user_prompt_submit", withPID(200))
 	return e, c
@@ -57,6 +63,7 @@ func TestSession_SecondLiveProcessGetsChild(t *testing.T) {
 	}
 	if child.ProjectID == nil || *child.ProjectID != *main.ProjectID || !child.FullCapture ||
 		child.Cwd != main.Cwd || child.Branch != main.Branch || child.GitHead != main.GitHead ||
+		child.Worktree != "/w/api" || !child.WorktreeLinked ||
 		child.TranscriptPath != main.TranscriptPath || child.ProviderSessionID != main.ProviderSessionID {
 		t.Fatalf("filha não herdou da principal: filha %+v principal %+v", child, main)
 	}
@@ -89,6 +96,51 @@ func TestSession_AlternatingHooksRouteToOwnSession(t *testing.T) {
 	}
 	if n := e.sessionCount(t); n != 2 {
 		t.Fatalf("sessões = %d", n)
+	}
+}
+
+// O dono da principal (PID 100) segue vivo, mas passou para outra conversa
+// sem SessionEnd: a principal não é mais dele e o --resume de outro processo
+// a assume, sem filha.
+func TestSession_OwnerMovedOnReopensMain(t *testing.T) {
+	e := newEnv(t)
+	e.alive[100], e.alive[300] = true, true
+	e.project(t)
+	e.call(t, "session_start", withPID(100))
+	e.now = t0.Add(time.Minute)
+	e.call(t, "session_start", withPID(100), with("session_id", "outra-conversa"))
+	e.now = t0.Add(2 * time.Minute)
+	e.call(t, "session_start_resume", withPID(300))
+	m, _ := e.st.GetSession(sessID)
+	if m.PID != 300 || !m.Live() {
+		t.Fatalf("principal = %+v", m)
+	}
+	if _, err := e.st.GetSession(childID(300)); err == nil {
+		t.Fatal("filha criada para dono que mudou de conversa")
+	}
+	if o, _ := e.st.GetSession("claude:outra-conversa"); o.PID != 100 || !o.Live() {
+		t.Fatalf("outra conversa = %+v", o)
+	}
+}
+
+// SessionEnd de um PID nunca visto, com o dono da principal vivo: nada é
+// gravado (nem filha, nem fim da principal).
+func TestSession_SessionEndFromUnseenPIDIgnored(t *testing.T) {
+	e := newEnv(t)
+	e.alive[100], e.alive[200] = true, true
+	e.project(t)
+	e.call(t, "session_start", withPID(100))
+	if r := e.call(t, "session_end", withPID(200)); r.Stdout != "" {
+		t.Fatalf("resposta = %q", r.Stdout)
+	}
+	if n := e.sessionCount(t); n != 1 {
+		t.Fatalf("sessões = %d", n)
+	}
+	if m, _ := e.st.GetSession(sessID); !m.Live() || m.PID != 100 {
+		t.Fatalf("principal = %+v", m)
+	}
+	if evs := e.events(t, domain.EvSessionEnd); len(evs) != 0 {
+		t.Fatalf("eventos de fim = %+v", evs)
 	}
 }
 
@@ -196,6 +248,19 @@ func TestIngest_ChildUsesMainSession(t *testing.T) {
 	e, _ := sharedEnv(t)
 	e.call(t, "stop", withPID(200))
 	e.a.Wait()
+	// Antes de qualquer backfill: só a leitura disparada pela filha rodou, e
+	// gravou com o id da principal.
+	usageOf := func(id string) int {
+		t.Helper()
+		var n int
+		if err := e.st.DB.QueryRow(`SELECT COUNT(*) FROM usage WHERE session_id=?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if m, ch := usageOf(sessID), usageOf(childID(200)); m == 0 || ch != 0 {
+		t.Fatalf("uso depois do Stop da filha: principal %d, filha %d", m, ch)
+	}
 	e.call(t, "session_end", withPID(200))
 	e.a.Wait()
 	e.a.BackfillContext(context.Background())

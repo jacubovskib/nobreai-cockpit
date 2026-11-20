@@ -46,6 +46,10 @@ type payload struct {
 	AgentID string `json:"agent_id"`
 }
 
+// errIgnore marca o hook que não pertence a nenhuma sessão: é respondido
+// vazio, sem gravar nada.
+var errIgnore = errors.New("hook ignorado")
+
 // mainOnlyEvents são os eventos que só o agente principal dispara (o
 // subagente termina com SubagentStop): só eles podem mudar o local da sessão.
 var mainOnlyEvents = map[string]bool{"SessionStart": true, "UserPromptSubmit": true, "Stop": true}
@@ -83,6 +87,9 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 	}
 	now := a.deps.Now()
 	sess, err := a.session(p, h.AgentPID, event, now)
+	if errors.Is(err, errIgnore) {
+		return adapter.HookReply{}, nil
+	}
 	if err != nil {
 		return adapter.HookReply{}, err
 	}
@@ -139,11 +146,16 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 	if err != nil {
 		return main, err
 	}
-	sess, child, err := a.route(main, pid, event)
+	sess, child, err := a.route(main, p.SessionID, pid, event)
 	if err != nil {
 		return sess, err
 	}
 	if child {
+		if event == "SessionEnd" {
+			// Fim de um processo que nunca mandou outro hook: não há sessão
+			// dele para encerrar, e a principal é de outro processo vivo.
+			return sess, errIgnore
+		}
 		return a.createChild(main, p, pid, event, now)
 	}
 	id = sess.ID
@@ -169,35 +181,51 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 
 // route escolhe a sessão do processo pid na conversa da principal main:
 //   - a sessão viva da conversa com esse PID (a principal ou uma filha);
-//   - senão, se outro processo ainda vivo é dono da principal viva, a filha
-//     deste processo (child = true quando ela ainda não existe; uma filha
-//     encerrada é devolvida para ser reaberta);
-//   - senão (PID desconhecido, principal encerrada ou dono morto), a
-//     principal: é o --resume normal, que a reabre com o PID novo.
+//   - senão, se outro processo ainda vivo é dono da principal viva e ela
+//     segue sendo a sessão atual desse processo, a filha deste processo
+//     (child = true quando ela ainda não existe; uma filha encerrada é
+//     devolvida para ser reaberta);
+//   - senão (PID desconhecido, principal encerrada, dono morto ou que já
+//     passou para outra conversa), a principal: é o --resume normal, que a
+//     reabre com o PID novo.
 //
 // Assim o PID da principal nunca muda enquanto o dono dela está vivo. Hooks de
 // subagente seguem a mesma regra: o subagente roda dentro do processo que o
 // chamou e o hook traz o PID dele (com o PID do dono, fica na principal).
 // SessionEnd nunca reabre: vai para a sessão desse PID mesmo encerrada.
-func (a *Adapter) route(main domain.Session, pid int, event string) (sess domain.Session, child bool, err error) {
+func (a *Adapter) route(main domain.Session, sid string, pid int, event string) (sess domain.Session, child bool, err error) {
 	if pid <= 0 {
 		return main, false, nil
 	}
-	own, err := a.st.SessionByProviderPID(main.ProviderSessionID, pid)
+	own, err := a.st.SessionByProviderPID(a.Name(), sid, pid)
 	if err != nil {
 		return main, false, err
 	}
 	if own != nil && (own.Live() || event == "SessionEnd") {
 		return *own, false, nil
 	}
-	shared := main.Live() && main.PID > 0 && main.PID != pid && a.alive(main.PID)
-	if !shared {
-		return main, false, nil
+	shared, err := a.ownedElsewhere(main, pid)
+	if err != nil || !shared {
+		return main, false, err
 	}
 	if own != nil && own.ParentSessionID == main.ID {
 		return *own, false, nil
 	}
 	return main, true, nil
+}
+
+// ownedElsewhere diz se a principal viva pertence a outro processo que ainda
+// existe e cuja sessão atual é ela (um dono que passou para outra conversa
+// sem SessionEnd não segura mais a principal).
+func (a *Adapter) ownedElsewhere(main domain.Session, pid int) (bool, error) {
+	if !main.Live() || main.PID <= 0 || main.PID == pid || !a.alive(main.PID) {
+		return false, nil
+	}
+	cur, err := a.st.SessionByPID(main.PID)
+	if err != nil {
+		return false, err
+	}
+	return cur != nil && cur.ID == main.ID, nil
 }
 
 // createChild cria a sessão filha do processo pid: herda da principal o

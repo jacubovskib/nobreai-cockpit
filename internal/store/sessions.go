@@ -151,13 +151,14 @@ func (s *Store) SessionByPID(pid int) (*domain.Session, error) {
 	return &x, nil
 }
 
-// SessionByProviderPID devolve a sessão (viva ou não) da conversa providerID
-// com esse PID: a viva primeiro, depois a mais recente; nil se não houver. É
-// como o hook acha a sessão de cada processo quando dois dividem a conversa.
-func (s *Store) SessionByProviderPID(providerID string, pid int) (*domain.Session, error) {
+// SessionByProviderPID devolve a sessão (viva ou não) do agente na conversa
+// providerID com esse PID: a viva primeiro, depois a mais recente; nil se não
+// houver. É como o hook acha a sessão de cada processo quando dois dividem a
+// conversa.
+func (s *Store) SessionByProviderPID(agent, providerID string, pid int) (*domain.Session, error) {
 	x, err := scanSession(s.DB.QueryRow(`SELECT `+sessionCols+` FROM sessions
-		WHERE provider_session_id=? AND pid=?
-		ORDER BY (`+liveCond+`) DESC, julianday(started_at) DESC, id DESC LIMIT 1`, providerID, pid))
+		WHERE provider_session_id=? AND pid=? AND agent=?
+		ORDER BY (`+liveCond+`) DESC, julianday(started_at) DESC, id DESC LIMIT 1`, providerID, pid, agent))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

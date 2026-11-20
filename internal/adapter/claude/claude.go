@@ -4,6 +4,7 @@
 package claude
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -33,7 +34,8 @@ type Adapter struct {
 	// restart só deixa o card onde estava.
 	outsideSwitch sync.Map
 	// alive diz se o processo do agente com esse PID ainda existe (decide
-	// entre sessão filha e retomada); padrão: /proc.
+	// entre sessão filha e retomada); padrão: /proc, com o nome do processo
+	// do Claude (um PID reaproveitado por outro programa não conta).
 	alive func(pid int) bool
 }
 
@@ -45,7 +47,9 @@ func New(st *store.Store, deps adapter.Deps) *Adapter {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &Adapter{st: st, deps: deps, alive: func(pid int) bool { return proc.Alive("/proc", pid) }}
+	a := &Adapter{st: st, deps: deps}
+	a.alive = func(pid int) bool { return slices.Contains(a.ProcessNames(), proc.Comm("/proc", pid)) }
+	return a
 }
 
 // SetAlive troca a verificação de processo vivo (testes, sem /proc real).

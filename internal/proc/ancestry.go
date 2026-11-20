@@ -54,6 +54,18 @@ func parentPID(root string, pid int) (int, error) {
 	return strconv.Atoi(f[1]) // f[0] é o estado; f[1] é o ppid
 }
 
+// Comm devolve o nome do processo (<root>/<pid>/comm), "" se não der para ler.
+func Comm(root string, pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(root, strconv.Itoa(pid), "comm"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(string(b), "\n")
+}
+
 // Alive informa se existe <root>/<pid>.
 func Alive(root string, pid int) bool {
 	if pid <= 0 {

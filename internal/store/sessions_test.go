@@ -93,21 +93,24 @@ func TestSessionByProviderPID(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := s.SessionByProviderPID("S", 200)
+	got, err := s.SessionByProviderPID("claude", "S", 200)
 	if err != nil || got == nil || got.ID != "claude:S@200" || got.ParentSessionID != "claude:S" {
 		t.Fatalf("got %+v, %v", got, err)
 	}
-	if got, _ := s.SessionByProviderPID("S", 100); got == nil || got.ID != "claude:S" || got.ParentSessionID != "" {
+	if got, _ := s.SessionByProviderPID("claude", "S", 100); got == nil || got.ID != "claude:S" || got.ParentSessionID != "" {
 		t.Fatalf("got %+v", got)
 	}
 	// Encerrada continua achada (viva ou não).
 	if err := s.EndSession("claude:S@200", "exit", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.SessionByProviderPID("S", 200); got == nil || got.ID != "claude:S@200" {
+	if got, _ := s.SessionByProviderPID("claude", "S", 200); got == nil || got.ID != "claude:S@200" {
 		t.Fatalf("got %+v", got)
 	}
-	if got, err := s.SessionByProviderPID("S", 300); err != nil || got != nil {
+	if got, err := s.SessionByProviderPID("codex", "S", 200); err != nil || got != nil {
+		t.Fatalf("outro agente: got %+v, %v", got, err)
+	}
+	if got, err := s.SessionByProviderPID("claude", "S", 300); err != nil || got != nil {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
