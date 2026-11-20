@@ -4,6 +4,7 @@
 package memory
 
 import (
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -137,9 +138,9 @@ func (it Item) line() string {
 // tokens estima ceil(bytes/4) da linha formatada.
 func (it Item) tokens() int { return (len(it.line()) + 3) / 4 }
 
-// Select escolhe, na ordem (Scope, Position, ID), as memórias que cabem no teto;
-// a que não cabe é pulada. Devolve as escolhidas e quantas ficaram de fora.
-func Select(items []Item, budgetTokens int) (chosen []Item, left int) {
+// ordered põe os itens na ordem de injeção (Scope, Position, ID) e tira as
+// regras repetidas em mais de um escopo: fica só a do escopo mais específico.
+func ordered(items []Item) []Item {
 	sorted := append([]Item(nil), items...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		a, b := sorted[i], sorted[j]
@@ -151,16 +152,65 @@ func Select(items []Item, budgetTokens int) (chosen []Item, left int) {
 		}
 		return a.ID < b.ID
 	})
+	seen := map[string]bool{}
+	out := sorted[:0]
+	for _, it := range sorted {
+		n := Normalize(it.Rule)
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, it)
+	}
+	return out
+}
+
+// pick escolhe na ordem dada o que cabe no teto de tokens e no de runas (cada
+// linha conta com a quebra; usedRunes já traz o que está fora das linhas).
+func pick(sorted []Item, budgetTokens, maxRunes, usedRunes int) (chosen []Item, left int) {
 	used := 0
 	for _, it := range sorted {
-		if t := it.tokens(); used+t <= budgetTokens {
+		t, r := it.tokens(), utf8.RuneCountInString(it.line())+1
+		if used+t <= budgetTokens && usedRunes+r <= maxRunes {
 			used += t
+			usedRunes += r
 			chosen = append(chosen, it)
 		} else {
 			left++
 		}
 	}
 	return chosen, left
+}
+
+// Select escolhe, na ordem (Scope, Position, ID), as memórias que cabem no teto;
+// a que não cabe é pulada. A mesma regra em mais de um escopo entra uma vez só,
+// pela mais específica (a repetida não conta como fora do limite). Devolve as
+// escolhidas e quantas ficaram de fora.
+func Select(items []Item, budgetTokens int) (chosen []Item, left int) {
+	return pick(ordered(items), budgetTokens, math.MaxInt, 0)
+}
+
+// BlockWithin monta o bloco como Select e FormatBlock, mas com no máximo
+// maxRunes caracteres no total (cabeçalho, linhas, quebras e a linha "+N").
+// Sem espaço para nenhuma memória, sai só o cabeçalho com a linha "+N", se
+// couber; senão, "".
+func BlockWithin(items []Item, budgetTokens, maxRunes int) string {
+	sorted := ordered(items)
+	if len(sorted) == 0 {
+		return ""
+	}
+	head := utf8.RuneCountInString(blockHeader)
+	chosen, left := pick(sorted, budgetTokens, maxRunes, head)
+	if left > 0 {
+		// Reserva a linha "+N" no pior caso (N = todas) e escolhe de novo.
+		reserve := utf8.RuneCountInString(leftLine(len(sorted)))
+		chosen, left = pick(sorted, budgetTokens, maxRunes, head+reserve)
+	}
+	blk := FormatBlock(chosen, left)
+	if utf8.RuneCountInString(blk) > maxRunes {
+		return ""
+	}
+	return blk
 }
 
 const blockHeader = "Memórias deste projeto (do Cockpit; use nobre lembrar para gravar e nobre memorias <termo> para buscar; não leia nem edite .claude/napkin.md):\n"
@@ -177,9 +227,14 @@ func FormatBlock(chosen []Item, left int) string {
 		b.WriteByte('\n')
 	}
 	if left > 0 {
-		b.WriteString("+" + strconv.Itoa(left) + " memórias fora do limite: nobre memorias <termo>\n")
+		b.WriteString(leftLine(left))
 	}
 	return b.String()
+}
+
+// leftLine é a linha das memórias que ficaram fora do limite.
+func leftLine(left int) string {
+	return "+" + strconv.Itoa(left) + " memórias fora do limite: nobre memorias <termo>\n"
 }
 
 // UsedTokens soma os tokens estimados das linhas escolhidas.

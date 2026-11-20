@@ -1,10 +1,13 @@
 package claude
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/memory"
 )
 
 func addMem(t *testing.T, e *env, project *int64, rule string) {
@@ -77,7 +80,7 @@ func TestSessionStart_NoMemoriesWithoutCapture(t *testing.T) {
 	p := e.project(t)
 	addMem(t, e, &p.ID, "regra escondida")
 	if _, err := e.st.DB.Exec(`UPDATE projects SET capture=0 WHERE id=?`, p.ID); err != nil {
-		t.Skip("coluna de captura: ", err)
+		t.Fatal(err)
 	}
 	r := e.call(t, "session_start")
 	if strings.Contains(r.Stdout, "regra escondida") {
@@ -105,5 +108,103 @@ func TestSkillTemSecaoMemorias(t *testing.T) {
 		if !strings.Contains(skillContent, want) {
 			t.Fatalf("skill.md sem %q", want)
 		}
+	}
+}
+
+func setBudget(t *testing.T, e *env, n int) {
+	t.Helper()
+	set, _ := e.st.GetSettings()
+	set.MemoryBudgetTokens = n
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func addMany(t *testing.T, e *env, project *int64, n int) {
+	t.Helper()
+	for i := range n {
+		addMem(t, e, project, fmt.Sprintf("regra número %03d com acentuação e um texto comprido o bastante para pesar", i))
+	}
+}
+
+// O Claude Code corta o additionalContext em 10.000 caracteres: com o limite
+// máximo, muitas memórias e um pacote de retomada grande, o total cabe e o
+// pacote vai inteiro.
+func TestSessionStart_MemoriesFitContextCap(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	setBudget(t, e, 2000)
+	addMany(t, e, &p.ID, 120)
+	where := strings.TrimSpace(strings.Repeat("Parei no passo de migração do esquema, faltam os testes de ponta a ponta. ", 68))
+	if _, err := e.st.CreateCard(domain.Card{Title: "Grande", ProjectID: p.ID, Branch: "main",
+		Column: domain.Pausado, WhereStopped: where}); err != nil {
+		t.Fatal(err)
+	}
+	if utf8.RuneCountInString(where) < 4900 {
+		t.Fatalf("pacote curto demais: %d", utf8.RuneCountInString(where))
+	}
+	ctx := additionalContext(t, e.call(t, "session_start", withEnv("NOBRE_RESUME", "NAC-1")))
+	if n := utf8.RuneCountInString(ctx); n > 10000 {
+		t.Fatalf("contexto com %d caracteres", n)
+	}
+	if !strings.Contains(ctx, where) || !strings.Contains(ctx, "## Onde parei") {
+		t.Fatalf("pacote de retomada incompleto:\n%s", ctx)
+	}
+	if !strings.Contains(ctx, "regra número 000") || !strings.Contains(ctx, "memórias fora do limite") {
+		t.Fatalf("bloco de memórias:\n%s", ctx)
+	}
+	if strings.Index(ctx, "Memórias deste projeto") > strings.Index(ctx, "## Onde parei") {
+		t.Fatal("bloco depois do pacote")
+	}
+}
+
+// Com pouco resto, quem limita é o teto de tokens da configuração.
+func TestSessionStart_SmallRestUsesBudget(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	setBudget(t, e, 300)
+	addMany(t, e, &p.ID, 40)
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	items := make([]memory.Item, 0, 40)
+	_, ms, _, _ := e.st.MemoriesForSession(domain.Session{ProjectID: &p.ID}) // p é raiz
+	for _, m := range ms {
+		items = append(items, memory.Item{ID: m.ID, Position: m.Position, Category: memory.Category(m.Category), Rule: m.Rule, Do: m.Do})
+	}
+	chosen, left := memory.Select(items, 300)
+	want := strings.TrimRight(memory.FormatBlock(chosen, left), "\n")
+	if left == 0 || !strings.Contains(ctx, want) {
+		t.Fatalf("bloco diferente do teto de tokens (left=%d):\n%s", left, ctx)
+	}
+}
+
+// Sem espaço para nenhuma linha, vai só o cabeçalho com o "+N" (se couber);
+// o pacote de retomada sempre vai inteiro.
+func TestSessionStart_NoRoomOnlyHeader(t *testing.T) {
+	onlyHeader := false
+	for size := 7900; size <= 8400; size += 20 {
+		e := newEnv(t)
+		p := e.project(t)
+		addMany(t, e, &p.ID, 3)
+		where := strings.Repeat("x", size)
+		if _, err := e.st.CreateCard(domain.Card{Title: "Enorme", ProjectID: p.ID, Branch: "main",
+			Column: domain.Pausado, WhereStopped: where}); err != nil {
+			t.Fatal(err)
+		}
+		ctx := additionalContext(t, e.call(t, "session_start", withEnv("NOBRE_RESUME", "NAC-1")))
+		if !strings.Contains(ctx, where) {
+			t.Fatalf("size %d: pacote cortado", size)
+		}
+		if strings.Contains(ctx, "Memórias deste projeto") && utf8.RuneCountInString(ctx) > 9500 {
+			t.Fatalf("size %d: memórias passaram do teto (%d)", size, utf8.RuneCountInString(ctx))
+		}
+		if strings.Contains(ctx, "Memórias deste projeto") && !strings.Contains(ctx, "regra número") {
+			if !strings.Contains(ctx, "+3 memórias fora do limite") {
+				t.Fatalf("size %d: cabeçalho sem +N:\n%s", size, ctx)
+			}
+			onlyHeader = true
+		}
+	}
+	if !onlyHeader {
+		t.Fatal("nenhum tamanho deixou só o cabeçalho")
 	}
 }

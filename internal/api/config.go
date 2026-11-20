@@ -98,8 +98,8 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 	case st.PlanWarnPct < 1 || st.PlanWarnPct > 100:
 		writeError(w, http.StatusBadRequest, "plan_warn_pct deve ficar entre 1 e 100")
 		return
-	case st.MemoryBudgetTokens < 0 || st.MemoryBudgetTokens > 6000:
-		writeError(w, http.StatusBadRequest, "limite das memórias deve ficar entre 0 e 6000")
+	case st.MemoryBudgetTokens < 0 || st.MemoryBudgetTokens > 2000:
+		writeError(w, http.StatusBadRequest, "limite das memórias deve ficar entre 0 e 2000")
 		return
 	case st.WhereStoppedTTLMin < 0 || st.GraceMin < 0 || st.ReminderEditThreshold < 0 || st.BRLRate < 0:
 		writeError(w, http.StatusBadRequest, "valores numéricos não podem ser negativos")

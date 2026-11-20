@@ -1,8 +1,10 @@
 package memory
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestNormalize(t *testing.T) {
@@ -92,5 +94,58 @@ func TestFormatBlock(t *testing.T) {
 	}
 	if got := FormatBlock(nil, 2); !strings.Contains(got, "+2 memórias") {
 		t.Errorf("só +N: %q", got)
+	}
+}
+
+func TestSelect_SameRuleOnlyMostSpecific(t *testing.T) {
+	items := []Item{
+		{ID: 1, Scope: 2, Category: "shell", Rule: "Usar rg", Do: "global"},
+		{ID: 2, Scope: 0, Category: "shell", Rule: "usar RG!", Do: "app"},
+		{ID: 3, Scope: 1, Category: "shell", Rule: "usar rg", Do: "raiz"},
+	}
+	got, left := Select(items, 1000)
+	if len(got) != 1 || got[0].ID != 2 || left != 0 {
+		t.Fatalf("got %+v left %d", got, left)
+	}
+}
+
+func manyItems(n int) []Item {
+	var items []Item
+	for i := range n {
+		items = append(items, Item{ID: int64(i + 1), Position: i, Category: "shell",
+			Rule: fmt.Sprintf("regra número %d com acentuação é longa o bastante", i), Do: "faça assim, com cuidado"})
+	}
+	return items
+}
+
+func TestBlockWithin_RespectsRunes(t *testing.T) {
+	items := manyItems(100)
+	for _, room := range []int{0, 50, 200, 300, 1000, 4000} {
+		blk := BlockWithin(items, 100000, room)
+		if n := utf8.RuneCountInString(blk); n > room {
+			t.Fatalf("room %d: %d runas", room, n)
+		}
+		if room >= 1000 && !strings.Contains(blk, "memórias fora do limite") {
+			t.Fatalf("room %d sem +N:\n%s", room, blk)
+		}
+	}
+	if BlockWithin(items, 100000, 50) != "" {
+		t.Fatal("sem espaço nem para o cabeçalho deveria ficar vazio")
+	}
+	// Só o cabeçalho e o +N cabem.
+	onlyHead := utf8.RuneCountInString(FormatBlock(nil, 100)) + 5
+	if blk := BlockWithin(items, 100000, onlyHead); !strings.HasSuffix(blk, "+100 memórias fora do limite: nobre memorias <termo>\n") || strings.Contains(blk, "- [") {
+		t.Fatalf("só cabeçalho:\n%q", blk)
+	}
+}
+
+func TestBlockWithin_BudgetWhenRoomIsLarge(t *testing.T) {
+	items := manyItems(100)
+	chosen, left := Select(items, 300)
+	if got := BlockWithin(items, 300, 100000); got != FormatBlock(chosen, left) {
+		t.Fatalf("com espaço sobrando o teto de tokens decide:\n%s", got)
+	}
+	if BlockWithin(nil, 300, 100000) != "" {
+		t.Fatal("sem itens deveria ficar vazio")
 	}
 }
