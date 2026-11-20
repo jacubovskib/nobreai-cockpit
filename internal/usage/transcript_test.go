@@ -120,3 +120,32 @@ func TestParseSkipsZeroTokenMessages(t *testing.T) {
 		t.Fatalf("%+v %v", rows, err)
 	}
 }
+
+// Until para no limite dado (a leitura de contexto chegou até ali) e não lê
+// nada com o limite no offset ou antes dele.
+func TestParseUntilStopsAtLimit(t *testing.T) {
+	p := copyFixture(t)
+	all, size, err := ParseClaudeTranscript(p, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	first := int64(0)
+	for i, c := range b {
+		if c == '\n' {
+			first = int64(i + 1)
+			break
+		}
+	}
+	rows, off, err := ParseClaudeTranscriptUntil(p, 0, first)
+	if err != nil || off > first || len(rows) > len(all) {
+		t.Fatalf("rows=%d off=%d first=%d err=%v", len(rows), off, first, err)
+	}
+	if rows, off, err := ParseClaudeTranscriptUntil(p, off, off); err != nil || len(rows) != 0 || off > first {
+		t.Fatalf("limite no offset: rows=%d off=%d err=%v", len(rows), off, err)
+	}
+	rest, off2, err := ParseClaudeTranscriptUntil(p, off, -1)
+	if err != nil || off2 != size || len(rest) == 0 {
+		t.Fatalf("resto: rows=%d off=%d size=%d err=%v", len(rest), off2, size, err)
+	}
+}

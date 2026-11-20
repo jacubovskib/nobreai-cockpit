@@ -97,6 +97,12 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 	case "SessionStart":
 		return a.sessionStart(sess, p, h.Env, now)
 	case "UserPromptSubmit":
+		// Registro para a atribuição por janela (só o resumo do texto, em
+		// toda sessão: o uso de cada janela depende dele). Falha só vai para
+		// o log.
+		if err := a.st.AddWindowPrompt(sess.ID, promptKey(p.Prompt), now); err != nil {
+			log.Printf("hook claude: prompt da janela %s: %v", sess.ID, err)
+		}
 		var child string
 		if _, pending := a.childUnwarned.LoadAndDelete(sess.ID); pending {
 			child = childPhrase // a filha nasceu fora do SessionStart

@@ -362,11 +362,14 @@ func attachSessionTx(tx *sql.Tx, sessionID, cardKey string, force bool) error {
 		}
 	}
 	// Só os eventos e o uso ainda sem card vêm junto: o que a sessão fez num
-	// card anterior continua no histórico (e no custo) dele.
+	// card anterior continua no histórico (e no custo) dele. O uso é o da
+	// janela: a filha grava o uso com o id da principal (window_session_id =
+	// filha), e o da principal é o seu sem janela filha.
 	if _, err := tx.Exec(`UPDATE events SET card_id=? WHERE session_id=? AND card_id IS NULL`, cardID, sessionID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE usage SET card_id=? WHERE session_id=? AND card_id IS NULL`, cardID, sessionID); err != nil {
+	if _, err := tx.Exec(`UPDATE usage SET card_id=? WHERE card_id IS NULL
+		AND ((session_id=? AND window_session_id='') OR window_session_id=?)`, cardID, sessionID, sessionID); err != nil {
 		return err
 	}
 	if err := moveCardTx(tx, cardID, domain.SessionAttached); err != nil {

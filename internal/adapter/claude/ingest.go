@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 	"github.com/nobretech/nobreai-cockpit/internal/usage"
 )
 
@@ -56,14 +57,27 @@ func (a *Adapter) readLocked(sessionID, path string) (changed bool, err error) {
 // se o transcript_path da sessão muda, o arquivo novo é lido do começo. As
 // linhas carregam o sessionId do Claude Code: passam a usar o ID da sessão do
 // Cockpit. Transcript que ainda não existe é ignorado.
+//
+// Em cada arquivo o contexto é lido antes do uso: a leitura de contexto
+// atribui as linhas às janelas, e o uso é lido só até onde ela chegou (uma
+// linha escrita entre as duas leituras ficaria com o card da principal para
+// sempre). Se a leitura de contexto falha, o uso é lido mesmo assim, até o
+// fim, e fica com a principal.
 func (a *Adapter) readTranscripts(sessionID, mainPath string) (bool, error) {
 	changed, ctxChanged := false, false
 	for i, path := range append([]string{mainPath}, usage.SubagentTranscripts(mainPath)...) {
+		// Falha na medição de contexto não interrompe a leitura do uso.
+		n, wins, end, err := a.readContext(sessionID, path, i == 0)
+		if err != nil {
+			log.Printf("hook claude: contexto do transcript %s: %v", path, err)
+			wins, end = nil, -1
+		}
+		ctxChanged = ctxChanged || n > 0
 		off, err := a.st.FileOffset(sessionID, path)
 		if err != nil {
 			return false, err
 		}
-		rows, next, err := a.readFile(sessionID, path, off)
+		rows, next, err := a.readFile(sessionID, path, off, end, wins)
 		if err != nil {
 			return false, err
 		}
@@ -80,40 +94,55 @@ func (a *Adapter) readTranscripts(sessionID, mainPath string) (bool, error) {
 			}
 		}
 		changed = changed || len(rows) > 0
-		// Falha na medição de contexto não interrompe a leitura do uso.
-		n, err := a.readContext(sessionID, path)
-		if err != nil {
-			log.Printf("hook claude: contexto do transcript %s: %v", path, err)
-		}
-		ctxChanged = ctxChanged || n > 0
 	}
 	return changed || ctxChanged, nil
 }
 
 // readContext grava saídas e turnos novos do transcript path (medição de
-// contexto), com cursor próprio (tool_offset). Devolve quantos registros leu.
-// Arquivo inexistente é ignorado.
-func (a *Adapter) readContext(sessionID, path string) (int, error) {
+// contexto), com cursor próprio (tool_offset), atribuídos às janelas da
+// conversa (assignWindows). Só o transcript principal (main) casa prompts do
+// hook: o prompt de um subagente é escrito pelo modelo, nunca digitado numa
+// janela. Devolve quantos registros leu, a janela de cada turno lido
+// (message.id → janela, "" = principal) e até onde leu (end; -1 se o arquivo
+// não existe). Arquivo inexistente é ignorado.
+func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins map[string]string, end int64, err error) {
 	off, st, err := a.st.ContextCursor(sessionID, path)
 	if err != nil {
-		return 0, err
+		return 0, nil, 0, err
 	}
-	// Os prompts ficam para a atribuição por janela.
-	outs, turns, _, _, next, newSt, reset, err := usage.ParseContext(path, off, st)
+	outs, turns, prompts, lines, next, newSt, reset, err := usage.ParseContext(path, off, st)
 	if errors.Is(err, fs.ErrNotExist) {
-		return 0, nil
+		return 0, nil, -1, nil
 	}
 	if err != nil {
-		return 0, err
+		return 0, nil, 0, err
 	}
-	n := len(outs) + len(turns)
+	n = len(outs) + len(turns)
 	if next == off && !reset && n == 0 {
-		return 0, nil
+		return 0, nil, next, nil
 	}
-	if err := a.st.SaveContext(sessionID, path, reset, outs, turns, next, newSt); err != nil {
-		return 0, err
+	var known map[string]string
+	if !reset { // reset apaga as linhas do path: nada de antes vale
+		if known, err = a.st.WindowLines(sessionID, path); err != nil {
+			return 0, nil, 0, err
+		}
 	}
-	return n, nil
+	var open []store.WindowPrompt
+	if main {
+		if open, err = a.st.OpenWindowPrompts(sessionID); err != nil {
+			return 0, nil, 0, err
+		}
+	}
+	byUUID, used := assignWindows(sessionID, lines, prompts, known, open)
+	w := store.ContextWindows{ByUUID: byUUID, UsedPrompts: used}
+	if err := a.st.SaveContextWindows(sessionID, path, reset, outs, turns, next, newSt, w); err != nil {
+		return 0, nil, 0, err
+	}
+	wins = make(map[string]string, len(turns))
+	for _, t := range turns {
+		wins[t.MessageID] = byUUID[t.UUID]
+	}
+	return n, wins, next, nil
 }
 
 // Versão do leitor de contexto, guardada na chave livre contextReaderVersionKey
@@ -202,8 +231,12 @@ func (a *Adapter) BackfillContext(ctx context.Context) {
 	log.Printf("medição de contexto: %d de %d sessões em %s", done, len(transcripts), time.Since(start).Round(time.Millisecond))
 }
 
-func (a *Adapter) readFile(sessionID, path string, off int64) ([]domain.UsageRow, int64, error) {
-	rows, next, err := usage.ParseClaudeTranscript(path, off)
+// readFile grava o uso novo do transcript path, de off até end (end < 0 =
+// até o fim). A janela de cada mensagem vem de wins (a leitura de contexto que
+// acabou de rodar) ou, se o turno foi atribuído numa leitura anterior, de
+// context_turns; sem nenhum dos dois, a principal.
+func (a *Adapter) readFile(sessionID, path string, off, end int64, wins map[string]string) ([]domain.UsageRow, int64, error) {
+	rows, next, err := usage.ParseClaudeTranscriptUntil(path, off, end)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, off, nil
 	}
@@ -212,6 +245,13 @@ func (a *Adapter) readFile(sessionID, path string, off int64) ([]domain.UsageRow
 	}
 	for i := range rows {
 		rows[i].SessionID = sessionID
+		win, ok := wins[rows[i].MessageID]
+		if !ok {
+			if win, _, err = a.st.TurnWindow(sessionID, path, rows[i].MessageID); err != nil {
+				return nil, off, err
+			}
+		}
+		rows[i].WindowSessionID = win
 	}
 	if err := a.st.UpsertUsage(rows); err != nil {
 		return nil, off, err

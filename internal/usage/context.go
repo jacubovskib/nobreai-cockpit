@@ -68,8 +68,9 @@ type ContextTurn struct {
 //
 // Regra: content string, ou lista com blocos text (juntados com "\n") e sem
 // tool_result. Ficam de fora linhas isMeta, isCompactSummary (resumo de
-// compactação), texto vazio e o encanamento de comandos de barra: texto que
-// começa com "<command-" ou "<local-command".
+// compactação), texto vazio, o encanamento do Claude Code (texto que começa
+// com "<command-", "<local-command", "<bash-" ou "<task-notification") e a
+// linha exata "[Request interrupted by user]".
 type Prompt struct {
 	UUID       string
 	ParentUUID string
@@ -290,11 +291,21 @@ func promptText(raw json.RawMessage) (string, bool) {
 		text = strings.Join(parts, "\n")
 	}
 	lead := strings.TrimLeft(text, " \t\r\n")
-	if lead == "" || strings.HasPrefix(lead, "<command-") || strings.HasPrefix(lead, "<local-command") {
+	if lead == "" || strings.TrimSpace(lead) == "[Request interrupted by user]" {
 		return "", false
+	}
+	for _, pre := range harnessPrefixes {
+		if strings.HasPrefix(lead, pre) {
+			return "", false
+		}
 	}
 	return text, true
 }
+
+// harnessPrefixes são começos de linhas user que o Claude Code escreve sem o
+// usuário ter digitado: encanamento de comandos de barra, entrada e saída do
+// modo bash (!) e avisos de tarefa em segundo plano.
+var harnessPrefixes = []string{"<command-", "<local-command", "<bash-", "<task-notification"}
 
 // contentBlocks decodifica message.content quando é lista (string vira nada).
 func contentBlocks(raw json.RawMessage) []ctxBlock {

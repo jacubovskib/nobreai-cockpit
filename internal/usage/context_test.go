@@ -396,7 +396,13 @@ func TestParseContext_Prompts(t *testing.T) {
 		line("user", "c3", "c2", `"message":{"role":"user","content":[{"type":"text","text":"<command-message>y</command-message>"}]}`),
 		line("user", "s1", "c3", `"isCompactSummary":true,"message":{"role":"user","content":"This session is being continued"}`),
 		line("user", "e1", "s1", `"message":{"role":"user","content":"   "}`),
-		line("user", "p3", "e1", `"message":{"role":"user","content":"terceiro"}`),
+		line("user", "h1", "e1", `"message":{"role":"user","content":"<bash-input>ls</bash-input>"}`),
+		line("user", "h2", "h1", `"message":{"role":"user","content":"<bash-stdout>a b</bash-stdout><bash-stderr></bash-stderr>"}`),
+		line("user", "h3", "h2", `"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id></task-notification>"}`),
+		line("user", "h4", "h3", `"message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}`),
+		line("user", "h5", "h4", `"message":{"role":"user","content":"[Request interrupted by user]"}`),
+		line("user", "p3", "h5", `"message":{"role":"user","content":"terceiro"}`),
+		line("user", "p4", "p3", `"message":{"role":"user","content":"[Request interrupted by user] e agora faça y"}`),
 	)
 	_, _, prompts, _, _, _, _, err := ParseContext(p, 0, zero)
 	if err != nil {
@@ -405,7 +411,8 @@ func TestParseContext_Prompts(t *testing.T) {
 	want := []Prompt{
 		{UUID: "p1", ParentUUID: "", Text: "primeiro pedido"},
 		{UUID: "p2", ParentUUID: "p1", Text: "com imagem\ne mais"},
-		{UUID: "p3", ParentUUID: "e1", Text: "terceiro"},
+		{UUID: "p3", ParentUUID: "h5", Text: "terceiro"},
+		{UUID: "p4", ParentUUID: "p3", Text: "[Request interrupted by user] e agora faça y"},
 	}
 	if len(prompts) != len(want) {
 		t.Fatalf("prompts %+v", prompts)

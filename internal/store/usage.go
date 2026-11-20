@@ -13,8 +13,10 @@ import (
 )
 
 // UpsertUsage grava as linhas de uso; a chave é (session_id, message_id). O
-// card_id é o card da sessão no momento da ingestão e nunca é sobrescrito por
-// uma reingestão: o custo fica no card em que foi gasto.
+// card_id é o card da janela dona (WindowSessionID, senão a própria sessão) no
+// momento da ingestão e nunca é sobrescrito por uma reingestão: o custo fica no
+// card em que foi gasto. A janela também fica a da primeira gravação, junto
+// com o card (uso gravado antes da atribuição por janela fica na principal).
 func (s *Store) UpsertUsage(rows []domain.UsageRow) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -22,12 +24,16 @@ func (s *Store) UpsertUsage(rows []domain.UsageRow) error {
 	}
 	defer tx.Rollback()
 	for _, r := range rows {
-		if _, err := tx.Exec(`INSERT INTO usage (session_id, card_id, message_id, model, input, output, cache_write, cache_read, at)
-			VALUES (?, (SELECT card_id FROM sessions WHERE id=?), ?,?,?,?,?,?,?)
+		owner := r.SessionID
+		if r.WindowSessionID != "" {
+			owner = r.WindowSessionID
+		}
+		if _, err := tx.Exec(`INSERT INTO usage (session_id, card_id, message_id, model, input, output, cache_write, cache_read, at, window_session_id)
+			VALUES (?, (SELECT card_id FROM sessions WHERE id=?), ?,?,?,?,?,?,?,?)
 			ON CONFLICT(session_id, message_id) DO UPDATE SET model=excluded.model, input=excluded.input,
 			output=excluded.output, cache_write=excluded.cache_write, cache_read=excluded.cache_read, at=excluded.at,
 			card_id=COALESCE(usage.card_id, excluded.card_id)`,
-			r.SessionID, r.SessionID, r.MessageID, r.Model, r.Input, r.Output, r.CacheWrite, r.CacheRead, fmtTime(r.At)); err != nil {
+			r.SessionID, owner, r.MessageID, r.Model, r.Input, r.Output, r.CacheWrite, r.CacheRead, fmtTime(r.At), r.WindowSessionID); err != nil {
 			return err
 		}
 	}
