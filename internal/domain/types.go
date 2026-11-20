@@ -77,6 +77,9 @@ type Session struct {
 	// SeenConfig é a configuração que o agente principal da sessão já viu;
 	// nil = ainda não gravada.
 	SeenConfig *SeenConfig `json:"seen_config"`
+	// ParentSessionID é o id da sessão principal quando esta é a sessão filha
+	// de outro processo vivo na mesma conversa ("" na principal).
+	ParentSessionID string `json:"parent_session_id"`
 }
 
 // SeenConfig é o retrato da configuração visto por uma sessão.

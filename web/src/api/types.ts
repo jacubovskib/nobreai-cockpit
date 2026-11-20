@@ -54,6 +54,8 @@ export interface Session {
   ended_at: string | null
   end_reason: string
   pid_dead_at: string | null
+  // parent_session_id: vazio na principal; na filha (segunda janela), o id da principal.
+  parent_session_id: string
 }
 
 export interface DomainEvent {

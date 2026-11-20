@@ -17,7 +17,7 @@ var ErrCardBusy = errors.New("card já tem uma sessão viva")
 // existindo (pid_dead_at marca o início da carência após o PID sumir).
 const liveCond = `ended_at IS NULL AND pid_dead_at IS NULL`
 
-const sessionCols = `id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, ended_at, end_reason, pid_dead_at, worktree, worktree_linked, seen_config`
+const sessionCols = `id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, ended_at, end_reason, pid_dead_at, worktree, worktree_linked, seen_config, parent_session_id`
 
 func scanSession(sc interface{ Scan(...any) error }) (domain.Session, error) {
 	var x domain.Session
@@ -27,7 +27,7 @@ func scanSession(sc interface{ Scan(...any) error }) (domain.Session, error) {
 	var seen string
 	err := sc.Scan(&x.ID, &x.Agent, &x.ProviderSessionID, &cardID, &projectID, &x.PID, &x.Cwd, &x.Branch,
 		&x.GitHead, &x.Model, &x.TranscriptPath, &x.FullCapture, &started, &last, &ended, &x.EndReason, &dead,
-		&x.Worktree, &x.WorktreeLinked, &seen)
+		&x.Worktree, &x.WorktreeLinked, &seen, &x.ParentSessionID)
 	if err != nil {
 		return x, err
 	}
@@ -101,11 +101,11 @@ func (s *Store) StartSession(x domain.Session) error {
 	if x.LastEventAt.IsZero() {
 		x.LastEventAt = x.StartedAt
 	}
-	_, err := s.DB.Exec(`INSERT INTO sessions(id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, worktree, worktree_linked)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+	_, err := s.DB.Exec(`INSERT INTO sessions(id, agent, provider_session_id, card_id, project_id, pid, cwd, branch, git_head, model, transcript_path, full_capture, started_at, last_event_at, worktree, worktree_linked, parent_session_id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
 		x.ID, x.Agent, x.ProviderSessionID, nullableInt(x.CardID), nullableInt(x.ProjectID), x.PID, x.Cwd, x.Branch,
 		x.GitHead, x.Model, x.TranscriptPath, x.FullCapture, fmtTime(x.StartedAt), fmtTime(x.LastEventAt),
-		x.Worktree, x.WorktreeLinked)
+		x.Worktree, x.WorktreeLinked, x.ParentSessionID)
 	return err
 }
 
@@ -138,10 +138,30 @@ func (s *Store) GetSession(id string) (domain.Session, error) {
 	return x, err
 }
 
-// SessionByPID devolve a sessão não encerrada mais recente com esse PID, ou nil.
+// SessionByPID devolve a sessão não encerrada com esse PID que o processo
+// está usando: a viva primeiro, depois a de atividade mais recente; nil se não
+// houver.
 func (s *Store) SessionByPID(pid int) (*domain.Session, error) {
 	x, err := scanSession(s.DB.QueryRow(`SELECT `+sessionCols+` FROM sessions
-		WHERE pid=? AND ended_at IS NULL ORDER BY julianday(started_at) DESC LIMIT 1`, pid))
+		WHERE pid=? AND ended_at IS NULL
+		ORDER BY (`+liveCond+`) DESC, julianday(last_event_at) DESC, julianday(started_at) DESC, id DESC LIMIT 1`, pid))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &x, nil
+}
+
+// SessionByProviderPID devolve a sessão (viva ou não) do agente na conversa
+// providerID com esse PID: a viva primeiro, depois a mais recente; nil se não
+// houver. É como o hook acha a sessão de cada processo quando dois dividem a
+// conversa.
+func (s *Store) SessionByProviderPID(agent, providerID string, pid int) (*domain.Session, error) {
+	x, err := scanSession(s.DB.QueryRow(`SELECT `+sessionCols+` FROM sessions
+		WHERE provider_session_id=? AND pid=? AND agent=?
+		ORDER BY (`+liveCond+`) DESC, julianday(started_at) DESC, id DESC LIMIT 1`, providerID, pid, agent))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

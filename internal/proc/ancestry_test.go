@@ -63,3 +63,11 @@ func TestAlive(t *testing.T) {
 		t.Fatal("Alive incorreto")
 	}
 }
+
+func TestComm(t *testing.T) {
+	root := t.TempDir()
+	fakeProc(t, root, 100, 1, "claude")
+	if Comm(root, 100) != "claude" || Comm(root, 101) != "" || Comm(root, 0) != "" {
+		t.Fatal("Comm incorreto")
+	}
+}

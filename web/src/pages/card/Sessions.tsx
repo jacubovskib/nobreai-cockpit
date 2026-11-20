@@ -1,5 +1,6 @@
 import type { CardDetail } from '../../api/types'
 import { AgentSwatch } from '../../ui/AgentSwatch'
+import { OtherWindowTag } from '../../ui/OtherWindowTag'
 import { Money } from '../../ui/Money'
 import { Tokens } from '../../ui/Tokens'
 import { WorktreeTag } from '../../ui/WorktreeTag'
@@ -47,6 +48,7 @@ export function Sessions({ card, currency, rate }: { card: CardDetail; currency?
                     <td style={cell}>{i + 1}</td>
                     <td style={cell}>
                       <AgentSwatch agent={s.agent} />
+                      <OtherWindowTag parentId={s.parent_session_id} />
                       {live && <span style={{ color: 'var(--ok)', marginLeft: 8 }}>ao vivo</span>}
                       {stale && <span style={{ color: 'var(--warn)', marginLeft: 8 }}>processo encerrado há {minutesSince(s.pid_dead_at)} min</span>}
                     </td>

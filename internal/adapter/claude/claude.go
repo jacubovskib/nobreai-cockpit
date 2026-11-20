@@ -4,10 +4,12 @@
 package claude
 
 import (
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/proc"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
@@ -31,6 +33,14 @@ type Adapter struct {
 	// branch que a sessão tinha antes. Só em memória: perder a marca num
 	// restart só deixa o card onde estava.
 	outsideSwitch sync.Map
+	// childUnwarned guarda as sessões filhas criadas fora do SessionStart que
+	// ainda não receberam a linha da filha (chave: ID da sessão). Só em
+	// memória: perder a marca num restart só deixa de mandar a linha.
+	childUnwarned sync.Map
+	// alive diz se o processo do agente com esse PID ainda existe (decide
+	// entre sessão filha e retomada); padrão: /proc, com o nome do processo
+	// do Claude (um PID reaproveitado por outro programa não conta).
+	alive func(pid int) bool
 }
 
 var _ adapter.Adapter = (*Adapter)(nil)
@@ -41,8 +51,14 @@ func New(st *store.Store, deps adapter.Deps) *Adapter {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &Adapter{st: st, deps: deps}
+	a := &Adapter{st: st, deps: deps}
+	a.alive = func(pid int) bool { return slices.Contains(a.ProcessNames(), proc.Comm("/proc", pid)) }
+	return a
 }
+
+// SetAlive troca a verificação de processo vivo (testes, sem /proc real).
+// Chame antes do primeiro hook.
+func (a *Adapter) SetAlive(f func(pid int) bool) { a.alive = f }
 
 func (a *Adapter) Name() string { return "claude" }
 

@@ -5,7 +5,7 @@ export const ago = (min: number) => new Date(Date.now() - min * 60000).toISOStri
 export const session = (o: Partial<WorktreeSession>): WorktreeSession => ({
   id: 'claude:x', agent: 'claude', provider_session_id: 'x', card_id: null, project_id: 1, pid: 1, cwd: '/w/api',
   branch: 'main', git_head: '', worktree: '/w/api', worktree_linked: false, model: 'claude-opus-5-5', transcript_path: '',
-  full_capture: true, started_at: ago(12), last_event_at: ago(1), ended_at: null, end_reason: '', pid_dead_at: null,
+  full_capture: true, started_at: ago(12), last_event_at: ago(1), ended_at: null, end_reason: '', pid_dead_at: null, parent_session_id: '',
   live: true, last_activity: '', card: null, ...o,
 })
 export const res = (o: Partial<WorktreeResources>): WorktreeResources =>

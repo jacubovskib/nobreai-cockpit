@@ -19,7 +19,7 @@ Abordagem escolhida pelo usuário em 2026-11-20 ("vamos no sugerido"): uma sess�
 2. **`nobre`** continua achando a sessão por PID: cada processo passa a ter a sua.
 3. **Stop hook, SessionStart e demais hooks** usam a sessão roteada, então cada janela vê e cobra só o próprio card.
 4. **SessionStart da filha** acrescenta: "Esta conversa também está aberta em outra janela, com sessão própria no Cockpit; os comandos nobre desta janela valem só para ela."
-5. **Uso e contexto (NAC-31):** o transcript é um só; a ingestão de uma filha roda com o id da **principal** (mesmos offsets e linhas, sem contar em dobro). O custo fica no card da principal (limitação desta entrega; separar por processo usando o `session_id` de cada linha do transcript fica para depois).
+5. **Uso e contexto (NAC-31):** o transcript é um só; a ingestão de uma filha roda com o id da **principal** (mesmos offsets e linhas, sem contar em dobro). O custo fica no card da principal (limitação desta entrega). Separar o custo por processo precisa de outro sinal: o `sessionId` das linhas do transcript não serve, porque os dois processos gravam o mesmo. Fica em aberto.
 6. **Encerramento:** a filha encerra pelo reconciliador quando o PID dela morre (já é por PID) ou pelo SessionEnd dela. Encerrar a principal não encerra a filha.
 7. **Tela:** sessões filhas aparecem com a marca "outra janela" onde as sessões são listadas (card e Analytics).
 
