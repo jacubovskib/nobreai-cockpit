@@ -96,15 +96,24 @@ func (s *server) continuePreview(w http.ResponseWriter, r *http.Request) {
 // abre o agente no diretório do projeto, no branch do card, numa nova janela
 // do terminal. Se o branch do card está aberto num worktree ligado, abre lá.
 func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Agent      string `json:"agent"`
-		Mode       string `json:"mode"`
-		PromptSlug string `json:"prompt_slug"`
-		Force      bool   `json:"force"`
-	}
+	var in continueInput
 	if !readJSON(w, r, &in) {
 		return
 	}
+	s.continueKey(w, r.PathValue("key"), in)
+}
+
+// continueInput é o corpo do Continuar.
+type continueInput struct {
+	Agent      string `json:"agent"`
+	Mode       string `json:"mode"`
+	PromptSlug string `json:"prompt_slug"`
+	Force      bool   `json:"force"`
+}
+
+// continueKey é o núcleo do Continuar (também usado por Recomeçar limpo):
+// abre o agente do card key e responde em w.
+func (s *server) continueKey(w http.ResponseWriter, key string, in continueInput) {
 	if in.Agent == "" {
 		in.Agent = "claude"
 	}
@@ -151,7 +160,7 @@ func (s *server) continueCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, msgNoAgentBin)
 		return
 	}
-	c, err := s.st.GetCard(r.PathValue("key"))
+	c, err := s.st.GetCard(key)
 	if err != nil {
 		writeStoreError(w, err, msgCardNotFound)
 		return

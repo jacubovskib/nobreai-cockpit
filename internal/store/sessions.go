@@ -688,3 +688,38 @@ func (s *Store) AdoptSession(id string, projectID int64) error {
 	}
 	return requireAffected(res)
 }
+
+// DetachSessionCard desliga o card da sessão (card_id NULL; a sessão segue
+// viva, sem card) e, se o card fica sem outro dono vivo, aplica a regra de
+// sessão encerrada (em_andamento vira pausado), tudo numa transação. Não mexe
+// nos demais campos do card. ErrNotFound se a sessão não existe; sem card é
+// no-op.
+func (s *Store) DetachSessionCard(sessionID string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var card sql.NullInt64
+	if err := tx.QueryRow(`SELECT card_id FROM sessions WHERE id=?`, sessionID).Scan(&card); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if !card.Valid {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE sessions SET card_id=NULL WHERE id=?`, sessionID); err != nil {
+		return err
+	}
+	var live int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE card_id=? AND `+liveCond, card.Int64).Scan(&live); err != nil {
+		return err
+	}
+	if live == 0 {
+		if err := moveCardTx(tx, card.Int64, domain.SessionEnded); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}

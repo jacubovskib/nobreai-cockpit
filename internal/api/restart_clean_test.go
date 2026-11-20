@@ -1,0 +1,103 @@
+package api
+
+import (
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
+)
+
+func restartErr(t *testing.T, a *testAPI, id string, code int, body map[string]any) string {
+	t.Helper()
+	rec := a.do(t, "POST", "/api/sessions/"+id+"/restart-clean", body, 0)
+	if rec.Code != code {
+		t.Fatalf("code = %d (quero %d) %s", rec.Code, code, rec.Body)
+	}
+	return decode[map[string]string](t, rec)["error"]
+}
+
+func TestRestartCleanErrors(t *testing.T) {
+	a, l := continueAPI(t, &fakeGit{branch: "feat/x", clean: true})
+	restartErr(t, a, "claude:nada", http.StatusNotFound, map[string]any{})
+	a.liveSession(t, "claude:sem", 1, "")
+	if got := restartErr(t, a, "claude:sem", 400, map[string]any{}); got != "sessão sem card" {
+		t.Fatalf("erro = %q", got)
+	}
+	a.liveSession(t, "claude:s", 4242, "NAC-1")
+	if got := restartErr(t, a, "claude:s", 400, map[string]any{}); got != "registre onde parou antes de recomeçar" {
+		t.Fatalf("erro = %q", got)
+	}
+	old := testNow.Add(-31 * time.Minute)
+	c, _ := a.st.GetCard("NAC-1")
+	if err := a.st.SetWhereStopped(c.ID, "velho", old); err != nil {
+		t.Fatal(err)
+	}
+	restartErr(t, a, "claude:s", 400, map[string]any{"where_stopped": "  "})
+	if len(l.calls) != 0 {
+		t.Fatal("não deveria lançar")
+	}
+	s, _ := a.st.GetSession("claude:s")
+	if s.CardID == nil {
+		t.Fatal("desligou apesar do erro")
+	}
+}
+
+func TestRestartCleanWithTextSavesDetachesContinues(t *testing.T) {
+	a, l := continueAPI(t, &fakeGit{branch: "feat/x", clean: true})
+	a.liveSession(t, "claude:s", 4242, "NAC-1")
+	rec := a.do(t, "POST", "/api/sessions/claude:s/restart-clean", map[string]any{"where_stopped": "no handler"}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	c, _ := a.st.GetCard("NAC-1")
+	if c.WhereStopped != "no handler" || c.WhereStoppedAt == nil || !c.WhereStoppedAt.Equal(testNow) {
+		t.Fatalf("onde parei = %q %v", c.WhereStopped, c.WhereStoppedAt)
+	}
+	if c.Column != domain.Pausado {
+		t.Fatalf("coluna = %s", c.Column)
+	}
+	s, _ := a.st.GetSession("claude:s")
+	if s.CardID != nil || !s.Live() {
+		t.Fatalf("sessão = card %v viva %v", s.CardID, s.Live())
+	}
+	if len(l.calls) != 1 {
+		t.Fatalf("lançamentos = %d", len(l.calls))
+	}
+}
+
+func TestRestartCleanRecentWithoutText(t *testing.T) {
+	a, l := continueAPI(t, &fakeGit{branch: "feat/x", clean: true})
+	a.liveSession(t, "claude:s", 4242, "NAC-1")
+	c, _ := a.st.GetCard("NAC-1")
+	if err := a.st.SetWhereStopped(c.ID, "ontem não", testNow.Add(-5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if rec := a.do(t, "POST", "/api/sessions/claude:s/restart-clean", map[string]any{}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	c, _ = a.st.GetCard("NAC-1")
+	if c.WhereStopped != "ontem não" || c.Column != domain.Pausado || len(l.calls) != 1 {
+		t.Fatalf("card = %+v lançamentos %d", c, len(l.calls))
+	}
+}
+
+func TestRestartCleanChildSessionOwnCard(t *testing.T) {
+	a, l := continueAPI(t, &fakeGit{branch: "feat/x", clean: true})
+	if _, err := a.st.CreateCard(domain.Card{Title: "Filha", ProjectID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:main", 1, "NAC-1")
+	a.liveSession(t, "claude:filha", 2, "NAC-2")
+	rec := a.do(t, "POST", "/api/sessions/claude:filha/restart-clean", map[string]any{"where_stopped": "aqui"}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	c2, _ := a.st.GetCard("NAC-2")
+	c1, _ := a.st.GetCard("NAC-1")
+	f, _ := a.st.GetSession("claude:filha")
+	m, _ := a.st.GetSession("claude:main")
+	if c2.Column != domain.Pausado || c1.Column != domain.EmAndamento || f.CardID != nil || m.CardID == nil || len(l.calls) != 1 {
+		t.Fatalf("c1=%s c2=%s filha=%v main=%v calls=%d", c1.Column, c2.Column, f.CardID, m.CardID, len(l.calls))
+	}
+}
