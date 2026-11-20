@@ -43,6 +43,8 @@ func (a *Adapter) readLocked(sessionID, path string) (changed bool, err error) {
 			changed, err = false, nil
 		}
 	}()
+	a.readerMu.RLock()
+	defer a.readerMu.RUnlock()
 	mu, _ := a.ingest.LoadOrStore(sessionID, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
@@ -96,7 +98,8 @@ func (a *Adapter) readContext(sessionID, path string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	outs, turns, next, newSt, reset, err := usage.ParseContext(path, off, st)
+	// Os prompts ficam para a atribuição por janela.
+	outs, turns, _, next, newSt, reset, err := usage.ParseContext(path, off, st)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
 	}
@@ -113,6 +116,36 @@ func (a *Adapter) readContext(sessionID, path string) (int, error) {
 	return n, nil
 }
 
+// Versão do leitor de contexto, guardada na chave livre contextReaderVersionKey
+// das configurações. Subir a versão faz a próxima passada do histórico refazer
+// toda a medição de contexto uma vez. Versão 2: detalhe de cache e TTL por
+// turno (NAC-40).
+const (
+	contextReaderVersion    = 2
+	contextReaderVersionKey = "context_reader_version"
+)
+
+// upgradeReader zera a medição de contexto quando a versão gravada é menor que
+// a atual, e diz se a passada que vem precisa gravar a versão no fim. A versão
+// só é gravada depois de uma passada inteira (sem ctx cancelado): se o daemon
+// cair no meio, a próxima subida zera e relê de novo, sem pular ninguém.
+func (a *Adapter) upgradeReader() (pending bool, err error) {
+	var v int
+	if _, err := a.st.GetKV(contextReaderVersionKey, &v); err != nil {
+		return false, err
+	}
+	if v >= contextReaderVersion {
+		return false, nil
+	}
+	a.readerMu.Lock()
+	defer a.readerMu.Unlock()
+	if err := a.st.ResetContextMeasurement(); err != nil {
+		return false, err
+	}
+	log.Printf("medição de contexto: leitor v%d → v%d, relendo o histórico", v, contextReaderVersion)
+	return true, nil
+}
+
 // StartBackfill roda BackfillContext em segundo plano; Wait espera o fim.
 func (a *Adapter) StartBackfill(ctx context.Context) {
 	a.wg.Add(1)
@@ -125,9 +158,20 @@ func (a *Adapter) StartBackfill(ctx context.Context) {
 // BackfillContext lê o histórico: todos os transcripts das sessões do Claude
 // ainda sem medição de contexto (e os já medidos, só do ponto onde pararam).
 // Para entre sessões quando ctx termina; um erro ou pânico numa sessão não
-// interrompe as outras.
+// interrompe as outras. Com o leitor numa versão antiga, antes zera a medição
+// (upgradeReader) e, se a passada for até o fim, grava a versão nova; erro numa
+// sessão não segura a versão (senão um arquivo ilegível zeraria tudo a cada
+// subida). Transcript que não existe mais perde a medição antiga.
 func (a *Adapter) BackfillContext(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 	start := time.Now()
+	pending, err := a.upgradeReader()
+	if err != nil {
+		log.Printf("medição de contexto: versão do leitor: %v", err)
+		return
+	}
 	transcripts, err := a.st.ClaudeTranscripts()
 	if err != nil {
 		log.Printf("medição de contexto: listar sessões: %v", err)
@@ -147,6 +191,11 @@ func (a *Adapter) BackfillContext(ctx context.Context) {
 	}
 	if changed {
 		a.publish("usage")
+	}
+	if pending && ctx.Err() == nil {
+		if err := a.st.PutKV(contextReaderVersionKey, contextReaderVersion); err != nil {
+			log.Printf("medição de contexto: gravar versão do leitor: %v", err)
+		}
 	}
 	log.Printf("medição de contexto: %d de %d sessões em %s", done, len(transcripts), time.Since(start).Round(time.Millisecond))
 }

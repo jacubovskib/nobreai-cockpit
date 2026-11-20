@@ -167,3 +167,87 @@ func TestClaudeTranscripts(t *testing.T) {
 		t.Fatalf("%v %v", m, err)
 	}
 }
+
+func TestSaveContext_CacheColumns(t *testing.T) {
+	s := usageFixture(t)
+	st := usage.ContextState{LastTurn: 0}
+	first := usage.ContextTurn{Turn: 0, MessageID: "m", At: ctxAt, Tokens: 6, Input: 1, CacheRead: 2, CacheWrite: 3, TTL: "5m", UUID: "a1"}
+	// A mesma mensagem continuada numa leitura seguinte troca o detalhe.
+	second := usage.ContextTurn{Turn: 0, MessageID: "m", At: ctxAt, Tokens: 60, Input: 10, CacheRead: 20, CacheWrite: 30, TTL: "1h", UUID: "a2"}
+	for _, tu := range []usage.ContextTurn{first, second} {
+		if err := s.SaveContext("claude:1", "/p", false, nil, []usage.ContextTurn{tu}, 1, st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var in, cr, cw int64
+	var ttl, win string
+	if err := s.DB.QueryRow(`SELECT input, cache_read, cache_write, ttl, window_session_id FROM context_turns WHERE session_id='claude:1' AND path='/p' AND turn=0`).
+		Scan(&in, &cr, &cw, &ttl, &win); err != nil {
+		t.Fatal(err)
+	}
+	if in != 10 || cr != 20 || cw != 30 || ttl != "1h" || win != "" {
+		t.Fatalf("in=%d cr=%d cw=%d ttl=%q win=%q", in, cr, cw, ttl, win)
+	}
+}
+
+func TestResetContextMeasurement(t *testing.T) {
+	s := usageFixture(t)
+	if err := s.SetFileOffset("claude:1", "/p", 999); err != nil {
+		t.Fatal(err)
+	}
+	o := usage.ToolOutput{ItemID: "t1", Tool: "Bash", Key: "x", Bytes: 4, Tokens: 1, At: ctxAt, Result: true}
+	if err := s.SaveContext("claude:1", "/p", false, []usage.ToolOutput{o}, []usage.ContextTurn{{Turn: 0, MessageID: "m", At: ctxAt, Tokens: 1}},
+		500, usage.ContextState{LastTurn: 0, Segment: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResetContextMeasurement(); err != nil {
+		t.Fatal(err)
+	}
+	var o2, tu int
+	s.DB.QueryRow(`SELECT COUNT(*) FROM tool_outputs`).Scan(&o2)
+	s.DB.QueryRow(`SELECT COUNT(*) FROM context_turns`).Scan(&tu)
+	if o2 != 0 || tu != 0 {
+		t.Fatalf("o=%d tu=%d", o2, tu)
+	}
+	off, st, err := s.ContextCursor("claude:1", "/p")
+	if err != nil || off != 0 || st != (usage.ContextState{LastTurn: -1}) {
+		t.Fatalf("off=%d st=%+v err=%v", off, st, err)
+	}
+	// O offset de uso fica.
+	if u, _ := s.FileOffset("claude:1", "/p"); u != 999 {
+		t.Fatalf("offset de uso mudou: %d", u)
+	}
+}
+
+func TestMigration017_Schema(t *testing.T) {
+	s := usageFixture(t)
+	for _, q := range []string{
+		`SELECT input, cache_read, cache_write, ttl, window_session_id FROM context_turns`,
+		`SELECT window_session_id FROM tool_outputs`,
+		`SELECT window_session_id FROM usage`,
+		`SELECT session_id, path, uuid, window_session_id FROM window_lines`,
+		`SELECT id, session_id, text_norm, at, used FROM window_prompts`,
+		`SELECT session_id, warned_pct, warned_segment, big_outputs, child_notice_sent FROM session_alerts`,
+	} {
+		rows, err := s.DB.Query(q)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		rows.Close()
+	}
+	// Padrões de session_alerts e window_prompts.
+	if _, err := s.DB.Exec(`INSERT INTO session_alerts(session_id) VALUES ('x')`); err != nil {
+		t.Fatal(err)
+	}
+	var pct, seg, big, child int
+	s.DB.QueryRow(`SELECT warned_pct, warned_segment, big_outputs, child_notice_sent FROM session_alerts WHERE session_id='x'`).Scan(&pct, &seg, &big, &child)
+	if pct != 0 || seg != -1 || big != 0 || child != 0 {
+		t.Fatalf("padrões: %d %d %d %d", pct, seg, big, child)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO window_lines(session_id, path, uuid, window_session_id) VALUES ('a','/p','u','b')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO window_lines(session_id, path, uuid, window_session_id) VALUES ('a','/p','u','c')`); err == nil {
+		t.Fatal("chave de window_lines não é (session_id, path, uuid)")
+	}
+}

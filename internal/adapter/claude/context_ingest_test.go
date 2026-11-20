@@ -161,3 +161,73 @@ func TestReadTranscripts_ContextTruncated(t *testing.T) {
 		t.Fatalf("linhas antigas não sumiram: tool=%q", tool)
 	}
 }
+
+func readerVersion(t *testing.T, e *env) int {
+	t.Helper()
+	var v int
+	if _, err := e.st.GetKV(contextReaderVersionKey, &v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// Medição gravada por um leitor antigo (sem versão): a primeira passada do
+// histórico refaz tudo uma vez; a segunda não relê.
+func TestBackfillContext_ReaderVersion(t *testing.T) {
+	e, main, sub := ctxEnv(t)
+	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
+		t.Fatal(err)
+	}
+	var usageRows int
+	e.st.DB.QueryRow(`SELECT COUNT(*) FROM usage WHERE session_id=?`, ctxSess).Scan(&usageRows)
+	usageOff, _ := e.st.FileOffset(ctxSess, main)
+	// Estado do leitor antigo: colunas novas zeradas, um turno a mais e uma
+	// saída que o arquivo não tem.
+	for _, q := range []string{
+		`UPDATE context_turns SET tokens=777, input=0, cache_read=0`,
+		`INSERT INTO context_turns(session_id, path, turn, message_id, at, tokens) VALUES ('` + ctxSess + `', '` + main + `', 9, 'velho', 'x', 1)`,
+		`INSERT INTO tool_outputs(session_id, path, item_id, tool, key, bytes, tokens, turn, at) VALUES ('` + ctxSess + `', '` + main + `', 'velho', 'Bash', 'x', 1, 1, 0, 'x')`,
+	} {
+		if _, err := e.st.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Com ctx cancelado nada muda e a versão não sobe.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	e.a.BackfillContext(cancelled)
+	if readerVersion(t, e) >= contextReaderVersion || ctxCount(t, e, "context_turns", main) != 2 {
+		t.Fatal("ctx cancelado mexeu na medição ou na versão")
+	}
+
+	e.a.BackfillContext(context.Background())
+	if v := readerVersion(t, e); v != contextReaderVersion {
+		t.Fatalf("versão = %d", v)
+	}
+	for _, p := range []string{main, sub} {
+		if ctxCount(t, e, "tool_outputs", p) != 1 || ctxCount(t, e, "context_turns", p) != 1 {
+			t.Fatalf("%s: releitura não refez a medição", p)
+		}
+	}
+	var tok, in, cr int64
+	if err := e.st.DB.QueryRow(`SELECT tokens, input, cache_read FROM context_turns WHERE session_id=? AND path=? AND turn=0`, ctxSess, main).
+		Scan(&tok, &in, &cr); err != nil || tok != 110 || in != 10 || cr != 100 {
+		t.Fatalf("turno relido: tokens=%d input=%d cache_read=%d err=%v", tok, in, cr, err)
+	}
+	// O uso não é relido nem duplicado.
+	var usageAfter int
+	e.st.DB.QueryRow(`SELECT COUNT(*) FROM usage WHERE session_id=?`, ctxSess).Scan(&usageAfter)
+	if u, _ := e.st.FileOffset(ctxSess, main); u != usageOff || usageAfter != usageRows {
+		t.Fatalf("uso mudou: offset %d -> %d, linhas %d -> %d", usageOff, u, usageRows, usageAfter)
+	}
+
+	// Segunda subida: já na versão nova, não relê (a adulteração fica).
+	if _, err := e.st.DB.Exec(`UPDATE context_turns SET tokens=777 WHERE session_id=? AND path=?`, ctxSess, main); err != nil {
+		t.Fatal(err)
+	}
+	e.a.BackfillContext(context.Background())
+	e.st.DB.QueryRow(`SELECT tokens FROM context_turns WHERE session_id=? AND path=? AND turn=0`, ctxSess, main).Scan(&tok)
+	if tok != 777 || ctxCount(t, e, "tool_outputs", main) != 1 || ctxCount(t, e, "context_turns", main) != 1 {
+		t.Fatalf("releu de novo ou duplicou: tokens=%d", tok)
+	}
+}

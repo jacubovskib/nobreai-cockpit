@@ -14,7 +14,12 @@ import (
 
 // ToolOutput é o tamanho de uma saída de ferramenta ou injeção de hook.
 // Privacidade: nada do conteúdo sai do leitor, só nome, chave, tamanhos,
-// posição (turno, segmento), hora e is_error.
+// posição (turno, segmento), hora, is_error e os uuids da linha.
+//
+// UUID/ParentUUID são os da linha que criou o registro nesta leitura: a
+// linha assistant do tool_use (o tool_result que o completa não os troca),
+// a linha user do tool_result quando o tool_use ficou numa leitura anterior,
+// ou a linha attachment do hook.
 type ToolOutput struct {
 	ItemID   string // tool_use_id ou uuid da linha (hook)
 	Tool     string // nome da ferramenta, ou "hook"
@@ -32,16 +37,44 @@ type ToolOutput struct {
 	// Result true significam "desconhecido aqui": o armazenamento mantém o que
 	// já tem, ou grava "?" se for novo. Registros do mesmo ItemID se completam
 	// por upsert entre leituras.
-	Result bool
+	Result     bool
+	UUID       string
+	ParentUUID string
 }
 
 // ContextTurn é o contexto de um turno (message.id distinto de assistant).
+// Uma mensagem ocupa várias linhas com o mesmo message.id: vale a última
+// linha com uso, inclusive para o detalhe de cache, o TTL e UUID/ParentUUID
+// (os da última linha da mensagem, que é a ponta do galho naquele turno).
 type ContextTurn struct {
-	Turn      int
-	Segment   int
-	MessageID string
-	At        time.Time
-	Tokens    int64 // input + cache_read + cache_write
+	Turn       int
+	Segment    int
+	MessageID  string
+	At         time.Time
+	Tokens     int64 // input + cache_read + cache_write
+	Input      int64
+	CacheRead  int64
+	CacheWrite int64
+	// TTL do cache gravado no turno: "1h" se ephemeral_1h_input_tokens > 0,
+	// senão "5m" se ephemeral_5m_input_tokens > 0, senão "".
+	TTL        string
+	UUID       string
+	ParentUUID string
+}
+
+// Prompt é uma linha user com texto digitado pelo usuário (não tool_result).
+// Text sai do leitor só para casar a linha com o prompt recebido no hook
+// (atribuição por janela); não é gravado nem vai para log.
+//
+// Regra: content string, ou lista com blocos text (juntados com "\n") e sem
+// tool_result. Ficam de fora linhas isMeta, isCompactSummary (resumo de
+// compactação), texto vazio e o encanamento de comandos de barra: texto que
+// começa com "<command-" ou "<local-command".
+type Prompt struct {
+	UUID       string
+	ParentUUID string
+	Text       string
+	At         time.Time
 }
 
 // ContextState é o estado que atravessa leituras incrementais do mesmo arquivo.
@@ -68,11 +101,14 @@ type ctxBlock struct {
 }
 
 type ctxLine struct {
-	Type       string `json:"type"`
-	Subtype    string `json:"subtype"`
-	UUID       string `json:"uuid"`
-	Timestamp  string `json:"timestamp"`
-	Attachment *struct {
+	Type             string `json:"type"`
+	Subtype          string `json:"subtype"`
+	UUID             string `json:"uuid"`
+	ParentUUID       string `json:"parentUuid"`
+	IsMeta           bool   `json:"isMeta"`
+	IsCompactSummary bool   `json:"isCompactSummary"`
+	Timestamp        string `json:"timestamp"`
+	Attachment       *struct {
 		Type          string          `json:"type"`
 		HookEvent     string          `json:"hookEvent"`
 		Command       string          `json:"command"`
@@ -86,6 +122,10 @@ type ctxLine struct {
 			CacheWrite int64 `json:"cache_creation_input_tokens"`
 			CacheRead  int64 `json:"cache_read_input_tokens"`
 			Output     int64 `json:"output_tokens"`
+			Creation   *struct {
+				H1 int64 `json:"ephemeral_1h_input_tokens"`
+				M5 int64 `json:"ephemeral_5m_input_tokens"`
+			} `json:"cache_creation"`
 		} `json:"usage"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
@@ -98,21 +138,22 @@ type ctxLine struct {
 // O tool_use emite um registro (Result false) que o tool_result completa na
 // mesma leitura; se o tool_use ficou numa leitura anterior, o registro sai com
 // Tool/Key vazios e Result true, e o armazenamento faz o upsert por ItemID.
-func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput, turns []ContextTurn, next int64, newState ContextState, reset bool, err error) {
+// prompts são as linhas de prompt do usuário (ver Prompt), na ordem do arquivo.
+func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput, turns []ContextTurn, prompts []Prompt, next int64, newState ContextState, reset bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, offset, st, false, err
+		return nil, nil, nil, offset, st, false, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, nil, offset, st, false, err
+		return nil, nil, nil, offset, st, false, err
 	}
 	if offset > info.Size() {
 		offset, st, reset = 0, ContextState{LastTurn: -1}, true
 	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, nil, offset, st, reset, err
+		return nil, nil, nil, offset, st, reset, err
 	}
 	next = offset
 	outIdx := map[string]int{} // tool_use_id -> posição em outs
@@ -124,7 +165,7 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 			if errors.Is(rerr, io.EOF) {
 				break // linha sem \n final não é lida
 			}
-			return outs, turns, next, st, reset, rerr
+			return outs, turns, prompts, next, st, reset, rerr
 		}
 		next += int64(len(line))
 		var l ctxLine
@@ -151,7 +192,13 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 						st.LastTurn++
 						st.LastMessageID = l.Message.ID
 					}
-					ct := ContextTurn{Turn: st.LastTurn, Segment: st.Segment, MessageID: l.Message.ID, At: at, Tokens: tokens}
+					ct := ContextTurn{Turn: st.LastTurn, Segment: st.Segment, MessageID: l.Message.ID, At: at, Tokens: tokens,
+						Input: u.Input, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, UUID: l.UUID, ParentUUID: l.ParentUUID}
+					if c := u.Creation; c != nil && c.H1 > 0 {
+						ct.TTL = "1h"
+					} else if c != nil && c.M5 > 0 {
+						ct.TTL = "5m"
+					}
 					if i, ok := turnIdx[ct.Turn]; ok {
 						turns[i] = ct
 					} else {
@@ -166,12 +213,16 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 					name, key := toolKey(b.Name, b.Input)
 					outIdx[b.ID] = len(outs)
 					outs = append(outs, ToolOutput{ItemID: b.ID, Tool: name, Key: key,
-						InTokens: EstimateTokens(int64(len(b.Input)), 0), Turn: st.LastTurn, Segment: st.Segment, At: at})
+						InTokens: EstimateTokens(int64(len(b.Input)), 0), Turn: st.LastTurn, Segment: st.Segment, At: at,
+						UUID: l.UUID, ParentUUID: l.ParentUUID})
 				}
 			}
 		case "user":
 			if l.Message == nil {
 				continue
+			}
+			if text, ok := promptText(l.Message.Content); ok && !l.IsMeta && !l.IsCompactSummary {
+				prompts = append(prompts, Prompt{UUID: l.UUID, ParentUUID: l.ParentUUID, Text: text, At: at})
 			}
 			for _, b := range contentBlocks(l.Message.Content) {
 				if b.Type != "tool_result" || b.ToolUseID == "" {
@@ -183,7 +234,8 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 					continue
 				}
 				outs = append(outs, ToolOutput{ItemID: b.ToolUseID, Bytes: bytes, Tokens: EstimateTokens(bytes, images),
-					Turn: st.LastTurn, Segment: st.Segment, At: at, IsError: b.IsError, Result: true})
+					Turn: st.LastTurn, Segment: st.Segment, At: at, IsError: b.IsError, Result: true,
+					UUID: l.UUID, ParentUUID: l.ParentUUID})
 			}
 		case "attachment":
 			if l.Attachment == nil || l.UUID == "" {
@@ -192,11 +244,42 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 			if o, ok := hookOutput(l.UUID, l.Attachment.Type, l.Attachment.HookEvent, l.Attachment.Command,
 				l.Attachment.Stdout, l.Attachment.BlockingError); ok {
 				o.Turn, o.Segment, o.At = st.LastTurn, st.Segment, at
+				o.UUID, o.ParentUUID = l.UUID, l.ParentUUID
 				outs = append(outs, o)
 			}
 		}
 	}
-	return outs, turns, next, st, reset, nil
+	return outs, turns, prompts, next, st, reset, nil
+}
+
+// promptText devolve o texto de um prompt do usuário (regra em Prompt):
+// content string, ou os blocos text de uma lista sem tool_result.
+func promptText(raw json.RawMessage) (string, bool) {
+	var text string
+	switch {
+	case len(raw) == 0:
+		return "", false
+	case raw[0] == '"':
+		if json.Unmarshal(raw, &text) != nil {
+			return "", false
+		}
+	default:
+		var parts []string
+		for _, b := range contentBlocks(raw) {
+			switch b.Type {
+			case "tool_result":
+				return "", false
+			case "text":
+				parts = append(parts, b.Text)
+			}
+		}
+		text = strings.Join(parts, "\n")
+	}
+	lead := strings.TrimLeft(text, " \t\r\n")
+	if lead == "" || strings.HasPrefix(lead, "<command-") || strings.HasPrefix(lead, "<local-command") {
+		return "", false
+	}
+	return text, true
 }
 
 // contentBlocks decodifica message.content quando é lista (string vira nada).

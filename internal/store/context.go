@@ -79,11 +79,12 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 		}
 	}
 	for _, t := range turns {
-		if _, err := tx.Exec(`INSERT INTO context_turns (session_id, path, turn, segment, message_id, at, tokens)
-			VALUES (?,?,?,?,?,?,?)
+		if _, err := tx.Exec(`INSERT INTO context_turns (session_id, path, turn, segment, message_id, at, tokens, input, cache_read, cache_write, ttl)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(session_id, path, turn) DO UPDATE SET segment=excluded.segment,
-			  message_id=excluded.message_id, at=excluded.at, tokens=excluded.tokens`,
-			sessionID, path, t.Turn, t.Segment, t.MessageID, fmtTime(t.At), t.Tokens); err != nil {
+			  message_id=excluded.message_id, at=excluded.at, tokens=excluded.tokens,
+			  input=excluded.input, cache_read=excluded.cache_read, cache_write=excluded.cache_write, ttl=excluded.ttl`,
+			sessionID, path, t.Turn, t.Segment, t.MessageID, fmtTime(t.At), t.Tokens, t.Input, t.CacheRead, t.CacheWrite, t.TTL); err != nil {
 			return err
 		}
 	}
@@ -92,6 +93,28 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 		ON CONFLICT(session_id, path) DO UPDATE SET tool_offset=excluded.tool_offset, segment=excluded.segment`,
 		sessionID, path, next, st.Segment); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+// ResetContextMeasurement apaga toda a medição de contexto (turnos e saídas)
+// e volta o cursor de contexto de todos os transcripts ao começo (tool_offset
+// e segment 0), numa transação, para a próxima leitura refazer tudo. O offset
+// de uso e as linhas de usage não mudam.
+func (s *Store) ResetContextMeasurement() error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`UPDATE transcript_offsets SET tool_offset=0, segment=0`,
+		`DELETE FROM context_turns`,
+		`DELETE FROM tool_outputs`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
