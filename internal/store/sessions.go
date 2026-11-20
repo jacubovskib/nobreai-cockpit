@@ -138,10 +138,13 @@ func (s *Store) GetSession(id string) (domain.Session, error) {
 	return x, err
 }
 
-// SessionByPID devolve a sessão não encerrada mais recente com esse PID, ou nil.
+// SessionByPID devolve a sessão não encerrada com esse PID que o processo
+// está usando: a viva primeiro, depois a de atividade mais recente; nil se não
+// houver.
 func (s *Store) SessionByPID(pid int) (*domain.Session, error) {
 	x, err := scanSession(s.DB.QueryRow(`SELECT `+sessionCols+` FROM sessions
-		WHERE pid=? AND ended_at IS NULL ORDER BY julianday(started_at) DESC LIMIT 1`, pid))
+		WHERE pid=? AND ended_at IS NULL
+		ORDER BY (`+liveCond+`) DESC, julianday(last_event_at) DESC, julianday(started_at) DESC, id DESC LIMIT 1`, pid))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

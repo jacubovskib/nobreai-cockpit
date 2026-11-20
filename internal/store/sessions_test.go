@@ -79,6 +79,32 @@ func TestSessionByPID(t *testing.T) {
 	}
 }
 
+// Duas sessões não encerradas com o mesmo PID: vale a que o processo está
+// usando (viva, com a atividade mais recente), não a de início mais recente.
+func TestSessionByPIDPrefersLiveAndRecentActivity(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+	older := newSession("claude:older", 10)
+	older.StartedAt, older.LastEventAt = now.Add(-2*time.Hour), now
+	newer := newSession("claude:newer", 10)
+	newer.StartedAt, newer.LastEventAt = now.Add(-time.Hour), now.Add(-30*time.Minute)
+	for _, x := range []domain.Session{older, newer} {
+		if err := s.StartSession(x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := s.SessionByPID(10); err != nil || got == nil || got.ID != "claude:older" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	// Processo dado como morto (carência) perde para a viva.
+	if err := s.MarkPIDDead("claude:older", now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.SessionByPID(10); got == nil || got.ID != "claude:newer" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestSessionByProviderPID(t *testing.T) {
 	s := newTestStore(t)
 	main := newSession("claude:S", 100)

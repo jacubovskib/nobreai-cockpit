@@ -33,6 +33,10 @@ type Adapter struct {
 	// branch que a sessão tinha antes. Só em memória: perder a marca num
 	// restart só deixa o card onde estava.
 	outsideSwitch sync.Map
+	// childUnwarned guarda as sessões filhas criadas fora do SessionStart que
+	// ainda não receberam a linha da filha (chave: ID da sessão). Só em
+	// memória: perder a marca num restart só deixa de mandar a linha.
+	childUnwarned sync.Map
 	// alive diz se o processo do agente com esse PID ainda existe (decide
 	// entre sessão filha e retomada); padrão: /proc, com o nome do processo
 	// do Claude (um PID reaproveitado por outro programa não conta).

@@ -97,7 +97,11 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 	case "SessionStart":
 		return a.sessionStart(sess, p, h.Env, now)
 	case "UserPromptSubmit":
-		notice, noticed := a.noticeReply(sess, p, event, now)
+		var child string
+		if _, pending := a.childUnwarned.LoadAndDelete(sess.ID); pending {
+			child = childPhrase // a filha nasceu fora do SessionStart
+		}
+		notice, noticed := contextReply(event, child, a.noticeText(sess, p, now))
 		if sess.FullCapture {
 			a.event(sess.ID, domain.EvPrompt, map[string]any{"text": p.Prompt}, now)
 		} else {
@@ -244,6 +248,11 @@ func (a *Adapter) createChild(main domain.Session, p payload, pid int, event str
 	// releitura devolve a que ficou.
 	if err := a.st.StartSession(x); err != nil {
 		return x, err
+	}
+	if event != "SessionStart" {
+		// Sem SessionStart (o daemon foi instalado ou voltou com a conversa
+		// aberta): a linha da filha vai no próximo prompt.
+		a.childUnwarned.Store(id, true)
 	}
 	a.publish("sessions")
 	sess, err := a.st.GetSession(id)

@@ -31,26 +31,47 @@ func configNotice(seen *domain.SeenConfig, fullCapture bool, set domain.Settings
 // desde o que a sessão viu. O swap compara e troca o registro, então hooks
 // simultâneos geram um único aviso. Falhas só impedem o aviso.
 func (a *Adapter) noticeReply(sess domain.Session, p payload, event string, now time.Time) (adapter.HookReply, bool) {
+	return contextReply(event, a.noticeText(sess, p, now))
+}
+
+// noticeText é o texto do aviso de configuração ("" sem nada a dizer); ver
+// noticeReply.
+func (a *Adapter) noticeText(sess domain.Session, p payload, now time.Time) string {
 	if p.AgentID != "" {
-		return adapter.HookReply{}, false
+		return ""
 	}
 	set, err := a.st.GetSettings()
 	if err != nil {
-		return adapter.HookReply{}, false
+		return ""
 	}
 	text, nu := configNotice(sess.SeenConfig, sess.FullCapture, set)
 	if sess.SeenConfig != nil && nu == *sess.SeenConfig {
-		return adapter.HookReply{}, false
+		return ""
 	}
 	ok, err := a.st.SwapSeenConfig(sess.ID, sess.SeenConfig, nu)
 	if err != nil || !ok || text == "" {
-		return adapter.HookReply{}, false
+		return ""
 	}
 	first, _, _ := strings.Cut(text, "\n")
 	_ = a.st.AddConfigLog(domain.LogAgentNotified, map[string]any{"session": sess.ID, "text": first}, now)
+	return text
+}
+
+// contextReply entrega os textos não vazios ao agente como additionalContext
+// do evento; false quando não há nada a dizer.
+func contextReply(event string, texts ...string) (adapter.HookReply, bool) {
+	var parts []string
+	for _, t := range texts {
+		if t != "" {
+			parts = append(parts, t)
+		}
+	}
+	if len(parts) == 0 {
+		return adapter.HookReply{}, false
+	}
 	r, err := jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 		"hookEventName":     event,
-		"additionalContext": text,
+		"additionalContext": strings.Join(parts, "\n\n"),
 	}})
 	if err != nil {
 		return adapter.HookReply{}, false

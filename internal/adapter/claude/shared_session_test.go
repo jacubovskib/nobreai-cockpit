@@ -2,11 +2,13 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -310,4 +312,75 @@ func mustSettings(t *testing.T, e *env) domain.Settings {
 		t.Fatal(err)
 	}
 	return set
+}
+
+// promptContext lê o additionalContext da resposta do UserPromptSubmit ("" sem
+// resposta).
+func promptContext(t *testing.T, r adapter.HookReply) string {
+	t.Helper()
+	if r.Stdout == "" {
+		return ""
+	}
+	var out struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(r.Stdout), &out); err != nil || out.HookSpecificOutput.HookEventName != "UserPromptSubmit" {
+		t.Fatalf("stdout = %q (%v)", r.Stdout, err)
+	}
+	return out.HookSpecificOutput.AdditionalContext
+}
+
+// Filha criada no meio da conversa (sem SessionStart, como logo depois da
+// instalação): a linha da filha vai no primeiro prompt dela, uma vez só.
+func TestUserPromptSubmit_ChildLineOnceWithoutSessionStart(t *testing.T) {
+	e := newEnv(t)
+	e.alive[100], e.alive[200] = true, true
+	e.project(t)
+	e.call(t, "session_start", withPID(100))
+	// A filha nasce num PostToolUse; o próximo prompt dela leva a linha.
+	if r := e.call(t, "post_tool_use_read", withPID(200)); r.Stdout != "" {
+		t.Fatalf("PostToolUse = %q", r.Stdout)
+	}
+	if got := promptContext(t, e.call(t, "user_prompt_submit", withPID(200))); got != childLine {
+		t.Fatalf("primeiro prompt da filha = %q", got)
+	}
+	if got := promptContext(t, e.call(t, "user_prompt_submit", withPID(200))); got != "" {
+		t.Fatalf("segundo prompt da filha = %q", got)
+	}
+	if got := promptContext(t, e.call(t, "user_prompt_submit", withPID(100))); got != "" {
+		t.Fatalf("prompt da principal = %q", got)
+	}
+}
+
+func TestUserPromptSubmit_ChildLineWithNotice(t *testing.T) {
+	e := newEnv(t)
+	e.alive[100], e.alive[200] = true, true
+	e.project(t)
+	e.call(t, "session_start", withPID(100))
+	e.call(t, "post_tool_use_read", withPID(200))
+	// A configuração muda depois que a filha registrou o que viu.
+	set := mustSettings(t, e)
+	set.AgentCreatesCards = !set.AgentCreatesCards
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	got := promptContext(t, e.call(t, "user_prompt_submit", withPID(200)))
+	if !strings.HasPrefix(got, childLine+"\n\n") || !strings.Contains(got, "a configuração mudou") {
+		t.Fatalf("contexto = %q", got)
+	}
+}
+
+// Filha que nasceu no SessionStart já recebeu a linha lá: o prompt não repete.
+func TestUserPromptSubmit_NoChildLineAfterSessionStart(t *testing.T) {
+	e := newEnv(t)
+	e.alive[100], e.alive[200] = true, true
+	e.project(t)
+	e.call(t, "session_start", withPID(100))
+	e.call(t, "session_start_resume", withPID(200))
+	if got := promptContext(t, e.call(t, "user_prompt_submit", withPID(200))); strings.Contains(got, childLine) {
+		t.Fatalf("prompt repetiu a linha: %q", got)
+	}
 }
