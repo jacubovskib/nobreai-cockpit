@@ -61,11 +61,11 @@ Quando o contexto trouxer a frase "NobreAI Cockpit: esta pasta não está cadast
 
 ## Memórias
 
-O contexto da sessão traz as memórias do projeto: regras curtas que valem além de um card. Siga-as; não leia nem edite `.claude/napkin.md`.
+Quando o início da sessão trouxer o bloco de memórias do Cockpit ("Memórias deste projeto"), siga essas regras curtas, que valem além de um card, e não leia nem edite `.claude/napkin.md`.
 
-- Grave com `nobre lembrar "<regra>" --faca "<o que fazer>" --cat shell`: regra que se repete, armadilha recorrente ou diretiva do usuário, sempre com um "faça assim" acionável.
+- Grave com `nobre lembrar "<regra>" --faca "<o que fazer>" --cat shell`: regra que se repete, armadilha recorrente ou diretiva do usuário, sempre com um "faça assim" acionável (`--faca` é obrigatório).
 - Não grave log de sessão nem detalhe de um card só: isso vai no card (`nobre note`, `nobre decide`).
-- O escopo padrão é o projeto (`--escopo raiz` para o monorepo todo); use `--escopo global` só para algo que vale em todo projeto.
+- O escopo padrão é o projeto (`--escopo raiz` para o monorepo todo); use `--escopo global` só para algo que vale em todo projeto: ela só passa a valer depois que o usuário aprovar na página Memórias.
 - Busque com `nobre memorias <termo>` (também mostra as que ficaram fora do limite).
 
 ## Como manter o card útil

@@ -75,3 +75,19 @@ func TestGroupImportDesempenho(t *testing.T) {
 		t.Fatalf("GroupImport levou %v", d)
 	}
 }
+
+// Só o primeiro item parecido de cada projeto entra no grupo: o "push" do
+// projeto 1 não some dentro da global do "commit".
+func TestGroupImportUmItemPorProjetoNoGrupo(t *testing.T) {
+	per := map[int64][]NapkinItem{
+		1: {{Rule: "rode go test antes do commit"}, {Rule: "rode go test antes do push"}},
+		2: {{Rule: "rode go test antes de commitar"}},
+	}
+	global, local := GroupImport(per)
+	if len(global) != 1 || global[0].Item.Rule != "rode go test antes do commit" || len(global[0].ProjectIDs) != 2 {
+		t.Fatalf("global = %+v", global)
+	}
+	if len(local[1]) != 1 || local[1][0].Rule != "rode go test antes do push" || len(local[2]) != 0 {
+		t.Fatalf("local = %+v", local)
+	}
+}

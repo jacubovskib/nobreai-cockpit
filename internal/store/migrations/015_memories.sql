@@ -6,6 +6,10 @@ CREATE TABLE memories (
   workspace_id TEXT NOT NULL DEFAULT 'local',
   owner_id TEXT NOT NULL DEFAULT 'me',
   project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+  -- Projeto onde a memória nasceu (NULL = nasceu global). Gravado na criação e
+  -- nunca alterado pelo Cockpit: a deduplicação de candidatas continua valendo
+  -- depois de uma mudança de escopo. Excluir o projeto zera a origem.
+  origin_project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
   category TEXT NOT NULL CHECK (category IN ('execucao','shell','dominio','diretiva')),
   rule TEXT NOT NULL,
   rule_norm TEXT NOT NULL,

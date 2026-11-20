@@ -4,12 +4,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
 
 func mem(pid *int64, cat, rule string) domain.Memory {
-	return domain.Memory{ProjectID: pid, Category: cat, Rule: rule, Status: "ativa", Source: "usuario"}
+	return domain.Memory{ProjectID: pid, Category: cat, Rule: rule, Do: "faça assim", Status: "ativa", Source: "usuario"}
 }
 
 func TestMemorySettingsDefault(t *testing.T) {
@@ -35,7 +36,8 @@ func TestCreateMemoryCleansAndValidates(t *testing.T) {
 		"longa":     mem(nil, "shell", strings.Repeat("a", 301)),
 		"acao":      {Category: "shell", Rule: "r", Do: strings.Repeat("a", 401), Status: "ativa", Source: "usuario"},
 		"cand4001":  {Category: "shell", Rule: strings.Repeat("a", 4001), Status: "candidata", Source: "napkin"},
-		"status":    {Category: "shell", Rule: "r", Status: "zzz", Source: "usuario"},
+		"status":    {Category: "shell", Rule: "r", Do: "x", Status: "zzz", Source: "usuario"},
+		"semAcao":   {Category: "shell", Rule: "r", Status: "ativa", Source: "usuario"},
 	} {
 		if _, err := s.CreateMemory(bad); err == nil {
 			t.Errorf("%s: esperava erro", name)
@@ -55,27 +57,42 @@ func TestUpdateAndDeleteMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Rule != "outra linha" || u.Category != "dominio" || u.ProjectID == nil || !u.NeedsReview {
+	// Texto editado que cabe e tem ação: a revisão está feita.
+	if u.Rule != "outra linha" || u.Category != "dominio" || u.ProjectID == nil || u.NeedsReview {
 		t.Fatalf("u = %+v", u)
+	}
+	u.NeedsReview = true
+	if u, err = s.UpdateMemory(u); err != nil || !u.NeedsReview {
+		t.Fatalf("sem mudar o texto, needs_review fica: %+v %v", u, err)
 	}
 	u.Rule = ""
 	if _, err := s.UpdateMemory(u); err == nil {
 		t.Error("regra vazia deveria falhar")
 	}
-	if _, err := s.UpdateMemory(domain.Memory{ID: 999, Category: "shell", Rule: "x", Status: "ativa", Source: "usuario"}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.UpdateMemory(domain.Memory{ID: 999, Category: "shell", Rule: "x", Do: "y", Status: "ativa", Source: "usuario"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v", err)
 	}
-	if err := s.DeleteMemory(u.ID); err == nil {
+	if err := s.DiscardArchivedMemory(u.ID); err == nil {
 		t.Error("ativa não pode ser excluída")
 	}
 	u.Rule, u.Status = "outra linha", "arquivada"
 	if _, err := s.UpdateMemory(u); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteMemory(u.ID); err != nil {
+	if err := s.DiscardArchivedMemory(u.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteMemory(u.ID); !errors.Is(err, ErrNotFound) {
+	// Excluir deixa a lápide descartada, que a lista padrão esconde.
+	if g, err := s.GetMemory(u.ID); err != nil || g.Status != "descartada" {
+		t.Fatalf("g = %+v err = %v", g, err)
+	}
+	if l, _ := s.ListMemories(MemoryFilter{}); len(l) != 0 {
+		t.Fatalf("lápide visível: %+v", l)
+	}
+	if err := s.DiscardArchivedMemory(u.ID); err == nil {
+		t.Error("descartada não pode ser excluída de novo")
+	}
+	if err := s.DiscardArchivedMemory(999); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -315,14 +332,132 @@ func TestMemoriesForSessionWithoutProjectGetsGlobals(t *testing.T) {
 
 func TestImportMemoriesRollsBack(t *testing.T) {
 	s := newTestStore(t)
-	_, _, err := s.ImportMemories([]domain.Memory{
-		{Category: "shell", Rule: "ok", Status: "candidata", Source: "napkin"},
-		{Category: "zzz", Rule: "ruim", Status: "candidata", Source: "napkin"},
+	_, _, err := s.ImportMemories([]ImportItem{
+		{Memory: domain.Memory{Category: "shell", Rule: "ok", Status: "candidata", Source: "napkin"}},
+		{Memory: domain.Memory{Category: "zzz", Rule: "ruim", Status: "candidata", Source: "napkin"}},
 	})
 	if err == nil {
 		t.Fatal("esperava erro")
 	}
 	if l, _ := s.ListMemories(MemoryFilter{}); len(l) != 0 {
 		t.Fatalf("não desfez: %+v", l)
+	}
+}
+
+// cand é uma candidata da importação no escopo pid, vinda dos projetos from.
+func cand(pid *int64, rule string, from ...int64) ImportItem {
+	return ImportItem{Memory: domain.Memory{ProjectID: pid, Category: "shell", Rule: rule, Status: "candidata", Source: "napkin"}, From: from}
+}
+
+func importN(t *testing.T, s *Store, items ...ImportItem) int {
+	t.Helper()
+	n, _, err := s.ImportMemories(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func setStatusScope(t *testing.T, s *Store, rule string, pid *int64, status string) {
+	t.Helper()
+	ms, _ := s.ListMemories(MemoryFilter{Term: rule})
+	if len(ms) != 1 {
+		t.Fatalf("achou %d para %q", len(ms), rule)
+	}
+	m := ms[0]
+	m.ProjectID, m.Status = pid, status
+	if m.Do == "" {
+		m.Do = "faça assim"
+	}
+	if _, err := s.UpdateMemory(m); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Repro (a): R importada em A e descartada; depois A e B têm R: nada volta.
+func TestImportDedupeDiscardedLocalBlocksGlobal(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateProject("a", "/w/a")
+	b, _ := s.CreateProject("b", "/w/b")
+	importN(t, s, cand(&a.ID, "rode os testes", a.ID))
+	setStatusScope(t, s, "rode os testes", &a.ID, "descartada")
+	if n := importN(t, s, cand(nil, "Rode os testes!", a.ID, b.ID)); n != 0 {
+		t.Fatalf("recriou %d", n)
+	}
+}
+
+// Repro (b): candidata de A movida para global e aprovada: reimportar de A não cria.
+func TestImportDedupeMovedToGlobal(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateProject("a", "/w/a")
+	importN(t, s, cand(&a.ID, "rode os testes", a.ID))
+	setStatusScope(t, s, "rode os testes", nil, "ativa")
+	if n := importN(t, s, cand(&a.ID, "rode os testes", a.ID)); n != 0 {
+		t.Fatalf("recriou %d", n)
+	}
+}
+
+// Repro (c): candidata global movida para A: reimportar a global não cria.
+func TestImportDedupeGlobalMovedToProject(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateProject("a", "/w/a")
+	b, _ := s.CreateProject("b", "/w/b")
+	importN(t, s, cand(nil, "rode os testes", a.ID, b.ID))
+	setStatusScope(t, s, "rode os testes", &a.ID, "candidata")
+	if n := importN(t, s, cand(nil, "rode os testes", a.ID, b.ID)); n != 0 {
+		t.Fatalf("recriou %d", n)
+	}
+	// Outro projeto sem relação com a regra ainda recebe a sua.
+	c, _ := s.CreateProject("c", "/w/c")
+	if n := importN(t, s, cand(&c.ID, "rode os testes", c.ID)); n != 1 {
+		t.Fatalf("projeto c = %d", n)
+	}
+}
+
+// Repro (d): candidata de card movida para global: concluir o card de novo não recria.
+func TestCardCandidateMovedToGlobal(t *testing.T) {
+	s := newTestStore(t)
+	p, _ := s.CreateProject("api", "/w/api")
+	c, _ := s.CreateCard(domain.Card{Title: "t", ProjectID: p.ID})
+	s.AddDecision(domain.Decision{CardID: c.ID, What: "Usar WAL", Why: "leituras concorrentes"})
+	if n, err := s.CardMemoryCandidates(c.ID); err != nil || n != 1 {
+		t.Fatalf("n = %d err = %v", n, err)
+	}
+	setStatusScope(t, s, "usar wal", nil, "candidata")
+	if n, err := s.CardMemoryCandidates(c.ID); err != nil || n != 0 {
+		t.Fatalf("recriou n = %d err = %v", n, err)
+	}
+}
+
+func TestImportKeepsNapkinDate(t *testing.T) {
+	s := newTestStore(t)
+	day := time.Date(2026, 3, 4, 0, 0, 0, 0, time.Local)
+	it := cand(nil, "com data")
+	it.Memory.CreatedAt = day
+	importN(t, s, it)
+	ms, _ := s.ListMemories(MemoryFilter{})
+	if len(ms) != 1 || !ms[0].CreatedAt.Equal(day) || ms[0].UpdatedAt.Before(day.Add(24*time.Hour)) {
+		t.Fatalf("ms = %+v", ms)
+	}
+}
+
+func TestBecomingActiveGoesToEndOfGroup(t *testing.T) {
+	s := newTestStore(t)
+	c, _ := s.CreateMemory(domain.Memory{Category: "shell", Rule: "candidata", Do: "x", Status: "candidata", Source: "card"})
+	s.CreateMemory(mem(nil, "shell", "um"))
+	s.CreateMemory(mem(nil, "shell", "dois"))
+	c.Status = "ativa"
+	if _, err := s.UpdateMemory(c); err != nil {
+		t.Fatal(err)
+	}
+	ms, _ := s.ListMemories(MemoryFilter{Status: "ativa"})
+	if len(ms) != 3 || ms[2].Rule != "candidata" {
+		t.Fatalf("ordem: %+v", ms)
+	}
+	// Sem ação não vira ativa.
+	n, _ := s.CreateMemory(domain.Memory{Category: "shell", Rule: "sem ação", Status: "candidata", Source: "card"})
+	n.Status = "ativa"
+	if _, err := s.UpdateMemory(n); err == nil || !strings.Contains(err.Error(), "falta o faça assim") {
+		t.Fatalf("err = %v", err)
 	}
 }

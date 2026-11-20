@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/memory"
@@ -30,7 +31,7 @@ func (s *server) memoryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/memories/import", s.importMemories)
 	mux.HandleFunc("POST /api/memories/batch", s.batchMemories)
 	mux.HandleFunc("PATCH /api/memories/{id}", s.patchMemory)
-	mux.HandleFunc("DELETE /api/memories/{id}", s.deleteMemory)
+	mux.HandleFunc("DELETE /api/memories/{id}", s.deleteMemory) // não apaga: vira descartada
 	mux.HandleFunc("POST /api/memories/{id}/move", s.moveMemory)
 	mux.HandleFunc("POST /api/me/remember", s.withSession(s.meRemember))
 	mux.HandleFunc("GET /api/me/memories", s.withSession(s.meMemories))
@@ -103,8 +104,18 @@ func (s *server) listMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exact := r.URL.Query().Get("exact") == "1"
+	// family=1 numa raiz: também as memórias dos apps (filhos), que não são herdadas.
+	family := r.URL.Query().Get("family") == "1" && p != nil && p.ParentID == nil
 	if p != nil {
 		f.ProjectIDs = []int64{p.ID}
+		if family {
+			ids, err := s.st.FamilyIDs(p.ID)
+			if err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+			f.ProjectIDs = ids
+		}
 		if !exact {
 			if root := store.RootID(*p); root != p.ID {
 				f.ProjectIDs = append(f.ProjectIDs, root)
@@ -120,6 +131,9 @@ func (s *server) listMemories(w http.ResponseWriter, r *http.Request) {
 	out := make([]memoryOut, 0, len(list))
 	for _, m := range list {
 		inherited := p != nil && (m.ProjectID == nil || *m.ProjectID != p.ID)
+		if family && m.ProjectID != nil {
+			inherited = false // da raiz ou de um app da família
+		}
 		out = append(out, memoryOut{m, inherited})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -236,12 +250,15 @@ func (s *server) patchMemory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, m)
 }
 
+// deleteMemory é o "Excluir" das arquivadas. Não apaga a linha: a memória
+// vira descartada (escondida da página e da sessão) e continua barrando a
+// reimportação da mesma regra.
 func (s *server) deleteMemory(w http.ResponseWriter, r *http.Request) {
 	id, ok := memoryID(w, r)
 	if !ok {
 		return
 	}
-	if err := s.st.DeleteMemory(id); err != nil {
+	if err := s.st.DiscardArchivedMemory(id); err != nil {
 		writeMemoryError(w, err)
 		return
 	}
@@ -425,23 +442,32 @@ func (s *server) importMemories(w http.ResponseWriter, r *http.Request) {
 	}
 	global, local := memory.GroupImport(perProject)
 	// Texto vai inteiro (só o teto de segurança do store); acima de 300/400 a
-	// candidata sai com needs_review.
-	var batch []domain.Memory
-	add := func(pid *int64, it memory.NapkinItem, ref string) {
+	// candidata sai com needs_review. A data do item, quando há, vira a criação.
+	var batch []store.ImportItem
+	add := func(pid *int64, from []int64, it memory.NapkinItem, ref string) {
 		rule, _ := memory.CleanText(it.Rule, 4000)
 		do, _ := memory.CleanText(it.Do, 4000)
 		if rule == "" {
 			return
 		}
-		batch = append(batch, domain.Memory{ProjectID: pid, Category: string(it.Category), Rule: rule, Do: do,
-			Status: "candidata", Source: "napkin", SourceRef: ref, NeedsReview: it.NeedsReview})
+		m := domain.Memory{ProjectID: pid, Category: string(it.Category), Rule: rule, Do: do,
+			Status: "candidata", Source: "napkin", SourceRef: ref, NeedsReview: it.NeedsReview}
+		if it.Date != "" {
+			if d, err := time.ParseInLocation("2006-01-02", it.Date, time.Local); err == nil {
+				m.CreatedAt = d
+			}
+		}
+		batch = append(batch, store.ImportItem{Memory: m, From: from})
 	}
+	// merged: itens dos napkin.md que foram unidos numa candidata global.
+	merged := 0
 	for _, g := range global {
 		var refs []string
 		for _, id := range g.ProjectIDs {
 			refs = append(refs, paths[id])
 		}
-		add(nil, g.Item, strings.Join(refs, "; "))
+		merged += len(g.ProjectIDs)
+		add(nil, g.ProjectIDs, g.Item, strings.Join(refs, "; "))
 	}
 	ids := make([]int64, 0, len(local))
 	for id := range local {
@@ -451,7 +477,7 @@ func (s *server) importMemories(w http.ResponseWriter, r *http.Request) {
 	for _, id := range ids {
 		pid := id
 		for _, it := range local[id] {
-			add(&pid, it, paths[id])
+			add(&pid, []int64{pid}, it, paths[id])
 		}
 	}
 	created, skipped, err := s.st.ImportMemories(batch)
@@ -462,7 +488,7 @@ func (s *server) importMemories(w http.ResponseWriter, r *http.Request) {
 	if created > 0 {
 		s.publish("memories")
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"created": created, "skipped": skipped, "files": files})
+	writeJSON(w, http.StatusOK, map[string]any{"created": created, "skipped": skipped, "merged": merged, "files": files})
 }
 
 func readNapkin(path string) ([]memory.NapkinItem, error) {
@@ -502,8 +528,11 @@ func (s *server) meRemember(w http.ResponseWriter, r *http.Request, sess domain.
 		in.Scope = "projeto"
 	}
 	var pid *int64
+	// Global vale em todo projeto: a do agente vai para a fila de aprovação.
+	status := "ativa"
 	switch in.Scope {
 	case "global":
+		status = "candidata"
 	case "projeto", "raiz":
 		p, err := s.st.EffectiveProject(sess)
 		if err != nil {
@@ -524,7 +553,7 @@ func (s *server) meRemember(w http.ResponseWriter, r *http.Request, sess domain.
 		return
 	}
 	m, err := s.st.CreateMemory(domain.Memory{ProjectID: pid, Category: in.Category, Rule: in.Rule, Do: in.Do,
-		Status: "ativa", Source: "agente"})
+		Status: status, Source: "agente"})
 	if err != nil {
 		writeMemoryError(w, err)
 		return

@@ -399,7 +399,8 @@ type RememberResult struct {
 	} `json:"similar"`
 }
 
-// Remember grava uma memória ativa (escopo projeto, raiz ou global) para a sessão.
+// Remember grava uma memória para a sessão: ativa no escopo projeto ou raiz;
+// global vira candidata, à espera da aprovação do usuário.
 func (c *Client) Remember(ctx context.Context, rule, do, category, scope string) (RememberResult, error) {
 	var r RememberResult
 	err := c.Do(ctx, "POST", "/api/me/remember", map[string]string{"rule": rule, "do": do, "category": category, "scope": scope}, &r)

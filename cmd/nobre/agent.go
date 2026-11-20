@@ -343,9 +343,9 @@ func derefID(p *int64) int64 {
 }
 
 func (c *cli) lembrar(args []string) error {
-	const u = `uso: nobre lembrar "<regra>" [--faca "<ação>"] [--cat execucao|shell|dominio|diretiva] [--escopo projeto|raiz|global]`
+	const u = `uso: nobre lembrar "<regra>" --faca "<ação>" [--cat execucao|shell|dominio|diretiva] [--escopo projeto|raiz|global]`
 	fs := flag.NewFlagSet("lembrar", flag.ContinueOnError)
-	do := fs.String("faca", "", "o que fazer em vez disso")
+	do := fs.String("faca", "", "o que fazer em vez disso (obrigatório)")
 	cat := fs.String("cat", "dominio", "categoria: execucao, shell, dominio ou diretiva")
 	scope := fs.String("escopo", "projeto", "escopo: projeto, raiz ou global")
 	pos, err := c.parse(fs, args)
@@ -353,14 +353,19 @@ func (c *cli) lembrar(args []string) error {
 		return err
 	}
 	rule := joinText(pos)
-	if rule == "" {
+	if rule == "" || strings.TrimSpace(*do) == "" {
 		return usagef(u)
 	}
 	r, err := c.client().Remember(ctx(), rule, *do, *cat, *scope)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(c.out, "Memória #%d gravada (%s).\n", r.ID, r.Scope)
+	if r.Status == "candidata" {
+		// Global do agente: só vale depois que o usuário aprovar.
+		fmt.Fprintf(c.out, "Memória global #%d enviada para aprovação na página Memórias.\n", r.ID)
+	} else {
+		fmt.Fprintf(c.out, "Memória #%d gravada (%s).\n", r.ID, r.Scope)
+	}
 	for _, s := range r.Similar {
 		fmt.Fprintf(c.out, "Parecida com #%d: %s\n", s.ID, s.Rule)
 	}

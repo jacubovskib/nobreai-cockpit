@@ -13,8 +13,8 @@ type Grouped struct {
 
 type cluster struct {
 	rep     NapkinItem
-	words   []int32 // palavras da regra representante, ordenadas
-	members map[int64][]NapkinItem
+	words   []int32              // palavras da regra representante, ordenadas
+	members map[int64]NapkinItem // um item por projeto
 }
 
 // internWords troca as palavras por números ordenados: a comparação vira uma
@@ -65,7 +65,9 @@ func similarSets(a, b []int32) bool {
 
 // GroupImport separa os itens lidos dos napkin.md: regra igual ou parecida
 // (Similarity >= 0,6) em 2+ projetos vira global; o resto fica no projeto.
-// É puro e determinístico (projetos em ordem de id).
+// Cada projeto entra num grupo com um item só: outro item do mesmo projeto
+// parecido com o grupo procura outro grupo ou abre o seu (e, sozinho, fica
+// local). É puro e determinístico (projetos em ordem de id).
 func GroupImport(perProject map[int64][]NapkinItem) (global []Grouped, local map[int64][]NapkinItem) {
 	local = map[int64][]NapkinItem{}
 	ids := make([]int64, 0, len(perProject))
@@ -81,6 +83,9 @@ func GroupImport(perProject map[int64][]NapkinItem) (global []Grouped, local map
 			words := internWords(wordIDs, it.Rule)
 			if len(words) > 0 { // regra sem palavras nunca se junta a outra
 				for _, c := range clusters {
+					if _, taken := c.members[id]; taken {
+						continue
+					}
 					if len(c.words) > 0 && similarSets(c.words, words) {
 						hit = c
 						break
@@ -88,10 +93,10 @@ func GroupImport(perProject map[int64][]NapkinItem) (global []Grouped, local map
 				}
 			}
 			if hit == nil {
-				hit = &cluster{rep: it, words: words, members: map[int64][]NapkinItem{}}
+				hit = &cluster{rep: it, words: words, members: map[int64]NapkinItem{}}
 				clusters = append(clusters, hit)
 			}
-			hit.members[id] = append(hit.members[id], it)
+			hit.members[id] = it
 		}
 	}
 	for _, c := range clusters {
@@ -104,8 +109,8 @@ func GroupImport(perProject map[int64][]NapkinItem) (global []Grouped, local map
 			global = append(global, g)
 			continue
 		}
-		for id, its := range c.members {
-			local[id] = append(local[id], its...)
+		for id, it := range c.members {
+			local[id] = append(local[id], it)
 		}
 	}
 	return global, local

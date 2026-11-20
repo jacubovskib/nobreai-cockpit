@@ -66,6 +66,9 @@ func cleanMemory(m domain.Memory) (domain.Memory, error) {
 		if doLen > maxMemoryDo {
 			return m, memoryErr("ação acima de 400 caracteres: edite antes de aprovar")
 		}
+		if m.Do == "" {
+			return m, memoryErr("falta o faça assim: edite antes de aprovar")
+		}
 	} else if ruleLen > maxCandidateText || doLen > maxCandidateText {
 		return m, memoryErr("texto acima de 4000 caracteres")
 	}
@@ -105,11 +108,16 @@ func insertMemoryTx(q querier, m domain.Memory) (domain.Memory, error) {
 		return m, err
 	}
 	now := time.Now().UTC()
-	m.CreatedAt, m.UpdatedAt = now, now
-	res, err := q.Exec(`INSERT INTO memories(project_id, category, rule, rule_norm, origin_norm, do_text, status, source, source_ref, position, needs_review, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ProjectID, m.Category, m.Rule, memory.Normalize(m.Rule), memory.Normalize(m.Rule), m.Do, m.Status, m.Source, m.SourceRef,
-		m.Position, m.NeedsReview, fmtTime(now), fmtTime(now))
+	// CreatedAt preenchido (data do item do napkin) é mantido.
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = now
+	}
+	m.CreatedAt, m.UpdatedAt = m.CreatedAt.UTC(), now
+	// origin_project_id: o escopo de nascimento, que não muda depois.
+	res, err := q.Exec(`INSERT INTO memories(project_id, origin_project_id, category, rule, rule_norm, origin_norm, do_text, status, source, source_ref, position, needs_review, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ProjectID, m.ProjectID, m.Category, m.Rule, memory.Normalize(m.Rule), memory.Normalize(m.Rule), m.Do, m.Status, m.Source, m.SourceRef,
+		m.Position, m.NeedsReview, fmtTime(m.CreatedAt), fmtTime(now))
 	if err != nil {
 		return m, fmt.Errorf("criar memória: %w", err)
 	}
@@ -118,14 +126,15 @@ func insertMemoryTx(q querier, m domain.Memory) (domain.Memory, error) {
 }
 
 // CreateMemory limpa e valida a memória e a põe no fim do escopo e categoria.
-// Ativa respeita 300/400 caracteres; candidata aceita até 4000 e marca
+// Ativa respeita 300/400 caracteres e exige ação; candidata aceita até 4000 e marca
 // needs_review quando passa dos limites. Status vazio vira "ativa" e origem vazia vira "usuario".
 func (s *Store) CreateMemory(m domain.Memory) (domain.Memory, error) {
 	return insertMemoryTx(s.DB, m)
 }
 
 // UpdateMemory altera regra, ação, categoria, escopo, status e needs_review.
-// Mudar de escopo ou categoria leva a memória para o fim do novo grupo.
+// Mudar de escopo ou categoria, ou passar a ativa (aprovar, restaurar), leva a
+// memória para o fim do grupo. A origem (origin_norm, origin_project_id) não muda.
 func (s *Store) UpdateMemory(m domain.Memory) (domain.Memory, error) {
 	m, err := cleanMemory(m)
 	if err != nil {
@@ -137,9 +146,9 @@ func (s *Store) UpdateMemory(m domain.Memory) (domain.Memory, error) {
 	}
 	defer tx.Rollback()
 	var curProject *int64
-	var curCat, created, curRule, curDo string
-	err = tx.QueryRow(`SELECT project_id, category, source, source_ref, position, created_at, rule, do_text FROM memories WHERE id=?`, m.ID).
-		Scan(&curProject, &curCat, &m.Source, &m.SourceRef, &m.Position, &created, &curRule, &curDo)
+	var curCat, created, curRule, curDo, curStatus string
+	err = tx.QueryRow(`SELECT project_id, category, source, source_ref, position, created_at, rule, do_text, status FROM memories WHERE id=?`, m.ID).
+		Scan(&curProject, &curCat, &m.Source, &m.SourceRef, &m.Position, &created, &curRule, &curDo, &curStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
 	}
@@ -154,7 +163,8 @@ func (s *Store) UpdateMemory(m domain.Memory) (domain.Memory, error) {
 	}
 	sameScope := (curProject == nil && m.ProjectID == nil) ||
 		(curProject != nil && m.ProjectID != nil && *curProject == *m.ProjectID)
-	if !sameScope || curCat != m.Category {
+	becomesActive := curStatus != "ativa" && m.Status == "ativa"
+	if !sameScope || curCat != m.Category || becomesActive {
 		if m.Position, err = nextMemoryPosition(tx, m.ProjectID, m.Category); err != nil {
 			return m, err
 		}
@@ -171,8 +181,10 @@ func (s *Store) UpdateMemory(m domain.Memory) (domain.Memory, error) {
 	return m, tx.Commit()
 }
 
-// DeleteMemory exclui de vez uma memória arquivada; as demais dão erro.
-func (s *Store) DeleteMemory(id int64) error {
+// DiscardArchivedMemory é o "Excluir" da página (rota DELETE): a memória
+// arquivada vira descartada, um registro escondido que segue barrando a
+// reimportação da mesma regra. As de outro status dão erro.
+func (s *Store) DiscardArchivedMemory(id int64) error {
 	var status string
 	err := s.DB.QueryRow(`SELECT status FROM memories WHERE id=?`, id).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -184,7 +196,8 @@ func (s *Store) DeleteMemory(id int64) error {
 	if status != "arquivada" {
 		return memoryErr("só memórias arquivadas podem ser excluídas")
 	}
-	res, err := s.DB.Exec(`DELETE FROM memories WHERE id=? AND status='arquivada'`, id)
+	res, err := s.DB.Exec(`UPDATE memories SET status='descartada', updated_at=? WHERE id=? AND status='arquivada'`,
+		fmtTime(time.Now().UTC()), id)
 	if err != nil {
 		return err
 	}
@@ -319,9 +332,31 @@ func (s *Store) MemoryExists(projectID *int64, rule string) (bool, error) {
 	return memoryExistsTx(s.DB, projectID, rule)
 }
 
+// candidateExistsTx diz se uma candidata vinda dos projetos from (um só para
+// candidata local; os do grupo para global) já existe: regra ou origem
+// normalizada igual, em qualquer status, numa global, num dos projetos ou
+// nascida num deles. Assim mudar de escopo ou descartar não faz a regra voltar.
+func candidateExistsTx(q querier, rule string, from []int64) (bool, error) {
+	norm := memory.Normalize(rule)
+	cond := "project_id IS NULL"
+	args := []any{norm, norm}
+	if len(from) > 0 {
+		ph := strings.TrimSuffix(strings.Repeat("?,", len(from)), ",")
+		cond += " OR project_id IN (" + ph + ") OR origin_project_id IN (" + ph + ")"
+		for range 2 {
+			for _, id := range from {
+				args = append(args, id)
+			}
+		}
+	}
+	var ok bool
+	err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM memories WHERE (rule_norm=? OR origin_norm=?) AND (`+cond+`))`, args...).Scan(&ok)
+	return ok, err
+}
+
 // CardMemoryCandidates cria uma memória candidata (categoria dominio, ação =
 // porquê) para cada decisão do card, menos as automáticas do Cockpit e as que
-// já existem no escopo do projeto do card. Devolve quantas criou.
+// já existem para o projeto do card (candidateExistsTx). Devolve quantas criou.
 func (s *Store) CardMemoryCandidates(cardID int64) (int, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -363,7 +398,7 @@ func (s *Store) CardMemoryCandidates(cardID int64) (int, error) {
 		if rule == "" {
 			continue
 		}
-		exists, err := memoryExistsTx(tx, &projectID, rule)
+		exists, err := candidateExistsTx(tx, rule, []int64{projectID})
 		if err != nil {
 			return 0, err
 		}
@@ -470,17 +505,24 @@ func (s *Store) EffectiveProject(sess domain.Session) (*domain.Project, error) {
 	return &p, nil
 }
 
-// ImportMemories cria as candidatas numa transação só: as que já existem no
-// escopo (regra ou origem normalizada igual, qualquer status) são puladas. Um
-// erro desfaz tudo. Devolve quantas criou e quantas pulou.
-func (s *Store) ImportMemories(items []domain.Memory) (created, skipped int, err error) {
+// ImportItem é uma candidata da importação e os projetos de onde ela veio
+// (o próprio, para local; os do grupo, para global).
+type ImportItem struct {
+	Memory domain.Memory
+	From   []int64
+}
+
+// ImportMemories cria as candidatas numa transação só: as que já existem para
+// os projetos de origem (candidateExistsTx) são puladas. Um erro desfaz tudo.
+// Devolve quantas criou e quantas pulou.
+func (s *Store) ImportMemories(items []ImportItem) (created, skipped int, err error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return 0, 0, err
 	}
 	defer tx.Rollback()
-	for _, m := range items {
-		exists, err := memoryExistsTx(tx, m.ProjectID, m.Rule)
+	for _, it := range items {
+		exists, err := candidateExistsTx(tx, it.Memory.Rule, it.From)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -488,7 +530,7 @@ func (s *Store) ImportMemories(items []domain.Memory) (created, skipped int, err
 			skipped++
 			continue
 		}
-		if _, err := insertMemoryTx(tx, m); err != nil {
+		if _, err := insertMemoryTx(tx, it.Memory); err != nil {
 			return 0, 0, err
 		}
 		created++

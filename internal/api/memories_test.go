@@ -102,7 +102,7 @@ func TestMemoriesCRUDAndValidation(t *testing.T) {
 		t.Fatalf("PATCH id ruim = %d", rec.Code)
 	}
 
-	// Excluir só arquivada.
+	// Excluir só arquivada, e excluir não apaga: vira descartada.
 	if rec := a.do(t, "DELETE", path, nil, 0); rec.Code != http.StatusBadRequest {
 		t.Fatalf("DELETE ativa = %d %s", rec.Code, rec.Body)
 	}
@@ -110,8 +110,18 @@ func TestMemoriesCRUDAndValidation(t *testing.T) {
 	if rec := a.do(t, "DELETE", path, nil, 0); rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d %s", rec.Code, rec.Body)
 	}
-	if rec := a.do(t, "DELETE", path, nil, 0); rec.Code != http.StatusNotFound {
+	if got, err := a.st.GetMemory(m.ID); err != nil || got.Status != "descartada" {
+		t.Fatalf("lápide = %+v %v", got, err)
+	}
+	if rec := a.do(t, "DELETE", path, nil, 0); rec.Code != http.StatusBadRequest {
+		t.Fatalf("DELETE de descartada = %d", rec.Code)
+	}
+	if rec := a.do(t, "DELETE", "/api/memories/9999", nil, 0); rec.Code != http.StatusNotFound {
 		t.Fatalf("DELETE 404 = %d", rec.Code)
+	}
+	// Ativa exige o faça assim.
+	if rec := a.do(t, "POST", "/api/memories", map[string]any{"rule": "sem ação", "category": "shell"}, 0); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "falta o faça assim") {
+		t.Fatalf("sem ação = %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -200,11 +210,12 @@ func TestBatchMemories(t *testing.T) {
 	a := newTestAPI(t)
 	p := a.project(t)
 	ok := a.mem(t, &p.ID, "curta", "candidata")
-	long, err := a.st.CreateMemory(domain.Memory{ProjectID: &p.ID, Category: "dominio", Rule: strings.Repeat("a", 350), Status: "candidata", Source: "napkin"})
+	long, err := a.st.CreateMemory(domain.Memory{ProjectID: &p.ID, Category: "dominio", Rule: strings.Repeat("a", 350), Do: "x", Status: "candidata", Source: "napkin"})
 	if err != nil || !long.NeedsReview {
 		t.Fatalf("long = %+v %v", long, err)
 	}
-	rec := a.do(t, "POST", "/api/memories/batch", map[string]any{"ids": []int64{ok.ID, long.ID, 9999}, "action": "aprovar"}, 0)
+	noDo, _ := a.st.CreateMemory(domain.Memory{ProjectID: &p.ID, Category: "dominio", Rule: "sem ação", Status: "candidata", Source: "card"})
+	rec := a.do(t, "POST", "/api/memories/batch", map[string]any{"ids": []int64{ok.ID, long.ID, noDo.ID, 9999}, "action": "aprovar"}, 0)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
 	}
@@ -215,8 +226,9 @@ func TestBatchMemories(t *testing.T) {
 			Error string `json:"error"`
 		} `json:"refused"`
 	}](t, rec)
-	if len(res.Done) != 1 || res.Done[0] != ok.ID || len(res.Refused) != 2 ||
-		res.Refused[0].ID != long.ID || !strings.Contains(res.Refused[0].Error, "300") || res.Refused[1].ID != 9999 {
+	if len(res.Done) != 1 || res.Done[0] != ok.ID || len(res.Refused) != 3 ||
+		res.Refused[0].ID != long.ID || !strings.Contains(res.Refused[0].Error, "300") ||
+		res.Refused[1].ID != noDo.ID || res.Refused[1].Error != "falta o faça assim: edite antes de aprovar" || res.Refused[2].ID != 9999 {
 		t.Fatalf("res = %+v", res)
 	}
 	if m, _ := a.st.GetMemory(ok.ID); m.Status != "ativa" {
@@ -300,18 +312,19 @@ func TestRememberScopesAndSimilar(t *testing.T) {
 	if m.ProjectID == nil || *m.ProjectID != root.ID || m.Source != "agente" || m.Status != "ativa" || len(m.Similar) != 0 {
 		t.Fatalf("m = %+v", m)
 	}
-	rec = a.do(t, "POST", "/api/me/remember", map[string]string{"rule": "Rodar go vet antes de commit", "category": "shell", "scope": "projeto"}, 4242)
+	rec = a.do(t, "POST", "/api/me/remember", map[string]string{"rule": "Rodar go vet antes de commit", "do": "go vet", "category": "shell", "scope": "projeto"}, 4242)
 	m2 := decode[memJSON](t, rec)
 	if m2.ProjectID == nil || *m2.ProjectID != app.ID || len(m2.Similar) != 1 || m2.Similar[0].ID != m.ID || m2.Similar[0].Rule != "rodar go vet antes do commit" {
 		t.Fatalf("m2 = %+v", m2)
 	}
-	rec = a.do(t, "POST", "/api/me/remember", map[string]string{"rule": "algo global bem distinto", "scope": "global"}, 4242)
-	if g := decode[memJSON](t, rec); g.ProjectID != nil || g.Category != "dominio" {
+	// Global do agente vai para a fila de aprovação.
+	rec = a.do(t, "POST", "/api/me/remember", map[string]string{"rule": "algo global bem distinto", "do": "x", "scope": "global"}, 4242)
+	if g := decode[memJSON](t, rec); g.ProjectID != nil || g.Category != "dominio" || g.Status != "candidata" || g.Scope != "global" {
 		t.Fatalf("g = %+v", g)
 	}
 	// Raiz sobre sessão que já está na raiz: o próprio projeto.
 	a.memSession(t, "claude:root", 4343, root.ID)
-	rec = a.do(t, "POST", "/api/me/remember", map[string]string{"rule": "outra da raiz", "scope": "raiz"}, 4343)
+	rec = a.do(t, "POST", "/api/me/remember", map[string]string{"rule": "outra da raiz", "do": "x", "scope": "raiz"}, 4343)
 	if r := decode[memJSON](t, rec); r.ProjectID == nil || *r.ProjectID != root.ID {
 		t.Fatalf("r = %+v", r)
 	}
@@ -346,7 +359,7 @@ func TestRememberErrors(t *testing.T) {
 	// Sessão com card usa o projeto do card.
 	c := a.card(t)
 	a.liveSession(t, "claude:card", 6060, c.Key)
-	rec := a.do(t, "POST", "/api/me/remember", map[string]string{"rule": "do card", "scope": "projeto"}, 6060)
+	rec := a.do(t, "POST", "/api/me/remember", map[string]string{"rule": "do card", "do": "x", "scope": "projeto"}, 6060)
 	if m := decode[memJSON](t, rec); m.ProjectID == nil || *m.ProjectID != c.ProjectID {
 		t.Fatalf("m = %+v", m)
 	}
@@ -404,13 +417,14 @@ func TestImportNapkins(t *testing.T) {
 	res := decode[struct {
 		Created int `json:"created"`
 		Skipped int `json:"skipped"`
+		Merged  int `json:"merged"`
 		Files   []struct {
 			ProjectID int64  `json:"project_id"`
 			Path      string `json:"path"`
 			Items     int    `json:"items"`
 		} `json:"files"`
 	}](t, rec)
-	if res.Created != 3 || res.Skipped != 0 || len(res.Files) != 2 || res.Files[0].ProjectID != p1.ID || res.Files[0].Items != 3 || res.Files[1].ProjectID != p2.ID {
+	if res.Created != 3 || res.Skipped != 0 || res.Merged != 2 || len(res.Files) != 2 || res.Files[0].ProjectID != p1.ID || res.Files[0].Items != 3 || res.Files[1].ProjectID != p2.ID {
 		t.Fatalf("res = %+v", res)
 	}
 	list := decode[[]memJSON](t, a.do(t, "GET", "/api/memories?status=candidata", nil, 0))
@@ -426,6 +440,10 @@ func TestImportNapkins(t *testing.T) {
 			globals++
 			if m.Rule != "Rodar go vet antes do commit" || !strings.Contains(m.SourceRef, filepath.Join(d1, ".claude", "napkin.md")) || !strings.Contains(m.SourceRef, filepath.Join(d2, ".claude", "napkin.md")) {
 				t.Fatalf("global = %+v", m)
+			}
+			// A data do item do napkin vira a criação (meia-noite local).
+			if g, _ := a.st.GetMemory(m.ID); !g.CreatedAt.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local)) {
+				t.Fatalf("created_at = %v", g.CreatedAt)
 			}
 		}
 		if len([]rune(m.Rule)) > 300 {
@@ -653,7 +671,7 @@ func TestPatchClearsNeedsReview(t *testing.T) {
 	if m := decode[memJSON](t, a.do(t, "PATCH", path, map[string]any{"do": "agora tem"}, 0)); m.NeedsReview {
 		t.Fatalf("com ação limpa: %+v", m)
 	}
-	flagged, _ := a.st.CreateMemory(domain.Memory{ProjectID: &p.ID, Category: "dominio", Rule: "aprovar", Status: "candidata", Source: "napkin", NeedsReview: true})
+	flagged, _ := a.st.CreateMemory(domain.Memory{ProjectID: &p.ID, Category: "dominio", Rule: "aprovar", Do: "x", Status: "candidata", Source: "napkin", NeedsReview: true})
 	if m := decode[memJSON](t, a.do(t, "PATCH", fmt.Sprintf("/api/memories/%d", flagged.ID), map[string]any{"status": "ativa"}, 0)); m.NeedsReview || m.Status != "ativa" {
 		t.Fatalf("aprovar: %+v", m)
 	}
@@ -663,5 +681,62 @@ func TestListMemoriesInvalidStatus(t *testing.T) {
 	a := newTestAPI(t)
 	if rec := a.do(t, "GET", "/api/memories?status=xx", nil, 0); rec.Code != 400 {
 		t.Fatalf("= %d", rec.Code)
+	}
+}
+
+func TestListMemoriesFamily(t *testing.T) {
+	a := newTestAPI(t)
+	root := a.project(t)
+	web, _, _ := a.st.CreateChild("web", "/w/api/web", root.ID)
+	other, _ := a.st.CreateProject("outro", "/w/outro")
+	a.mem(t, &web.ID, "candidata do app", "candidata")
+	a.mem(t, &web.ID, "ativa do app", "ativa")
+	a.mem(t, &root.ID, "da raiz", "ativa")
+	a.mem(t, nil, "global", "ativa")
+	a.mem(t, &other.ID, "de outro", "candidata")
+	byRule := func(path string) map[string]memJSON {
+		out := map[string]memJSON{}
+		for _, m := range decode[[]memJSON](t, a.do(t, "GET", path, nil, 0)) {
+			out[m.Rule] = m
+		}
+		return out
+	}
+	got := byRule(fmt.Sprintf("/api/memories?project=%d&family=1", root.ID))
+	if len(got) != 4 || got["candidata do app"].ID == 0 || got["candidata do app"].Inherited || got["ativa do app"].Inherited ||
+		got["da raiz"].Inherited || !got["global"].Inherited || got["de outro"].ID != 0 {
+		t.Fatalf("família = %v", got)
+	}
+	// Sem family, a raiz continua só com o que é dela e o global.
+	if got := byRule(fmt.Sprintf("/api/memories?project=%d", root.ID)); len(got) != 2 {
+		t.Fatalf("sem família = %v", got)
+	}
+	// family num app não muda nada.
+	if got := byRule(fmt.Sprintf("/api/memories?project=%d&family=1", web.ID)); len(got) != 4 || !got["da raiz"].Inherited {
+		t.Fatalf("app = %v", got)
+	}
+}
+
+// Itens parecidos do mesmo projeto: só um entra na global, o outro fica local.
+func TestImportMergedAndSameProjectStaysLocal(t *testing.T) {
+	a := newTestAPI(t)
+	d1, d2 := t.TempDir(), t.TempDir()
+	a.st.CreateProject("um", d1)
+	a.st.CreateProject("dois", d2)
+	writeNapkin(t, d1, "## Execução\n1. rode go test antes do commit\n   Do instead: go test ./...\n2. rode go test antes do push\n   Do instead: go test ./...\n")
+	writeNapkin(t, d2, "## Execução\n1. rode go test antes de commitar\n   Do instead: go test\n")
+	res := decode[struct {
+		Created int `json:"created"`
+		Merged  int `json:"merged"`
+	}](t, a.do(t, "POST", "/api/memories/import", nil, 0))
+	if res.Created != 2 || res.Merged != 2 {
+		t.Fatalf("res = %+v", res)
+	}
+	list := decode[[]memJSON](t, a.do(t, "GET", "/api/memories?status=candidata", nil, 0))
+	rules := map[string]bool{}
+	for _, m := range list {
+		rules[fmt.Sprintf("%v:%s", m.ProjectID == nil, m.Rule)] = true
+	}
+	if !rules["true:rode go test antes do commit"] || !rules["false:rode go test antes do push"] {
+		t.Fatalf("list = %v", rules)
 	}
 }

@@ -355,21 +355,33 @@ func TestCLILembrar(t *testing.T) {
 	if r.stdout != "Memória #7 gravada (raiz).\nParecida com #3: regra parecida\n" {
 		t.Fatalf("stdout = %q", r.stdout)
 	}
-	runCLI(t, addr, "", nil, "lembrar", "só regra")
+	runCLI(t, addr, "", nil, "lembrar", "só regra", "--faca", "algo")
 	json.Unmarshal([]byte(body), &got)
-	if got["category"] != "dominio" || got["scope"] != "projeto" || got["do"] != "" {
+	if got["category"] != "dominio" || got["scope"] != "projeto" || got["do"] != "algo" {
 		t.Fatalf("padrões = %s", body)
 	}
-	if r := runCLI(t, addr, "", nil, "lembrar"); r.code != 2 || !strings.Contains(r.err, "uso: nobre lembrar") {
-		t.Fatalf("%+v", r)
+	last = ""
+	for _, args := range [][]string{{"lembrar"}, {"lembrar", "sem ação"}, {"lembrar", "sem ação", "--faca", "  "}} {
+		if r := runCLI(t, addr, "", nil, args...); r.code != 2 || !strings.Contains(r.err, `uso: nobre lembrar "<regra>" --faca`) || last != "" {
+			t.Fatalf("%v: %+v last=%s", args, r, last)
+		}
 	}
 }
 
 func TestCLILembrarSemParecida(t *testing.T) {
 	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"id":2,"scope":"global","similar":[]}`))
+		w.Write([]byte(`{"id":2,"status":"ativa","scope":"raiz","similar":[]}`))
 	})
-	if r := runCLI(t, addr, "", nil, "lembrar", "x", "--escopo", "global"); r.stdout != "Memória #2 gravada (global).\n" {
+	if r := runCLI(t, addr, "", nil, "lembrar", "x", "--faca", "y", "--escopo", "raiz"); r.stdout != "Memória #2 gravada (raiz).\n" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCLILembrarGlobalVaiParaAprovacao(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":9,"status":"candidata","scope":"global","similar":[]}`))
+	})
+	if r := runCLI(t, addr, "", nil, "lembrar", "x", "--faca", "y", "--escopo", "global"); r.stdout != "Memória global #9 enviada para aprovação na página Memórias.\n" {
 		t.Fatalf("%+v", r)
 	}
 }
