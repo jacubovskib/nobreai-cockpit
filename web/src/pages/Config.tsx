@@ -262,7 +262,7 @@ function CardCreation({ settings }: { settings: Settings }) {
     const v = parseNum(n)
     if (on && !(Number.isInteger(v) && v >= 1)) return setBad(new Error('Informe um número inteiro de arquivos (1 ou mais).'))
     const m = parseNum(mem)
-    if (!(Number.isInteger(m) && m >= 0 && m <= 6000)) return setBad(new Error('O limite das memórias deve ficar entre 0 e 6000 tokens.'))
+    if (!(Number.isInteger(m) && m >= 0 && m <= 2000)) return setBad(new Error('O limite das memórias deve ficar entre 0 e 2000 tokens.'))
     setBad(null)
     save.mutate({ reminder_edit_threshold: on ? v : 0, agent_creates_cards: creates, inject_paused_cards: inject, memory_budget_tokens: m })
   }
@@ -291,7 +291,7 @@ function CardCreation({ settings }: { settings: Settings }) {
       </label>
       <label style={field}>Limite das memórias por sessão (tokens)
         <input style={small} inputMode="numeric" value={mem} onChange={(e) => setMem(e.target.value)} />
-        <span style={muted}>0 desliga</span>
+        <span style={muted}>0 desliga; máximo 2000</span>
       </label>
       <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} onSave={submit} notified={save.data?.notified_sessions} />
     </Section>

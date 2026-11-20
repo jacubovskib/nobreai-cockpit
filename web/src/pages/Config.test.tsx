@@ -64,6 +64,10 @@ describe('Config opções reais', () => {
     fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
     await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
     expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ memory_budget_tokens: 0 })
+    fireEvent.change(f, { target: { value: '2001' } })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    expect(await within(sec).findByText('O limite das memórias deve ficar entre 0 e 2000 tokens.')).toBeInTheDocument()
+    expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1)
   })
 
   it('salva carência e comando do terminal', async () => {

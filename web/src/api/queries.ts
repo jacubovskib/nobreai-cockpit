@@ -126,11 +126,12 @@ export const useRtkSavings = (from?: string, to?: string, project?: number | nul
     },
   })
 
-export const useMemories = (projectId: number | null) =>
+// family: numa raiz sem app escolhido, inclui as memórias dos apps (filhos).
+export const useMemories = (projectId: number | null, family = false) =>
   useQuery({
     placeholderData: keepPreviousData,
-    queryKey: ['memories', 'list', projectId],
-    queryFn: () => get<Memory[]>(projectId === null ? '/api/memories' : `/api/memories?project=${projectId}`),
+    queryKey: ['memories', 'list', projectId, family],
+    queryFn: () => get<Memory[]>(projectId === null ? '/api/memories' : `/api/memories?project=${projectId}${family ? '&family=1' : ''}`),
   })
 
 export const useMemoryPreview = (projectId: number | null) =>

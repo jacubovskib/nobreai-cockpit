@@ -15,10 +15,19 @@ const bar: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8, alignIte
 
 const catLabel = (id: string) => CATEGORIES.find((c) => c.id === id)?.label ?? id
 
-function sourceLabel(m: Memory) {
-  if (m.source === 'napkin') return `napkin: ${m.source_ref}`
+// sourceLabel: na fila o napkin traz o caminho; nas ativas, só "napkin" (o caminho fica no title).
+function sourceLabel(m: Memory, short = false) {
+  if (m.source === 'napkin') return short ? 'napkin' : `napkin: ${m.source_ref}`
   if (m.source === 'card') return `card ${m.source_ref}`
   return m.source === 'agente' ? 'agente' : 'você'
+}
+
+// approveHint: por que a candidata ainda não pode ser aprovada ("" = pode).
+function approveHint(m: Memory) {
+  if (len(m.rule) > RULE_MAX) return `edite: regra acima de ${RULE_MAX}`
+  if (len(m.do) > DO_MAX) return `edite: ação acima de ${DO_MAX}`
+  if (m.do.trim() === '') return 'edite: falta o faça assim'
+  return ''
 }
 
 function Counter({ n, max }: { n: number; max: number }) {
@@ -29,16 +38,18 @@ interface Scope { value: string; label: string }
 
 interface Draft { rule: string; do: string; category: string; scope: string }
 
-function Editor({ draft, scopes, submit, cancel, busy, submitLabel }: {
+// requireDo: memória ativa precisa do "faça assim"; candidata pode salvar sem.
+function Editor({ draft, scopes, submit, cancel, busy, submitLabel, requireDo }: {
   draft: Draft
   scopes: Scope[]
   submit(d: Draft): void
   cancel?: () => void
   busy: boolean
   submitLabel: string
+  requireDo: boolean
 }) {
   const [d, setD] = useState(draft)
-  const bad = d.rule.trim() === '' || len(d.rule) > RULE_MAX || len(d.do) > DO_MAX
+  const bad = d.rule.trim() === '' || len(d.rule) > RULE_MAX || len(d.do) > DO_MAX || (requireDo && d.do.trim() === '')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={field}>
@@ -71,10 +82,12 @@ function Editor({ draft, scopes, submit, cancel, busy, submitLabel }: {
 
 export function Memories() {
   const qc = useQueryClient()
-  const { projectId } = useProjectFilter()
+  const { projectId, root, app } = useProjectFilter()
   const projectsQ = useProjects()
   const projects = projectsQ.data ?? []
-  const memories = useMemories(projectId)
+  // Raiz sem app escolhido: a lista inclui as memórias dos apps, marcadas com o nome.
+  const family = root !== null && app === null
+  const memories = useMemories(projectId, family)
   const preview = useMemoryPreview(projectId)
   const budget = useSettings().data?.memory_budget_tokens
   const [formKey, setFormKey] = useState(0)
@@ -113,7 +126,7 @@ export function Memories() {
     const parent = projects.find((p) => p.id === here)?.parent_id ?? null
     if (parent !== null) add(String(parent), 'raiz')
     add('g', 'global')
-    if (m && m.project_id !== null) add(String(m.project_id), 'outro projeto')
+    if (m && m.project_id !== null) add(String(m.project_id), projects.find((p) => p.id === m.project_id)?.name ?? 'outro projeto')
     return out
   }
   const scopeValue = (m: Memory | null) => (m ? (m.project_id === null ? 'g' : String(m.project_id)) : projectId === null ? 'g' : String(projectId))
@@ -123,8 +136,15 @@ export function Memories() {
     const s = similarTo(m, visible)
     return s ? <span style={tag}>{s.kind === 'duplicada' ? `Duplicada de #${s.id}` : `Parecida com #${s.id}`}</span> : null
   }
-  const origin = (m: Memory) =>
-    m.inherited ? <span style={tag}>{m.project_id === null ? 'global' : 'da raiz'}</span> : null
+  const origin = (m: Memory) => {
+    if (m.inherited) return <span style={tag}>{m.project_id === null ? 'global' : 'da raiz'}</span>
+    // Item de um app na lista da raiz.
+    if (projectId !== null && m.project_id !== null && m.project_id !== projectId) {
+      return <span style={tag}>app {projects.find((p) => p.id === m.project_id)?.name ?? `#${m.project_id}`}</span>
+    }
+    return null
+  }
+  const idTag = (m: Memory) => <span style={muted}>#{m.id}</span>
 
   const body = (m: Memory) => (
     <>
@@ -139,6 +159,7 @@ export function Memories() {
       scopes={scopesFor(m)}
       busy={act.isPending}
       submitLabel="Salvar"
+      requireDo={m.status === 'ativa'}
       cancel={() => setEditing(null)}
       submit={(d) => run(() => patch(`/api/memories/${m.id}`, { rule: d.rule, do: d.do, category: d.category, project_id: pid(d.scope) }), () => setEditing(null))}
     />
@@ -146,7 +167,6 @@ export function Memories() {
 
   const setStatus = (m: Memory, status: string, extra: object = {}) =>
     run(() => patch(`/api/memories/${m.id}`, { status, ...extra }))
-  const overLimit = (m: Memory) => m.rule.trim() === '' || len(m.rule) > RULE_MAX || len(m.do) > DO_MAX
 
   const batch = () =>
     run(async () => {
@@ -165,9 +185,9 @@ export function Memories() {
       <ErrorLine error={act.error ?? memories.error} />
       {imported && (
         <div style={panel} role="status">
-          <span>{imported.created} candidatas novas, {imported.skipped} já existentes</span>
+          <span>{imported.created} candidatas novas, {imported.skipped} já existentes, {imported.merged ?? 0} unidas em globais</span>
           <ul style={{ ...list, ...muted }}>
-            {imported.files.map((f) => <li key={f.path}>{f.path} ({f.items})</li>)}
+            {imported.files.map((f) => <li key={f.path} style={f.error ? { color: 'var(--err)' } : undefined}>{f.error ? `${f.path}: erro ${f.error}` : `${f.path} (${f.items})`}</li>)}
           </ul>
         </div>
       )}
@@ -192,14 +212,17 @@ export function Memories() {
                       <div style={bar}>
                         <input type="checkbox" aria-label={`Selecionar #${m.id}`} checked={selected.includes(m.id)}
                           onChange={(e) => setSelected(e.target.checked ? [...selected, m.id] : selected.filter((x) => x !== m.id))} />
+                        {idTag(m)}
                         <span style={tag}>{catLabel(m.category)}</span>
+                        {origin(m)}
                         <span style={muted}>{sourceLabel(m)}</span>
                         {m.needs_review && <span style={{ ...tag, color: 'var(--err)' }}>revisar</span>}
                         {note(m)}
                       </div>
                       {body(m)}
                       <div style={bar}>
-                        <button type="button" style={btnPrimary} disabled={overLimit(m) || act.isPending} onClick={() => setStatus(m, 'ativa', { needs_review: false })}>Aprovar</button>
+                        <button type="button" style={btnPrimary} disabled={approveHint(m) !== '' || act.isPending} onClick={() => setStatus(m, 'ativa', { needs_review: false })}>Aprovar</button>
+                        {approveHint(m) && <span style={{ fontSize: 12, color: 'var(--err)' }}>{approveHint(m)}</span>}
                         <button type="button" style={btn} onClick={() => setEditing(m.id)}>Editar</button>
                         <button type="button" style={btn} disabled={act.isPending} onClick={() => setStatus(m, 'descartada')}>Descartar</button>
                       </div>
@@ -226,7 +249,11 @@ export function Memories() {
                   <li key={m.id} style={item}>
                     {editing === m.id ? editor(m) : (
                       <>
-                        <div style={bar}>{origin(m)}{note(m)}{m.needs_review && <span style={{ ...tag, color: 'var(--err)' }}>revisar</span>}</div>
+                        <div style={bar}>
+                          {idTag(m)}{origin(m)}
+                          <span style={muted} title={m.source === 'napkin' ? m.source_ref : undefined}>{sourceLabel(m, true)}</span>
+                          {note(m)}{m.needs_review && <span style={{ ...tag, color: 'var(--err)' }}>revisar</span>}
+                        </div>
                         {body(m)}
                         <div style={bar}>
                           {!m.inherited && (
@@ -271,6 +298,7 @@ export function Memories() {
           scopes={scopesFor(null)}
           busy={act.isPending}
           submitLabel="Criar"
+          requireDo
           submit={(d) => run(() => post('/api/memories', { project_id: pid(d.scope), category: d.category, rule: d.rule, do: d.do }), () => setFormKey((k) => k + 1))}
         />
       </section>
@@ -281,18 +309,19 @@ export function Memories() {
         <ul style={list}>
           {archived.map((m) => (
             <li key={m.id} style={item}>
+              <div style={bar}>{idTag(m)}{origin(m)}</div>
               {body(m)}
               <div style={bar}>
                 {confirming === m.id ? (
                   <>
-                    <span style={muted}>Apagar #{m.id} de vez?</span>
+                    <span style={muted}>Excluir #{m.id}? Ela some da página e não volta na importação.</span>
                     <button type="button" style={btnPrimary} disabled={act.isPending} onClick={() => run(() => del(`/api/memories/${m.id}`), () => setConfirming(null))}>Confirmar</button>
                     <button type="button" style={btn} onClick={() => setConfirming(null)}>Cancelar</button>
                   </>
                 ) : (
                   <>
-                    <button type="button" style={btn} disabled={act.isPending} onClick={() => setStatus(m, 'ativa')}>Restaurar</button>
-                    <button type="button" style={btn} onClick={() => setConfirming(m.id)}>Apagar</button>
+                    <button type="button" style={btn} disabled={act.isPending || m.do.trim() === ''} onClick={() => setStatus(m, 'ativa')}>Restaurar</button>
+                    <button type="button" style={btn} onClick={() => setConfirming(m.id)}>Excluir</button>
                   </>
                 )}
               </div>

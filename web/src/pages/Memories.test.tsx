@@ -32,8 +32,10 @@ const mem = (o: Partial<Memory>): Memory => ({
   position: 0, needs_review: false, created_at: '', updated_at: '', inherited: false, ...o,
 })
 const preview = { block: 'Memórias deste projeto\n- [shell] x → y', tokens: 120, chosen: 2, left: 1 }
+// O projeto 1 é raiz com app: sem app escolhido a lista pede a família.
+const listURL = (pid: number) => `/api/memories?project=${pid}${pid === 1 ? '&family=1' : ''}`
 const base = (list: Memory[], pid = 1) => ({
-  '/api/projects': projects, [`/api/memories?project=${pid}`]: list, [`/api/memories/preview?project=${pid}`]: preview,
+  '/api/projects': projects, [listURL(pid)]: list, [`/api/memories/preview?project=${pid}`]: preview,
 })
 
 describe('Memórias: fila', () => {
@@ -158,7 +160,7 @@ describe('Memórias: prévia', () => {
 })
 
 describe('Memórias: arquivadas, importação e criação', () => {
-  it('restaura e apaga com confirmação em página', async () => {
+  it('restaura e exclui com confirmação em página', async () => {
     const fn = mock({ ...base([mem({ id: 5, status: 'arquivada', rule: 'velha' })]), 'PATCH /api/memories/5': {}, 'DELETE /api/memories/5': 204 })
     const confirm = vi.fn(() => true)
     vi.stubGlobal('confirm', confirm)
@@ -166,7 +168,8 @@ describe('Memórias: arquivadas, importação e criação', () => {
     const arq = await screen.findByRole('region', { name: 'Arquivadas' })
     fireEvent.click(within(arq).getByRole('button', { name: 'Restaurar' }))
     await waitFor(() => expect(calls(fn, 'PATCH', '/api/memories/5')[0]).toEqual({ status: 'ativa' }))
-    fireEvent.click(within(arq).getByRole('button', { name: 'Apagar' }))
+    fireEvent.click(within(arq).getByRole('button', { name: 'Excluir' }))
+    expect(within(arq).getByText(/Excluir #5\?/)).toBeInTheDocument()
     expect(calls(fn, 'DELETE', '/api/memories/5')).toHaveLength(0)
     fireEvent.click(within(arq).getByRole('button', { name: 'Confirmar' }))
     await waitFor(() => expect(fn.mock.calls.some(([u, i]) => u === '/api/memories/5' && i?.method === 'DELETE')).toBe(true))
@@ -174,11 +177,15 @@ describe('Memórias: arquivadas, importação e criação', () => {
   })
 
   it('importa napkin.md', async () => {
-    const fn = mock({ ...base([]), 'POST /api/memories/import': { created: 3, skipped: 2, files: [{ project_id: 1, path: '/l/.claude/napkin.md', items: 5 }] } })
+    const fn = mock({ ...base([]), 'POST /api/memories/import': { created: 3, skipped: 2, merged: 4, files: [
+      { project_id: 1, path: '/l/.claude/napkin.md', items: 5 },
+      { project_id: 2, path: '/l/web/.claude/napkin.md', items: 0, error: 'permission denied' },
+    ] } })
     wrap()
     fireEvent.click(await screen.findByRole('button', { name: 'Importar napkin.md' }))
-    expect(await screen.findByText('3 candidatas novas, 2 já existentes')).toBeInTheDocument()
+    expect(await screen.findByText('3 candidatas novas, 2 já existentes, 4 unidas em globais')).toBeInTheDocument()
     expect(screen.getByText('/l/.claude/napkin.md (5)')).toBeInTheDocument()
+    expect(screen.getByText('/l/web/.claude/napkin.md: erro permission denied')).toBeInTheDocument()
     expect(calls(fn, 'POST', '/api/memories/import')).toHaveLength(1)
   })
 
@@ -263,5 +270,74 @@ describe('Memórias: ajustes de revisão', () => {
     fireEvent.change(within(fila).getByLabelText('Regra'), { target: { value: 'curta' } })
     fireEvent.click(within(fila).getByRole('button', { name: 'Salvar' }))
     await waitFor(() => expect(within(fila).queryByText('revisar')).not.toBeInTheDocument())
+  })
+})
+
+describe('Memórias: revisão final', () => {
+  it('Aprovar desabilitado explica o motivo', async () => {
+    mock(base([
+      mem({ id: 1, status: 'candidata', rule: 'a'.repeat(301), do: 'ok' }),
+      mem({ id: 2, status: 'candidata', rule: 'curta', do: 'b'.repeat(401) }),
+      mem({ id: 3, status: 'candidata', rule: 'sem ação', do: '' }),
+      mem({ id: 4, status: 'candidata', rule: 'pronta', do: 'faça' }),
+    ]))
+    wrap()
+    const fila = await screen.findByRole('region', { name: 'Fila de candidatas' })
+    const row = (rule: string) => within(fila).getByText(rule, { selector: 'strong' }).closest('li')!
+    expect(within(row('a'.repeat(301))).getByText('edite: regra acima de 300')).toBeInTheDocument()
+    expect(within(row('curta')).getByText('edite: ação acima de 400')).toBeInTheDocument()
+    expect(within(row('sem ação')).getByText('edite: falta o faça assim')).toBeInTheDocument()
+    expect(within(row('sem ação')).getByRole('button', { name: 'Aprovar' })).toBeDisabled()
+    expect(within(row('pronta')).queryByText(/^edite:/)).not.toBeInTheDocument()
+    expect(within(row('pronta')).getByRole('button', { name: 'Aprovar' })).toBeEnabled()
+  })
+
+  it('mostra o id e a origem das ativas', async () => {
+    mock(base([
+      mem({ id: 12, source: 'agente', rule: 'do agente' }),
+      mem({ id: 13, source: 'napkin', source_ref: '/l/.claude/napkin.md', rule: 'do napkin' }),
+      mem({ id: 14, source: 'card', source_ref: 'NAC-12', rule: 'do card' }),
+      mem({ id: 15, source: 'usuario', rule: 'minha' }),
+    ]))
+    wrap()
+    const ativas = await screen.findByRole('region', { name: 'Memórias ativas' })
+    const row = (rule: string) => within(ativas).getByText(rule).closest('li')!
+    expect(within(row('do agente')).getByText('#12')).toBeInTheDocument()
+    expect(within(row('do agente')).getByText('agente')).toBeInTheDocument()
+    expect(within(row('do napkin')).getByText('napkin')).toHaveAttribute('title', '/l/.claude/napkin.md')
+    expect(within(row('do card')).getByText('card NAC-12')).toBeInTheDocument()
+    expect(within(row('minha')).getByText('você')).toBeInTheDocument()
+  })
+
+  it('raiz sem app lista também as do app, marcadas com o nome', async () => {
+    const fn = mock(base([
+      mem({ id: 30, project_id: 2, status: 'candidata', rule: 'candidata do app' }),
+      mem({ id: 31, project_id: 2, rule: 'ativa do app' }),
+      mem({ id: 32, project_id: 1, rule: 'da raiz' }),
+    ]))
+    wrap('/?projeto=1')
+    const fila = await screen.findByRole('region', { name: 'Fila de candidatas' })
+    expect(within(within(fila).getByText('candidata do app').closest('li')!).getByText('app web')).toBeInTheDocument()
+    const ativas = screen.getByRole('region', { name: 'Memórias ativas' })
+    expect(within(within(ativas).getByText('ativa do app').closest('li')!).getByText('app web')).toBeInTheDocument()
+    expect(within(within(ativas).getByText('da raiz').closest('li')!).queryByText(/^app /)).not.toBeInTheDocument()
+    expect(fn.mock.calls.some(([u]) => u === '/api/memories?project=1&family=1')).toBe(true)
+  })
+
+  it('com o app geral não pede a família', async () => {
+    const fn = mock({ '/api/projects': projects, '/api/memories?project=1': [], '/api/memories/preview?project=1': preview })
+    wrap('/?projeto=1&app=geral')
+    await screen.findByRole('region', { name: 'Fila de candidatas' })
+    expect(fn.mock.calls.some(([u]) => String(u).includes('family'))).toBe(false)
+  })
+
+  it('nova memória exige o faça assim', async () => {
+    mock(base([]))
+    wrap()
+    const form = await screen.findByRole('region', { name: 'Nova memória' })
+    fireEvent.change(within(form).getByLabelText('Regra'), { target: { value: 'regra sem ação' } })
+    expect(within(form).getByRole('button', { name: 'Criar' })).toBeDisabled()
+    fireEvent.change(within(form).getByLabelText('Faça assim'), { target: { value: 'faça isso' } })
+    expect(within(form).getByRole('button', { name: 'Criar' })).toBeEnabled()
   })
 })

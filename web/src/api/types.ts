@@ -411,5 +411,6 @@ export interface Memory {
 }
 
 export interface MemoryPreview { block: string; tokens: number; chosen: number; left: number }
-export interface MemoryImport { created: number; skipped: number; files: { project_id: number; path: string; items: number }[] }
+// merged: itens dos napkin.md unidos numa candidata global.
+export interface MemoryImport { created: number; skipped: number; merged: number; files: { project_id: number; path: string; items: number; error?: string }[] }
 export interface MemoryBatch { done: number[]; refused: { id: number; error: string }[] }
