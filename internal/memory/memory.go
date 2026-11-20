@@ -139,7 +139,8 @@ func (it Item) line() string {
 func (it Item) tokens() int { return (len(it.line()) + 3) / 4 }
 
 // ordered põe os itens na ordem de injeção (Scope, Position, ID) e tira as
-// regras repetidas em mais de um escopo: fica só a do escopo mais específico.
+// regras repetidas em mais de um escopo: fica só a do escopo mais específico
+// (repetidas no mesmo escopo continuam, como a página as mostra).
 func ordered(items []Item) []Item {
 	sorted := append([]Item(nil), items...)
 	sort.SliceStable(sorted, func(i, j int) bool {
@@ -152,14 +153,14 @@ func ordered(items []Item) []Item {
 		}
 		return a.ID < b.ID
 	})
-	seen := map[string]bool{}
+	scopeOf := map[string]int{} // escopo da primeira ocorrência de cada regra
 	out := sorted[:0]
 	for _, it := range sorted {
 		n := Normalize(it.Rule)
-		if seen[n] {
+		if s, ok := scopeOf[n]; ok && s < it.Scope {
 			continue
 		}
-		seen[n] = true
+		scopeOf[n] = it.Scope
 		out = append(out, it)
 	}
 	return out

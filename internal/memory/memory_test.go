@@ -107,6 +107,11 @@ func TestSelect_SameRuleOnlyMostSpecific(t *testing.T) {
 	if len(got) != 1 || got[0].ID != 2 || left != 0 {
 		t.Fatalf("got %+v left %d", got, left)
 	}
+	// No mesmo escopo, as duas continuam.
+	same := []Item{{ID: 1, Category: "shell", Rule: "usar rg", Do: "a"}, {ID: 2, Category: "shell", Rule: "Usar RG", Do: "b"}}
+	if got, _ := Select(same, 1000); len(got) != 2 {
+		t.Fatalf("mesmo escopo: %+v", got)
+	}
 }
 
 func manyItems(n int) []Item {

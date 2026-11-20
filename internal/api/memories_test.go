@@ -740,3 +740,26 @@ func TestImportMergedAndSameProjectStaysLocal(t *testing.T) {
 		t.Fatalf("list = %v", rules)
 	}
 }
+
+// Repro (a) pela rota: regra importada em um, descartada, e depois presente
+// nos dois napkin.md: a reimportação não cria nada.
+func TestImportDiscardedLocalDoesNotReturnAsGlobal(t *testing.T) {
+	a := newTestAPI(t)
+	d1, d2 := t.TempDir(), t.TempDir()
+	a.st.CreateProject("um", d1)
+	a.st.CreateProject("dois", d2)
+	writeNapkin(t, d1, "## Shell\n1. use rg em vez de grep\n   Do instead: rg\n")
+	type res struct {
+		Created int `json:"created"`
+		Skipped int `json:"skipped"`
+	}
+	if r := decode[res](t, a.do(t, "POST", "/api/memories/import", nil, 0)); r.Created != 1 {
+		t.Fatalf("1ª = %+v", r)
+	}
+	list := decode[[]memJSON](t, a.do(t, "GET", "/api/memories?status=candidata", nil, 0))
+	a.do(t, "POST", "/api/memories/batch", map[string]any{"ids": []int64{list[0].ID}, "action": "descartar"}, 0)
+	writeNapkin(t, d2, "## Shell\n1. Use rg em vez de grep!\n   Do instead: rg\n")
+	if r := decode[res](t, a.do(t, "POST", "/api/memories/import", nil, 0)); r.Created != 0 || r.Skipped != 1 {
+		t.Fatalf("reimportação = %+v", r)
+	}
+}

@@ -180,8 +180,21 @@ func TestSessionStart_SmallRestUsesBudget(t *testing.T) {
 // Sem espaço para nenhuma linha, vai só o cabeçalho com o "+N" (se couber);
 // o pacote de retomada sempre vai inteiro.
 func TestSessionStart_NoRoomOnlyHeader(t *testing.T) {
+	// O resto do contexto além do "onde parei", medido sem memórias.
+	run := func(size, budget int) string {
+		e := newEnv(t)
+		p := e.project(t)
+		setBudget(t, e, budget)
+		addMany(t, e, &p.ID, 3)
+		if _, err := e.st.CreateCard(domain.Card{Title: "Enorme", ProjectID: p.ID, Branch: "main",
+			Column: domain.Pausado, WhereStopped: strings.Repeat("x", size)}); err != nil {
+			t.Fatal(err)
+		}
+		return additionalContext(t, e.call(t, "session_start", withEnv("NOBRE_RESUME", "NAC-1")))
+	}
+	overhead := utf8.RuneCountInString(run(1000, 0)) - 1000
 	onlyHeader := false
-	for size := 7900; size <= 8400; size += 20 {
+	for size := 9500 - overhead - 400; size <= 9500-overhead; size += 10 {
 		e := newEnv(t)
 		p := e.project(t)
 		addMany(t, e, &p.ID, 3)
@@ -205,6 +218,6 @@ func TestSessionStart_NoRoomOnlyHeader(t *testing.T) {
 		}
 	}
 	if !onlyHeader {
-		t.Fatal("nenhum tamanho deixou só o cabeçalho")
+		t.Fatalf("nenhum tamanho deixou só o cabeçalho (resto fora o onde parei: %d)", overhead)
 	}
 }
