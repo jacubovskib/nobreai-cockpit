@@ -250,3 +250,41 @@ func TestSessionContextModelFromUsage(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestSessionContextTTLFromLastWrite(t *testing.T) {
+	s := newTestStore(t)
+	liveSession(t, s, "s", "claude-sonnet-x", 30*time.Minute)
+	save(t, s, "s", "/main", nil, []usage.ContextTurn{
+		liveTurn(0, 0, 40*time.Minute, 250000, 0, 250000, "1h", "a"),
+		liveTurn(1, 0, 30*time.Minute, 251000, 250000, 0, "", "b"), // só leitura
+	})
+	got := liveCtx(t, s, "s")
+	if got.TTL != "1h" || got.IdleOverTTL {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestSessionContextAtLimit(t *testing.T) {
+	s := newTestStore(t)
+	liveSession(t, s, "s", "claude-sonnet-x", time.Minute)
+	save(t, s, "s", "/main", nil, []usage.ContextTurn{
+		liveTurn(0, 0, 3*time.Minute, 170000, 0, 0, "", "a"),
+		liveTurn(1, 0, 2*time.Minute, 180000, 0, 0, "", "b"),
+		liveTurn(2, 0, time.Minute, 190000, 0, 0, "", "c"),
+	})
+	got := liveCtx(t, s, "s")
+	if !got.AtLimit || got.TurnsToLimit != 0 || got.GrowthPerTurn != 10000 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestGetSettingsNullModelWindowsKeepsDefaults(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.PutKV("model_windows", nil); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.GetSettings()
+	if err != nil || st.ModelWindows["claude-opus-5-5"] != 1000000 {
+		t.Fatalf("%+v %v", st.ModelWindows, err)
+	}
+}

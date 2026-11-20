@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
 
 const (
@@ -43,6 +45,7 @@ type ContextLive struct {
 	Pct               float64             `json:"pct"`
 	GrowthPerTurn     int64               `json:"growth_per_turn"` // média desde a última compactação; 0 com menos de 3 turnos
 	TurnsToLimit      int64               `json:"turns_to_limit"`  // até 95% da janela; 0 sem crescimento
+	AtLimit           bool                `json:"at_limit"`        // já em 95% da janela ou mais (TurnsToLimit fica 0)
 	TurnsSinceCompact int                 `json:"turns_since_compact"`
 	Compactions       int                 `json:"compactions"`
 	CacheHitPct       float64             `json:"cache_hit_pct"` // últimos 20 turnos
@@ -71,6 +74,15 @@ func (s *Store) SessionContext(sessionID string) (ContextLive, error) {
 // na filha, as da principal marcadas com o id da filha. Só o transcript
 // principal (sem subagentes) conta.
 func (s *Store) SessionContextAt(sessionID string, now time.Time) (ContextLive, error) {
+	set, err := s.GetSettings()
+	if err != nil {
+		return ContextLive{TopOutputs: []ContextLiveOutput{}}, err
+	}
+	return s.SessionContextWith(sessionID, now, set)
+}
+
+// SessionContextWith é SessionContextAt com as preferências já lidas (uma leitura por requisição).
+func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.Settings) (ContextLive, error) {
 	out := ContextLive{TopOutputs: []ContextLiveOutput{}}
 	var parent, model, mainPath, lastEvent string
 	err := s.DB.QueryRow(`SELECT parent_session_id, model, transcript_path, last_event_at FROM sessions WHERE id=?`, sessionID).
@@ -122,12 +134,17 @@ func (s *Store) SessionContextAt(sessionID string, now time.Time) (ContextLive, 
 	for _, t := range turns {
 		maxTokens = max(maxTokens, t.tokens)
 	}
-	if err := s.fillWindow(&out, maxTokens); err != nil {
-		return out, err
-	}
+	fillWindow(&out, set, maxTokens)
 	if n := len(turns); n > 0 {
 		last := turns[n-1]
-		out.Tokens, out.TTL = last.tokens, last.ttl
+		out.Tokens = last.tokens
+		// TTL do cache: o gravado mais recentemente (um turno só de leitura não o muda).
+		for i := n - 1; i >= 0; i-- {
+			if turns[i].ttl != "" {
+				out.TTL = turns[i].ttl
+				break
+			}
+		}
 		out.Pct = float64(last.tokens) * 100 / float64(out.WindowTokens)
 		fillTurnStats(&out, turns, now)
 	}
@@ -160,11 +177,7 @@ func (s *Store) SessionContextAt(sessionID string, now time.Time) (ContextLive, 
 // fillWindow define a janela: tabela por modelo, "[1m]" no nome, senão 200.000
 // (estimada); contexto observado acima da janela vale 1.000.000, e como o máximo
 // só cresce a janela fica fixa para a sessão.
-func (s *Store) fillWindow(out *ContextLive, maxTokens int64) error {
-	set, err := s.GetSettings()
-	if err != nil {
-		return err
-	}
+func fillWindow(out *ContextLive, set domain.Settings, maxTokens int64) {
 	switch w, ok := set.ModelWindows[out.Model]; {
 	case ok:
 		out.WindowTokens = int64(w)
@@ -176,7 +189,6 @@ func (s *Store) fillWindow(out *ContextLive, maxTokens int64) error {
 	if maxTokens > out.WindowTokens {
 		out.WindowTokens, out.WindowEstimated = observedWindowTokens, false
 	}
-	return nil
 }
 
 // fillTurnStats calcula crescimento, compactações, cache e regravação (turns não vazio).
@@ -199,6 +211,7 @@ func fillTurnStats(out *ContextLive, turns []liveRow, now time.Time) {
 			}
 		}
 	}
+	out.AtLimit = float64(out.Tokens) >= float64(out.WindowTokens)*limitPct
 	recent := turns[max(0, len(turns)-cacheHitTurns):]
 	var read, total int64
 	for _, t := range recent {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -427,5 +428,40 @@ func TestPutSettingsContextMonitor(t *testing.T) {
 	got = decode[domain.Settings](t, a.do(t, "GET", "/api/settings", nil, 0))
 	if !slices.Equal(got.ContextWarnPcts, []int{50, 90}) || got.BigOutputMax != 0 || len(got.ModelWindows) != 1 || got.ModelWindows["outro"] != 500000 {
 		t.Fatalf("depois = %+v", got)
+	}
+}
+
+func TestPutSettingsLogsContextPctsChange(t *testing.T) {
+	a := newTestAPI(t)
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"context_warn_pcts": []int{50, 90}}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	es, err := a.st.RecentConfigLog(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range es {
+		var d map[string]json.RawMessage
+		if json.Unmarshal(e.Data, &d) == nil && string(d["key"]) == `"context_warn_pcts"` {
+			found = true
+			if string(d["from"]) != "[60,80]" || string(d["to"]) != "[50,90]" {
+				t.Errorf("log = %s", e.Data)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("mudança não registrada")
+	}
+}
+
+func TestPutSettingsOmittedModelWindowsKeepsDefaults(t *testing.T) {
+	a := newTestAPI(t)
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"big_output_max": 5}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d", rec.Code)
+	}
+	got := decode[domain.Settings](t, a.do(t, "GET", "/api/settings", nil, 0))
+	if got.ModelWindows["claude-opus-5-5"] != 1000000 || len(got.ContextWarnPcts) != 2 {
+		t.Fatalf("%+v", got)
 	}
 }

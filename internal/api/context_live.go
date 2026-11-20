@@ -44,12 +44,17 @@ func (s *server) contextLive(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "")
 		return
 	}
+	set, err := s.st.GetSettings()
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
 	out := []LiveContext{}
 	for _, x := range live {
 		if !x.Live() || !x.FullCapture {
 			continue
 		}
-		c, err := s.st.SessionContextAt(x.ID, s.now())
+		c, err := s.st.SessionContextWith(x.ID, s.now(), set)
 		if err != nil {
 			writeStoreError(w, err, "")
 			return

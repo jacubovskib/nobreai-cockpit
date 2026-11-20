@@ -77,6 +77,9 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 	old := st
 	old.Rules = maps.Clone(st.Rules)
 	old.TerminalCmd = slices.Clone(st.TerminalCmd)
+	// readJSON decodifica sobre a fatia existente: sem cópia, old mudaria junto e o diff do log perderia a troca.
+	old.ContextWarnPcts = slices.Clone(st.ContextWarnPcts)
+	old.ModelWindows = maps.Clone(st.ModelWindows)
 	keepCmd := old.TerminalCmd
 	// Janelas por modelo: o corpo substitui o mapa inteiro (decodificar sobre o atual só mesclaria).
 	keepWindows := st.ModelWindows
@@ -97,6 +100,10 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	if msg := validateContextSettings(st); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	switch {
 	case st.IncompleteAction != "ask_agent" && st.IncompleteAction != "mark":
 		writeError(w, http.StatusBadRequest, "incomplete_action inválida (use ask_agent ou mark)")
@@ -109,9 +116,6 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	case st.MemoryBudgetTokens < 0 || st.MemoryBudgetTokens > 2000:
 		writeError(w, http.StatusBadRequest, "limite das memórias deve ficar entre 0 e 2000")
-		return
-	case validateContextSettings(st) != "":
-		writeError(w, http.StatusBadRequest, validateContextSettings(st))
 		return
 	case st.WhereStoppedTTLMin < 0 || st.GraceMin < 0 || st.ReminderEditThreshold < 0 || st.BRLRate < 0:
 		writeError(w, http.StatusBadRequest, "valores numéricos não podem ser negativos")
