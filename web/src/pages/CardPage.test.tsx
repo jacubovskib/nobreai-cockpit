@@ -279,3 +279,30 @@ describe('ContinuePanel', () => {
     expect(Array.from((sel as HTMLSelectElement).options).map((o) => o.text)).toEqual(['loja', 'loja › web'])
   })
 })
+
+describe('CardPage contexto', () => {
+  const ctx = { tokens: 620000, model: 'm', window_tokens: 1000000, window_estimated: false, pct: 62, growth_per_turn: 12000, turns_to_limit: 25, at_limit: false, turns_since_compact: 4, compactions: 1, cache_hit_pct: 90, recent_rewrite: null, ttl: '5m', idle_sec: 30, idle_over_ttl: false, top_outputs: [] }
+  const live = (key: string) => [{ id: 's1', card_key: key, card_title: 'x', tokens: 620000, window_tokens: 1000000, pct: 62, over80: false, rewrite: false, idle_over_ttl: false }]
+
+  it('mostra o contexto das sessões vivas do card e recomeça limpo', async () => {
+    const fn = mock({ ...base, '/api/cards/NAC-42': detail, '/api/context/live': live('NAC-42'), '/api/sessions/s1/context': ctx, 'POST /api/sessions/s1/restart-clean': { ok: true, terminal_id: 't1' } })
+    wrap(<CardPage />)
+    expect(await screen.findByRole('heading', { name: 'Contexto' })).toBeInTheDocument()
+    expect(await screen.findByText('Cache aproveitado')).toBeInTheDocument()
+    expect(screen.getByText('62% · 620 mil / 1 milhão')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Recomeçar limpo' }))
+    const sec = await screen.findByRole('region', { name: 'Recomeçar limpo' })
+    expect(sec).toBeInTheDocument()
+    // where_stopped_at é nulo no fixture: o registro está velho e o texto é exigido.
+    fireEvent.click(sec.querySelector('button')!)
+    await screen.findByText('Terminal novo aberto.')
+    expect(bodies(fn, 'POST', '/api/sessions/s1/restart-clean')).toEqual([{ where_stopped: 'Falta store.Delete' }])
+  })
+
+  it('sem sessão viva do card, não há seção Contexto', async () => {
+    mock({ ...base, '/api/cards/NAC-42': detail, '/api/context/live': live('NAC-99') })
+    wrap(<CardPage />)
+    await screen.findByRole('heading', { name: 'Onde parei' })
+    expect(screen.queryByRole('heading', { name: 'Contexto' })).not.toBeInTheDocument()
+  })
+})

@@ -18,6 +18,7 @@ import { WorktreeTag } from '../ui/WorktreeTag'
 import { minutesSince } from './board'
 import { NewTask } from './NewTask'
 import { PlanLimits } from './PlanLimits'
+import { ControlRoomContext } from './context/ContextSessions'
 
 const panel: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, padding: 18, borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--border)' }
 const btn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', minHeight: 40, padding: '0 14px', borderRadius: 8, border: '1px solid #3A3F4B', background: 'transparent', color: 'var(--text)', font: 'inherit', cursor: 'pointer', textDecoration: 'none' }
@@ -392,6 +393,7 @@ export function ControlRoom() {
           <h2 id="ativos-t" style={h2}>Agentes rodando agora</h2>
           {active.length === 0 && <p style={{ margin: 0, color: 'var(--text-2)' }}>Nenhum agente rodando agora.</p>}
           {active.map((s) => <ActiveCard key={s.id} s={s} projects={projects} terminalId={s.pid_dead_at ? undefined : terminalFor(s, terminals, sessionPids)} />)}
+          <ControlRoomContext />
         </section>
 
         <div style={{ flex: '2 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>

@@ -24,6 +24,7 @@ import { ResumePreview } from './card/ResumePreview'
 import { Sessions } from './card/Sessions'
 import { Todos } from './card/Todos'
 import { WhereStopped } from './card/WhereStopped'
+import { CardContext } from './context/ContextSessions'
 import { ErrorLine, btnPrimary, input, muted } from './card/shared'
 import { displayName, familyIds, isGroup, useWithProject } from '../app/project'
 
@@ -117,6 +118,7 @@ export function CardPage() {
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <div style={{ flex: '2 1 480px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <CardTerminal cardKey={c.key} focusId={focusTerminal} />
+          <CardContext card={c} />
           <WhereStopped card={c} />
           <Goal card={c} />
           <Todos card={c} />
