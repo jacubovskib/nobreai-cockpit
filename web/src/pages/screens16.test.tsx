@@ -277,6 +277,25 @@ describe('Analytics', () => {
   })
 
 
+  it('sessão filha ganha "outra janela" na tabela; a principal não', async () => {
+    const now = new Date().toISOString()
+    const ses = (id: string, parent_session_id: string) => ({
+      id, parent_session_id, agent: 'claude', card_id: null, project_id: null, model: '', started_at: now, last_event_at: now, ended_at: now, pid_dead_at: null,
+      usage: tot({}), unpriced: false,
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const ok = (b: unknown) => new Response(JSON.stringify(b), { status: 200 })
+      if (url.startsWith('/api/usage/totals')) return ok([])
+      if (url.startsWith('/api/sessions')) return ok([ses('a', ''), ses('b', 'a')])
+      if (url === '/api/settings') return ok(settings)
+      if (url === '/api/cards') return ok([])
+      if (url === '/api/projects') return ok([])
+      return new Response('{}', { status: 404 })
+    }))
+    wrap(<Analytics />)
+    expect(await screen.findAllByText('outra janela')).toHaveLength(1)
+  })
+
   it('com app=geral pede os totais com exact=1; sem app não', async () => {
     const fn = vi.fn(async (url: string) => {
       const ok = (b: unknown) => new Response(JSON.stringify(b), { status: 200 })

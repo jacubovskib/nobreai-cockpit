@@ -4,6 +4,7 @@ import { useCards, useSessions, useSettings, useTotals } from '../api/queries'
 import { useProjectFilter } from '../app/project'
 import type { Total } from '../api/types'
 import { agentInfo } from '../ui/agents'
+import { OtherWindowTag } from '../ui/OtherWindowTag'
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { Money } from '../ui/Money'
 import { formatAmount, formatMoney, moneySymbol, useCurrency } from '../ui/money'
@@ -260,7 +261,7 @@ export function Analytics() {
                   <tr key={s.id} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={td}>{startFmt.format(new Date(s.started_at))}</td>
                     <td style={td}>{key ? <Link to={withP(`/cards/${key}`)}>{key}</Link> : '—'}</td>
-                    <td style={td}><AgentSwatch agent={s.agent} /></td>
+                    <td style={td}><AgentSwatch agent={s.agent} /><OtherWindowTag parentId={s.parent_session_id} /></td>
                     <td style={td}>{s.model || '—'}</td>
                     <td style={td}>{duration(s.started_at, s.ended_at, s.last_event_at)}{live ? ' · ao vivo' : ''}</td>
                     <td style={num}>{tokens(s.usage.input)}</td>

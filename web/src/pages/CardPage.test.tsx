@@ -72,6 +72,13 @@ describe('CardPage', () => {
     expect(screen.getByText('a.go')).toBeInTheDocument()
   })
 
+  it('sessão filha mostra a marca "outra janela"; a principal não', async () => {
+    const child = { ...sess, id: 's2', parent_session_id: 's1' }
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, sessions: [{ ...sess, parent_session_id: '' }, child] } })
+    wrap(<CardPage />)
+    expect(await screen.findAllByText('outra janela')).toHaveLength(1)
+  })
+
   it('processo da sessão morto: mostra "processo encerrado há N min", não "ao vivo"', async () => {
     const dead = { ...sess, card_id: 1, pid_dead_at: new Date(Date.now() - 4 * 60_000).toISOString() }
     mock({ ...base, '/api/cards/NAC-42': { ...detail, column: 'em_andamento', sessions: [dead], live: null } })
