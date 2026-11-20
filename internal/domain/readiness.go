@@ -34,6 +34,17 @@ type Settings struct {
 	InjectPausedCards bool `json:"inject_paused_cards"`
 	// MemoryBudgetTokens é o teto de tokens do bloco de memórias injetado na sessão (0 desliga).
 	MemoryBudgetTokens int `json:"memory_budget_tokens"`
+	// ContextWarnPcts são as faixas (% da janela, crescentes) em que o agente é avisado do tamanho do contexto.
+	ContextWarnPcts []int `json:"context_warn_pcts"`
+	// BigOutputTokens é o tamanho (tokens) a partir do qual uma saída de ferramenta vira aviso; BigOutputMax
+	// é o máximo de avisos desses por sessão (0 desliga).
+	BigOutputTokens int `json:"big_output_tokens"`
+	BigOutputMax    int `json:"big_output_max"`
+	// AgentContextWarnings liga os avisos de contexto e de saída grande ao agente.
+	AgentContextWarnings bool `json:"agent_context_warnings"`
+	// ModelWindows é a janela de contexto (tokens) por modelo; o que não está aqui usa 200.000
+	// (e "[1m]" no nome do modelo, 1.000.000).
+	ModelWindows map[string]int `json:"model_windows"`
 }
 
 // DefaultSettings devolve os padrões do piloto.
@@ -54,6 +65,11 @@ func DefaultSettings() Settings {
 		AgentCreatesCards:     true,
 		InjectPausedCards:     true,
 		MemoryBudgetTokens:    1500,
+		ContextWarnPcts:       []int{60, 80},
+		BigOutputTokens:       15000,
+		BigOutputMax:          3,
+		AgentContextWarnings:  true,
+		ModelWindows:          map[string]int{"claude-opus-5-5": 1000000},
 	}
 }
 

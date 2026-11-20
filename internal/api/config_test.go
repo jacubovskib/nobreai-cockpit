@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -392,5 +393,39 @@ func TestPatchAppBaseBranchIsRefusedUnlessUnchanged(t *testing.T) {
 	}
 	if rec := a.do(t, "PATCH", url, map[string]any{"name": "web2", "path": "/r/loja/web", "capture": true, "base_branch": app.BaseBranch}, 0); rec.Code != http.StatusOK {
 		t.Fatalf("base igual = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPutSettingsContextMonitor(t *testing.T) {
+	a := newTestAPI(t)
+	got := decode[domain.Settings](t, a.do(t, "GET", "/api/settings", nil, 0))
+	if !slices.Equal(got.ContextWarnPcts, []int{60, 80}) || got.BigOutputTokens != 15000 || got.BigOutputMax != 3 ||
+		!got.AgentContextWarnings || got.ModelWindows["claude-opus-5-5"] != 1000000 {
+		t.Fatalf("padrões = %+v", got)
+	}
+	bad := []map[string]any{
+		{"context_warn_pcts": []int{80, 60}},
+		{"context_warn_pcts": []int{60, 60}},
+		{"context_warn_pcts": []int{0}},
+		{"context_warn_pcts": []int{100}},
+		{"big_output_tokens": 999},
+		{"big_output_max": 21},
+		{"big_output_max": -1},
+		{"model_windows": map[string]int{"m": 999}},
+	}
+	for _, b := range bad {
+		if rec := a.do(t, "PUT", "/api/settings", b, 0); rec.Code != http.StatusBadRequest {
+			t.Errorf("%v = %d, quer 400", b, rec.Code)
+		}
+	}
+	ok := map[string]any{"context_warn_pcts": []int{50, 90}, "big_output_tokens": 1000, "big_output_max": 0,
+		"model_windows": map[string]int{"outro": 500000}}
+	rec := a.do(t, "PUT", "/api/settings", ok, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	got = decode[domain.Settings](t, a.do(t, "GET", "/api/settings", nil, 0))
+	if !slices.Equal(got.ContextWarnPcts, []int{50, 90}) || got.BigOutputMax != 0 || len(got.ModelWindows) != 1 || got.ModelWindows["outro"] != 500000 {
+		t.Fatalf("depois = %+v", got)
 	}
 }

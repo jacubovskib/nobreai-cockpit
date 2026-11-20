@@ -40,6 +40,10 @@ func (s *Store) GetSettings() (domain.Settings, error) {
 		}
 		delete(raw, "rules")
 	}
+	// As janelas por modelo gravadas substituem as padrão (decodificar sobre o mapa só mesclaria).
+	if _, ok := raw["model_windows"]; ok {
+		st.ModelWindows = nil
+	}
 	obj := make(map[string]json.RawMessage, len(raw))
 	for k, v := range raw {
 		obj[k] = v

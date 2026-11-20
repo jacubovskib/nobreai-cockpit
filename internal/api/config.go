@@ -78,8 +78,17 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 	old.Rules = maps.Clone(st.Rules)
 	old.TerminalCmd = slices.Clone(st.TerminalCmd)
 	keepCmd := old.TerminalCmd
+	// Janelas por modelo: o corpo substitui o mapa inteiro (decodificar sobre o atual só mesclaria).
+	keepWindows := st.ModelWindows
+	st.ModelWindows = nil
 	if !readJSON(w, r, &st) {
 		return
+	}
+	if st.ModelWindows == nil {
+		st.ModelWindows = keepWindows
+	}
+	if st.ContextWarnPcts == nil {
+		st.ContextWarnPcts = []int{}
 	}
 	if st.TerminalCmd == nil { // omitido ou null: mantém o atual
 		st.TerminalCmd = keepCmd
@@ -100,6 +109,9 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	case st.MemoryBudgetTokens < 0 || st.MemoryBudgetTokens > 2000:
 		writeError(w, http.StatusBadRequest, "limite das memórias deve ficar entre 0 e 2000")
+		return
+	case validateContextSettings(st) != "":
+		writeError(w, http.StatusBadRequest, validateContextSettings(st))
 		return
 	case st.WhereStoppedTTLMin < 0 || st.GraceMin < 0 || st.ReminderEditThreshold < 0 || st.BRLRate < 0:
 		writeError(w, http.StatusBadRequest, "valores numéricos não podem ser negativos")
@@ -524,6 +536,29 @@ func validateLaunch(mode string, cmd []string) string {
 	}
 	if !filepath.IsAbs(cmd[0]) && !bareCommand.MatchString(cmd[0]) {
 		return "terminal_cmd: o primeiro elemento deve ser um caminho absoluto ou o nome de um comando (sem caracteres especiais do shell)"
+	}
+	return ""
+}
+
+// validateContextSettings confere as preferências do medidor de contexto; "" = válidas.
+func validateContextSettings(st domain.Settings) string {
+	prev := 0
+	for _, p := range st.ContextWarnPcts {
+		if p < 1 || p > 99 || p <= prev {
+			return "context_warn_pcts deve ter percentuais entre 1 e 99, em ordem crescente"
+		}
+		prev = p
+	}
+	if st.BigOutputTokens < 1000 {
+		return "big_output_tokens deve ser de pelo menos 1000"
+	}
+	if st.BigOutputMax < 0 || st.BigOutputMax > 20 {
+		return "big_output_max deve ficar entre 0 e 20"
+	}
+	for m, w := range st.ModelWindows {
+		if m == "" || w < 1000 {
+			return "model_windows: modelo não pode ser vazio e a janela deve ser de pelo menos 1000"
+		}
 	}
 	return ""
 }
