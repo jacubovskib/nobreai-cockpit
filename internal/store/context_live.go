@@ -57,7 +57,7 @@ type ContextLive struct {
 	IdleOverTTL       bool                `json:"idle_over_ttl"` // parada além do cache, com contexto > 200.000
 	TopOutputs        []ContextLiveOutput `json:"top_outputs"`
 	// Segment é o segmento (do arquivo) do primeiro turno depois da última
-	// compactação da janela (só com Tokens > 0): só muda numa compactação da
+	// compactação da janela (turnos com tokens ou só com %): só muda numa compactação da
 	// própria janela.
 	Segment int `json:"-"`
 }
@@ -251,7 +251,7 @@ func fillPctStats(out *ContextLive, turns []liveRow, foreign map[int]bool) {
 		if g := (seg[len(seg)-1].pct - seg[0].pct) / float64(len(seg)-1); g > 0 {
 			out.GrowthPerTurn = int64(math.Round(g))
 			if room := limitPct*100 - out.Pct; room > 0 {
-				out.TurnsToLimit = int64(room / g)
+				out.TurnsToLimit = int64(math.Ceil(room / g)) // para cima, como no caminho de tokens; usa a média sem arredondar (GrowthPerTurn só exibe)
 			}
 		}
 	}

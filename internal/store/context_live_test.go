@@ -345,7 +345,7 @@ func TestSessionContextPctOnly(t *testing.T) {
 	save(t, s, "s", "/main", nil, []usage.ContextTurn{pctTurn(0, 10), pctTurn(1, 14), pctTurn(2, 18)})
 	got := liveCtx(t, s, "s")
 	if !got.PctOnly || got.Pct != 18 || got.WindowTokens != 0 || got.Tokens != 0 ||
-		got.GrowthPerTurn != 4 || got.TurnsToLimit != 19 || got.AtLimit || got.TurnsSinceCompact != 3 ||
+		got.GrowthPerTurn != 4 || got.TurnsToLimit != 20 || got.AtLimit || got.TurnsSinceCompact != 3 ||
 		got.CacheHitPct != 0 || got.TTL != "" || got.IdleOverTTL || got.RecentRewrite != nil || got.WindowEstimated {
 		t.Fatalf("%+v", got)
 	}
