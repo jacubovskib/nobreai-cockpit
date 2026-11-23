@@ -1609,3 +1609,22 @@ func TestLegacySessionNoFalseNotice(t *testing.T) {
 		t.Fatalf("seen = %+v", sess.SeenConfig)
 	}
 }
+
+// SessionEnd de uma conversa que o Cockpit nunca viu (o daemon estava fora a
+// sessão inteira) cria a sessão, encerra e lê o transcript: o uso não se perde.
+func TestSessionEndWithoutSessionCreatesAndEnds(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	e.call(t, "session_end")
+	e.a.Wait()
+	x, err := e.st.GetSession(sessID)
+	if err != nil || x.EndedAt == nil || x.EndReason != "usuário saiu" {
+		t.Fatalf("sessão = %+v, err = %v", x, err)
+	}
+	if ts, _ := e.st.Totals(store.TotalsFilter{GroupBy: "session"}); len(ts) != 1 || ts[0].Output == 0 {
+		t.Fatalf("uso = %+v", ts)
+	}
+	if len(e.events(t, domain.EvSessionEnd)) != 1 {
+		t.Fatal("session_end não registrado")
+	}
+}
