@@ -209,7 +209,12 @@ func subagentWindows(mainPath string, lines []usage.LineRef, byUUID map[string]s
 		if out == nil {
 			out = map[string]string{}
 		}
-		out[usage.SubagentTranscript(mainPath, l.AgentID)] = byUUID[l.UUID]
+		// O mesmo agentId de novo (SendMessage continuando o agente): vale o
+		// primeiro, como entre leituras.
+		p := usage.SubagentTranscript(mainPath, l.AgentID)
+		if _, seen := out[p]; !seen {
+			out[p] = byUUID[l.UUID]
+		}
 	}
 	return out
 }

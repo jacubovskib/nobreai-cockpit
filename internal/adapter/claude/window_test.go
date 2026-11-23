@@ -700,3 +700,35 @@ func TestWindow_MainSubagentStaysOnMain(t *testing.T) {
 	wantWindows(t, "uso", e.usageWindows(t), map[string]string{"m2": "", "s1": "", "s2": "", "c1": childID(200)})
 	wantWindows(t, "card do uso", e.usageCards(t), map[string]string{"m2": mc.Key, "s1": mc.Key, "s2": mc.Key})
 }
+
+// O mesmo agentId em duas linhas de resultado (SendMessage continuando o
+// agente) numa leitura só: vale a primeira, como entre leituras.
+func TestWindow_RepeatedAgentIDFirstWins(t *testing.T) {
+	e, mc, cc := childAgentCall(t, true)
+	appendFile(t, e.transcript, wAssistant("ma2", "ma1", "m2", "tm2", time.Minute+31*time.Second)+
+		wAgentResult("mr2", "ma2", "tm2", "ab1", time.Minute+32*time.Second))
+	p := e.writeSub(t, "ab1", time.Minute+10*time.Second)
+	e.read(t)
+	turns, _ := e.subWindows(t, p)
+	wantWindows(t, "turno do subagente", turns, map[string]string{"s1": childID(200), "s2": childID(200)})
+	wantWindows(t, "card do uso", e.usageCards(t), map[string]string{"m1": mc.Key, "s1": cc.Key, "s2": cc.Key})
+}
+
+// A leitura de contexto do subagente falha depois de a janela dele ser
+// conhecida: o uso (lido até o fim, sem turno) fica com a janela do arquivo.
+func TestWindow_SubagentContextFailureUsesFileWindow(t *testing.T) {
+	e, _, cc := childAgentCall(t, true)
+	e.read(t)
+	p := e.writeSub(t, "ab1", time.Minute+10*time.Second)
+	orig := parseContext
+	t.Cleanup(func() { parseContext = orig })
+	parseContext = func(path string, off int64, st usage.ContextState) ([]usage.ToolOutput, []usage.ContextTurn, []usage.Prompt, []usage.LineRef, int64, usage.ContextState, bool, error) {
+		if path == p {
+			return nil, nil, nil, nil, off, st, false, errors.New("leitor quebrado")
+		}
+		return orig(path, off, st)
+	}
+	e.read(t)
+	wantWindows(t, "uso", e.usageWindows(t), map[string]string{"s1": childID(200), "s2": childID(200)})
+	wantWindows(t, "card do uso", e.usageCards(t), map[string]string{"s1": cc.Key, "s2": cc.Key})
+}
