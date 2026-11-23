@@ -11,7 +11,6 @@ import { RtkCard } from './config/RtkCard'
 import { ConfigLog } from './config/ConfigLog'
 import { ErrorLine, btn, btnPrimary, h2, input, muted, panel } from './card/shared'
 
-const AGENT_IDS = ['claude', 'codex', 'kiro']
 const RULES: [string, string][] = [
   ['goal', 'Objetivo e “pronto quando” preenchidos'],
   ['where_stopped', '“Onde parei” atualizado recentemente'],
@@ -102,7 +101,7 @@ function AgentCard({ info }: { info: AgentDetection }) {
     onSuccess: refresh,
   })
   const d = info.detection
-  const installable = info.agent === 'claude'
+  const { installable, status_line: hasStatusLine } = info
   const slIntegrated = d.checks.find((c) => c.key === 'statusline')?.ok === true
   return (
     <article aria-label={agentInfo(info.agent).name} style={{ ...panel, background: 'var(--bg)', padding: 14 }}>
@@ -129,15 +128,19 @@ function AgentCard({ info }: { info: AgentDetection }) {
           </button>
           <InstallResult rep={install.data} />
           <ErrorLine error={install.error} />
-          <p style={{ ...muted, margin: 0, fontSize: 12 }}>
-            Status line: o Cockpit entra no comando da sua status line para ler os limites do plano; a saída continua a mesma.
-          </p>
-          <button type="button" style={btn} disabled={statusLine.isPending}
-            onClick={() => statusLine.mutate(slIntegrated ? 'uninstall' : 'install')}>
-            {statusLine.isPending ? 'Aplicando…' : slIntegrated ? 'Remover integração' : 'Integrar status line'}
-          </button>
-          <InstallResult rep={statusLine.data} />
-          <ErrorLine error={statusLine.error} />
+          {hasStatusLine && (
+            <>
+              <p style={{ ...muted, margin: 0, fontSize: 12 }}>
+                Status line: o Cockpit entra no comando da sua status line para ler os limites do plano; a saída continua a mesma.
+              </p>
+              <button type="button" style={btn} disabled={statusLine.isPending}
+                onClick={() => statusLine.mutate(slIntegrated ? 'uninstall' : 'install')}>
+                {statusLine.isPending ? 'Aplicando…' : slIntegrated ? 'Remover integração' : 'Integrar status line'}
+              </button>
+              <InstallResult rep={statusLine.data} />
+              <ErrorLine error={statusLine.error} />
+            </>
+          )}
         </div>
       )}
     </article>
@@ -170,7 +173,7 @@ function Agents({ settings }: { settings?: Settings }) {
     <Section
       id="agentes"
       title="Agentes detectados"
-      hint="Instala os hooks e a skill do Claude Code neste computador; a status line só é integrada quando você pedir. Codex e Kiro chegam depois."
+      hint="Instala os hooks e a skill dos agentes neste computador; a status line, quando o agente tem uma, só é integrada quando você pedir."
       action={<button type="button" style={btn} disabled={agents.isFetching} onClick={() => agents.refetch()}>Escanear de novo</button>}
     >
       {agents.isError && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível detectar os agentes.</p>}
@@ -190,7 +193,7 @@ const limitDraft = (l?: Limit): LimitDraft => ({
   daily: showNum(l?.daily_usd ?? 0), card: showNum(l?.card_usd ?? 0), warn: String(l?.warn_pct ?? 80), action: l?.action ?? 'warn',
 })
 
-function Limits({ limits }: { limits: Limit[] }) {
+function Limits({ limits, agents: AGENT_IDS }: { limits: Limit[]; agents: string[] }) {
   const qc = useQueryClient()
   const [rows, setRows] = useState<Record<string, LimitDraft>>(() => Object.fromEntries(AGENT_IDS.map((a) => [a, limitDraft(limits.find((l) => l.agent === a))])))
   const save = useMutation({
@@ -734,6 +737,7 @@ function Prices({ settings }: { settings: Settings }) {
 export function Config() {
   const settings = useSettings()
   const limits = useLimits()
+  const agentList = useAgents()
   const projects = useProjects()
   const failed = settings.isError || limits.isError || projects.isError
   return (
@@ -752,7 +756,7 @@ export function Config() {
       {failed && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar as configurações.</p>}
       {!failed && (settings.isPending || limits.isPending || projects.isPending) && <p className="placeholder">Carregando…</p>}
       <Agents settings={settings.data} />
-      {limits.data && <Limits limits={limits.data} />}
+      {limits.data && agentList.data && <Limits limits={limits.data} agents={agentList.data.filter((a) => !a.spends_credits).map((a) => a.agent)} />}
       {settings.data && <CardCreation settings={settings.data} />}
       {settings.data && <Handoff settings={settings.data} />}
       {settings.data && <ContextMonitor settings={settings.data} />}

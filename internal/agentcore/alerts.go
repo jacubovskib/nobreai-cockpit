@@ -1,8 +1,7 @@
-package claude
+package agentcore
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/usage"
@@ -35,6 +34,11 @@ func contextWarningText(pct int, tokens int64) string {
 	return fmt.Sprintf("Contexto em %d%% da janela (%s tokens). Numa pausa natural, registre onde parou com nobre note e use /compact dizendo o que preservar, ou recomece limpo pelo card.", pct, fmtTokens(tokens))
 }
 
+// contextWarningPctText é o aviso de faixa para o agente que só informa a % da janela.
+func contextWarningPctText(pct int) string {
+	return fmt.Sprintf("Contexto em %d%% da janela. Numa pausa natural, registre onde parou com nobre note e use /compact dizendo o que preservar, ou recomece limpo pelo card.", pct)
+}
+
 // bigOutputText é o aviso de saída de ferramenta grande ao agente.
 func bigOutputText(tokens int64) string {
 	return fmt.Sprintf("Essa saída teve ~%s tokens e fica sendo relida a cada turno. Prefira ler trechos (offset/limit, grep) em vez do arquivo inteiro.", fmtTokens(tokens))
@@ -52,33 +56,33 @@ func contextBand(pcts []int, pct float64) int {
 	return band
 }
 
-// contextWarning é o aviso de faixa de contexto do prompt ("" sem nada a
+// ContextWarning é o aviso de faixa de contexto do prompt ("" sem nada a
 // dizer): só sessão com captura completa e avisos ligados. Avisa uma vez por
 // faixa por segmento de compactação da janela (a compactação de outra janela
 // da conversa não conta, ver ContextLive.Segment); um segmento novo reinicia
 // as faixas e avisa a mais alta já cruzada. Falhas do banco só vão para o log.
-func (a *Adapter) contextWarning(sess domain.Session, p payload) string {
-	if !sess.FullCapture || p.AgentID != "" {
+func (c *Core) ContextWarning(sess domain.Session, ev Event) string {
+	if !sess.FullCapture || ev.SubagentID != "" {
 		return ""
 	}
-	set, err := a.st.GetSettings()
+	set, err := c.st.GetSettings()
 	if err != nil {
-		log.Printf("hook claude: configurações: %v", err)
+		c.logf("configurações: %v", err)
 		return ""
 	}
 	if !set.AgentContextWarnings {
 		return ""
 	}
-	live, err := a.st.SessionContextWith(sess.ID, a.deps.Now(), set)
-	if err != nil || live.Tokens == 0 {
+	live, err := c.st.SessionContextWith(sess.ID, c.deps.Now(), set)
+	if err != nil || (live.Tokens == 0 && !live.PctOnly) {
 		if err != nil {
-			log.Printf("hook claude: contexto de %s: %v", sess.ID, err)
+			c.logf("contexto de %s: %v", sess.ID, err)
 		}
 		return ""
 	}
-	al, err := a.st.GetSessionAlerts(sess.ID)
+	al, err := c.st.GetSessionAlerts(sess.ID)
 	if err != nil {
-		log.Printf("hook claude: avisos de %s: %v", sess.ID, err)
+		c.logf("avisos de %s: %v", sess.ID, err)
 		return ""
 	}
 	band := contextBand(set.ContextWarnPcts, live.Pct)
@@ -86,37 +90,40 @@ func (a *Adapter) contextWarning(sess domain.Session, p payload) string {
 	if !newSegment && band <= al.WarnedPct {
 		return ""
 	}
-	if err := a.st.SetContextWarned(sess.ID, band, live.Segment); err != nil {
-		log.Printf("hook claude: avisos de %s: %v", sess.ID, err)
+	if err := c.st.SetContextWarned(sess.ID, band, live.Segment); err != nil {
+		c.logf("avisos de %s: %v", sess.ID, err)
 		return ""
 	}
 	if band == 0 {
 		return ""
 	}
+	if live.PctOnly {
+		return contextWarningPctText(int(live.Pct))
+	}
 	return contextWarningText(int(live.Pct), live.Tokens)
 }
 
-// bigOutputWarning é o aviso de saída grande do PostToolUse ("" sem nada a
+// bigOutputWarning é o aviso de saída grande do ToolAfter ("" sem nada a
 // dizer): tamanho da resposta da ferramenta estimado como
 // usage.EstimateTokens (bytes/4 arredondado para cima), acima de
 // big_output_tokens e até big_output_max avisos por sessão. Só o agente
 // principal (a saída de um subagente não entra no contexto dele).
-func (a *Adapter) bigOutputWarning(sess domain.Session, p payload) string {
-	if !sess.FullCapture || p.AgentID != "" || len(p.ToolResponse) == 0 {
+func (c *Core) bigOutputWarning(sess domain.Session, ev Event) string {
+	if !sess.FullCapture || ev.SubagentID != "" || ev.Tool.OutputBytes == 0 {
 		return ""
 	}
-	set, err := a.st.GetSettings()
+	set, err := c.st.GetSettings()
 	if err != nil {
-		log.Printf("hook claude: configurações: %v", err)
+		c.logf("configurações: %v", err)
 		return ""
 	}
-	tokens := usage.EstimateTokens(int64(len(p.ToolResponse)), 0)
+	tokens := usage.EstimateTokens(ev.Tool.OutputBytes, 0)
 	if !set.AgentContextWarnings || tokens <= int64(set.BigOutputTokens) {
 		return ""
 	}
-	ok, err := a.st.ClaimBigOutputWarning(sess.ID, set.BigOutputMax)
+	ok, err := c.st.ClaimBigOutputWarning(sess.ID, set.BigOutputMax)
 	if err != nil {
-		log.Printf("hook claude: avisos de %s: %v", sess.ID, err)
+		c.logf("avisos de %s: %v", sess.ID, err)
 		return ""
 	}
 	if !ok {

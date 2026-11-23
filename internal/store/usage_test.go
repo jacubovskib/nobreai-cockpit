@@ -202,3 +202,51 @@ func TestTotalsProjectFilter(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+func TestTotalsCredits(t *testing.T) {
+	s := usageFixture(t)
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	if err := s.PutPrice(domain.Price{Model: "priced", InputPerM: 3}); err != nil {
+		t.Fatal(err)
+	}
+	// Mesmo card: uma linha do Claude (tokens, USD) e duas do Kiro (só créditos, modelo sem preço).
+	rows := []domain.UsageRow{
+		{SessionID: "claude:1", MessageID: "m1", Model: "priced", Input: 1_000_000, At: at},
+		{SessionID: "claude:1", MessageID: "k1", Model: "auto", Credits: 0.25, At: at},
+		{SessionID: "claude:1", MessageID: "k2", Model: "auto", Credits: 0.5, At: at},
+		// Turno do Kiro que não gastou nada: sem tokens nem créditos.
+		{SessionID: "claude:1", MessageID: "k3", Model: "auto", Credits: 0, At: at},
+	}
+	if err := s.UpsertUsage(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertUsage(rows); err != nil { // reingestão não duplica
+		t.Fatal(err)
+	}
+	for _, g := range []string{"agent", "card", "session", "model", "day_agent", "project"} {
+		got, err := s.Totals(TotalsFilter{GroupBy: g})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cred, usd float64
+		for _, x := range got {
+			cred += x.Credits
+			usd += x.CostUSD
+			if x.Unpriced {
+				t.Errorf("%s: Unpriced ligado por linha só de créditos: %+v", g, x)
+			}
+		}
+		if cred != 0.75 || usd != 3 {
+			t.Errorf("%s: créditos %v, USD %v: %+v", g, cred, usd, got)
+		}
+	}
+	got, _ := s.Totals(TotalsFilter{GroupBy: "model"})
+	for _, x := range got {
+		if x.Key == "auto" && (x.Credits != 0.75 || x.CostUSD != 0) {
+			t.Errorf("auto: %+v", x)
+		}
+		if x.Key == "priced" && x.Credits != 0 {
+			t.Errorf("priced: %+v", x)
+		}
+	}
+}

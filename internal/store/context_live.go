@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -43,6 +44,7 @@ type ContextLive struct {
 	WindowTokens      int64               `json:"window_tokens"`
 	WindowEstimated   bool                `json:"window_estimated"` // janela padrão por modelo desconhecido
 	Pct               float64             `json:"pct"`
+	PctOnly           bool                `json:"pct_only"`        // só a % da janela é conhecida (Kiro): sem tokens, cache nem TTL; crescimento e turnos em pontos percentuais
 	GrowthPerTurn     int64               `json:"growth_per_turn"` // média desde a última compactação; 0 com menos de 3 turnos
 	TurnsToLimit      int64               `json:"turns_to_limit"`  // até 95% da janela; 0 sem crescimento
 	AtLimit           bool                `json:"at_limit"`        // já em 95% da janela ou mais (TurnsToLimit fica 0)
@@ -55,7 +57,7 @@ type ContextLive struct {
 	IdleOverTTL       bool                `json:"idle_over_ttl"` // parada além do cache, com contexto > 200.000
 	TopOutputs        []ContextLiveOutput `json:"top_outputs"`
 	// Segment é o segmento (do arquivo) do primeiro turno depois da última
-	// compactação da janela (só com Tokens > 0): só muda numa compactação da
+	// compactação da janela (turnos com tokens ou só com %): só muda numa compactação da
 	// própria janela.
 	Segment int `json:"-"`
 }
@@ -63,6 +65,8 @@ type ContextLive struct {
 // liveRow é um turno lido para o cálculo do medidor.
 type liveRow struct {
 	tokens, input, read, write int64
+	pct                        float64
+	pctOnly                    bool
 	segment                    int
 	at                         time.Time
 	ttl                        string
@@ -113,7 +117,7 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 	}
 	out.Model = model
 
-	rows, err := s.DB.Query(`SELECT tokens, input, cache_read, cache_write, segment, at, ttl FROM context_turns
+	rows, err := s.DB.Query(`SELECT tokens, input, cache_read, cache_write, segment, at, ttl, pct FROM context_turns
 		WHERE session_id=? AND path=? AND `+where+` ORDER BY turn`, append([]any{owner, mainPath}, args...)...)
 	if err != nil {
 		return out, err
@@ -122,10 +126,12 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 	for rows.Next() {
 		var t liveRow
 		var at string
-		if err := rows.Scan(&t.tokens, &t.input, &t.read, &t.write, &t.segment, &at, &t.ttl); err != nil {
+		var pct sql.NullFloat64
+		if err := rows.Scan(&t.tokens, &t.input, &t.read, &t.write, &t.segment, &at, &t.ttl, &pct); err != nil {
 			rows.Close()
 			return out, err
 		}
+		t.pct, t.pctOnly = pct.Float64, pct.Valid && t.tokens == 0
 		t.at, _ = time.Parse(time.RFC3339Nano, at)
 		turns = append(turns, t)
 	}
@@ -169,8 +175,13 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 				break
 			}
 		}
-		out.Pct = float64(last.tokens) * 100 / float64(out.WindowTokens)
-		fillTurnStats(&out, turns, foreign, now)
+		if last.pctOnly {
+			out.PctOnly, out.WindowTokens, out.WindowEstimated, out.Pct = true, 0, false, last.pct
+			fillPctStats(&out, turns, foreign)
+		} else {
+			out.Pct = float64(last.tokens) * 100 / float64(out.WindowTokens)
+			fillTurnStats(&out, turns, foreign, now)
+		}
 	}
 	if t, err := time.Parse(time.RFC3339Nano, lastEvent); err == nil {
 		out.IdleSec = max(0, int64(now.Sub(t).Seconds()))
@@ -215,11 +226,11 @@ func fillWindow(out *ContextLive, set domain.Settings, maxTokens int64) {
 	}
 }
 
-// fillTurnStats calcula crescimento, compactações, cache e regravação (turns
-// não vazio). foreign são os segmentos abertos por compactação de outra janela.
-func fillTurnStats(out *ContextLive, turns []liveRow, foreign map[int]bool, now time.Time) {
-	// Compactação = salto de segmento entre turnos consecutivos com alguma
-	// compactação que não é de outra janela no meio.
+// fillSegments conta as compactações da janela e devolve os turnos desde a
+// última (turns não vazio). Compactação = salto de segmento entre turnos
+// consecutivos com alguma compactação que não é de outra janela no meio.
+// foreign são os segmentos abertos por compactação de outra janela.
+func fillSegments(out *ContextLive, turns []liveRow, foreign map[int]bool) []liveRow {
 	from := 0
 	for i := 1; i < len(turns); i++ {
 		if ownCompaction(turns[i-1].segment, turns[i].segment, foreign) {
@@ -228,8 +239,29 @@ func fillTurnStats(out *ContextLive, turns []liveRow, foreign map[int]bool, now 
 		}
 	}
 	out.Segment = turns[from].segment
-	seg := turns[from:]
-	out.TurnsSinceCompact = len(seg)
+	out.TurnsSinceCompact = len(turns) - from
+	return turns[from:]
+}
+
+// fillPctStats é fillTurnStats para o agente que só informa a % da janela:
+// crescimento em pontos percentuais por turno e turnos até 95%, sem cache.
+func fillPctStats(out *ContextLive, turns []liveRow, foreign map[int]bool) {
+	seg := fillSegments(out, turns, foreign)
+	if len(seg) >= 3 {
+		if g := (seg[len(seg)-1].pct - seg[0].pct) / float64(len(seg)-1); g > 0 {
+			out.GrowthPerTurn = int64(math.Round(g))
+			if room := limitPct*100 - out.Pct; room > 0 {
+				out.TurnsToLimit = int64(math.Ceil(room / g)) // para cima, como no caminho de tokens; usa a média sem arredondar (GrowthPerTurn só exibe)
+			}
+		}
+	}
+	out.AtLimit = out.Pct >= limitPct*100
+}
+
+// fillTurnStats calcula crescimento, compactações, cache e regravação (turns
+// não vazio).
+func fillTurnStats(out *ContextLive, turns []liveRow, foreign map[int]bool, now time.Time) {
+	seg := fillSegments(out, turns, foreign)
 	if len(seg) >= 3 {
 		if g := (seg[len(seg)-1].tokens - seg[0].tokens) / int64(len(seg)-1); g > 0 {
 			out.GrowthPerTurn = g

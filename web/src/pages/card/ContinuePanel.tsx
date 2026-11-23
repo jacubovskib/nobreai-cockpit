@@ -1,15 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, post } from '../../api/client'
-import { usePrompts, useSettings } from '../../api/queries'
+import { useAgents, usePrompts, useSettings } from '../../api/queries'
 import { agentInfo } from '../../ui/agents'
 import { ErrorLine, btnPrimary, h2, input, muted, panel } from './shared'
 
-const AGENT_OPTIONS = [
-  { id: 'claude', enabled: true },
-  { id: 'codex', enabled: false },
-  { id: 'kiro', enabled: false },
-]
 const PLATFORM_MODE = 'platform'
 const BACKGROUND_MODE = 'background'
 
@@ -23,20 +18,25 @@ const LAUNCH_MODE_NAMES: Record<string, string> = {
   background: 'Segundo plano, com saída na interface',
 }
 
-// `enabled` liga o botão (Claude Code no piloto). Sessão viva no card volta
-// 409; a mensagem aparece em linha com "Forçar mesmo assim", que reenvia com force.
-export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKey: string; enabled?: boolean; onTerminal?: (id: string) => void }) {
+// `enabled` liga o botão. Os agentes vêm de /api/agents (instalados ficam
+// escolhíveis); o padrão é `lastAgent` (agente da sessão mais recente do card),
+// ou o primeiro instalado. Sessão viva no card volta 409; a mensagem aparece em
+// linha com "Forçar mesmo assim", que reenvia com force.
+export function ContinuePanel({ cardKey, enabled = false, onTerminal, lastAgent }: { cardKey: string; enabled?: boolean; onTerminal?: (id: string) => void; lastAgent?: string }) {
   const qc = useQueryClient()
   const prompts = usePrompts()
   const settings = useSettings().data
   const modeName = settings ? LAUNCH_MODE_NAMES[settings.launch_mode || 'terminal'] : undefined
   const platformLabel = `Padrão da plataforma (${modeName ?? 'definido em Configuração'})`
-  const [agent, setAgent] = useState('claude')
+  const agents = useAgents().data ?? []
+  const [picked, setPicked] = useState<string | null>(null)
+  const found = (id?: string | null) => agents.some((a) => a.agent === id && a.detection.found)
+  const agent = found(picked) ? picked! : found(lastAgent) ? lastAgent! : agents.find((a) => a.detection.found)?.agent ?? ''
   const [mode, setMode] = useState(PLATFORM_MODE)
   const [slug, setSlug] = useState<string | null>(null)
   const list = prompts.data ?? []
   const effectiveSlug = slug ?? list.find((p) => p.is_default_handoff)?.slug ?? ''
-  const name = agentInfo(agent).name
+  const name = agent ? agentInfo(agent).name : 'agente'
   const [previewOpen, setPreviewOpen] = useState(false)
   // A mesma montagem do envio (POST .../continue/preview): o que aparece aqui
   // é o texto que o agente recebe.
@@ -64,7 +64,8 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
     <section aria-labelledby="cont-t" style={panel}>
       <h2 id="cont-t" style={h2}>Continuar com outro agente</h2>
       <div role="radiogroup" aria-label="Agente" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {AGENT_OPTIONS.map((a) => {
+        {agents.map((d) => {
+          const a = { id: d.agent, enabled: d.detection.found }
           const info = agentInfo(a.id)
           return (
             <button
@@ -73,12 +74,12 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
               role="radio"
               aria-checked={agent === a.id}
               disabled={!a.enabled}
-              onClick={() => setAgent(a.id)}
+              onClick={() => setPicked(a.id)}
               style={{ display: 'flex', gap: 10, alignItems: 'center', minHeight: 44, padding: '0 12px', borderRadius: 8, textAlign: 'left', font: 'inherit', color: 'var(--text)', background: agent === a.id ? '#1F232C' : 'transparent', border: `1px solid ${agent === a.id ? info.color : '#3A3F4B'}`, cursor: a.enabled ? 'pointer' : 'not-allowed', opacity: a.enabled ? 1 : 0.6 }}
             >
               <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, background: info.color }} />
               <span>{info.name}</span>
-              {!a.enabled && <span style={muted}>em breve</span>}
+              {!a.enabled && <span style={muted}>não instalado</span>}
             </button>
           )
         })}
@@ -115,7 +116,7 @@ export function ContinuePanel({ cardKey, enabled = false, onTerminal }: { cardKe
         </select>
       </label>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button type="button" style={{ ...btnPrimary, opacity: enabled ? 1 : 0.5 }} disabled={!enabled || start.isPending} onClick={() => start.mutate(false)}>
+        <button type="button" style={{ ...btnPrimary, opacity: enabled ? 1 : 0.5 }} disabled={!enabled || !agent || start.isPending} onClick={() => start.mutate(false)}>
           Iniciar {name} neste card
         </button>
         {!enabled && <span style={muted}>disponível na próxima etapa</span>}

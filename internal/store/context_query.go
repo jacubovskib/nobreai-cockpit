@@ -218,7 +218,7 @@ func (s *Store) ContextTotals(f ContextFilter) (ContextTotals, error) {
 	var t ContextTotals
 	w, args := f.where("t.at", "COALESCE(c.project_id, s.project_id)")
 	err := s.DB.QueryRow(`SELECT COALESCE(SUM(t.tokens),0) FROM context_turns t
-		JOIN sessions s ON s.id = t.session_id LEFT JOIN cards c ON c.id = s.card_id`+w, args...).Scan(&t.ContextTotal)
+		JOIN sessions s ON s.id = t.session_id LEFT JOIN cards c ON c.id = s.card_id`+w+` AND t.pct IS NULL`, args...).Scan(&t.ContextTotal)
 	if err != nil {
 		return t, err
 	}

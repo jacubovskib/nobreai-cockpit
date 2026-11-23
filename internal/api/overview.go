@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"net/http"
 	"sort"
 	"strings"
@@ -42,7 +43,8 @@ type ActiveSession struct {
 
 // AgentSpend é o gasto de hoje de um agente frente ao limite diário
 // (DailyUSD 0 = sem limite). Action é a ação do limite em 100% ("pause" ou
-// "warn"; vazio sem limite configurado).
+// "warn"; vazio sem limite configurado). Credits é o gasto em créditos de
+// hoje, à parte do SpentUSD (nunca somado a ele).
 type AgentSpend struct {
 	Agent    string  `json:"agent"`
 	SpentUSD float64 `json:"spent_usd"`
@@ -51,6 +53,7 @@ type AgentSpend struct {
 	WarnPct  int     `json:"warn_pct"`
 	Action   string  `json:"action"`
 	Unpriced bool    `json:"unpriced"`
+	Credits  float64 `json:"credits"`
 }
 
 // TodayTotals são os indicadores do dia local (00:00 até 00:00 seguinte).
@@ -60,8 +63,10 @@ type TodayTotals struct {
 	CardsInProgress  int `json:"cards_in_progress"`
 	CardsWithoutLive int `json:"cards_without_live_session"`
 	// CostUSD soma só o uso com preço; CostUnpriced avisa que há uso sem preço.
-	CostUSD          float64      `json:"cost_usd"`
-	CostUnpriced     bool         `json:"cost_unpriced"`
+	CostUSD      float64 `json:"cost_usd"`
+	CostUnpriced bool    `json:"cost_unpriced"`
+	// Credits soma o gasto em créditos (Kiro), à parte do CostUSD.
+	Credits          float64      `json:"credits"`
 	DailyLimitUSD    float64      `json:"daily_limit_usd"`
 	TokensInput      int64        `json:"tokens_input"`
 	TokensOutput     int64        `json:"tokens_output"`
@@ -97,14 +102,7 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, o)
 }
 
-var agentNames = map[string]string{"claude": "Claude Code", "codex": "Codex", "kiro": "Kiro"}
-
-func agentName(id string) string {
-	if n, ok := agentNames[id]; ok {
-		return n
-	}
-	return id
-}
+func agentName(id string) string { return agents.DisplayName(id) }
 
 // usd formata em pt-BR: "US$ 8,20".
 func usd(v float64) string {
@@ -264,6 +262,7 @@ func (s *server) buildOverview() (Overview, error) {
 		spent[ta.Key] = ta
 		t.CostUSD += ta.CostUSD
 		t.CostUnpriced = t.CostUnpriced || ta.Unpriced
+		t.Credits += ta.Credits
 		t.TokensInput += ta.Input
 		t.TokensOutput += ta.Output
 		t.TokensCacheWrite += ta.CacheWrite
@@ -279,7 +278,7 @@ func (s *server) buildOverview() (Overview, error) {
 			return o, err
 		}
 		t.PerAgent = append(t.PerAgent, AgentSpend{Agent: l.Agent, SpentUSD: ls.AgentSpentUSD, DailyUSD: l.DailyUSD,
-			Pct: ls.Pct, WarnPct: l.WarnPct, Action: l.Action, Unpriced: spent[l.Agent].Unpriced})
+			Pct: ls.Pct, WarnPct: l.WarnPct, Action: l.Action, Unpriced: spent[l.Agent].Unpriced, Credits: spent[l.Agent].Credits})
 		if ls.Warn || ls.Over {
 			o.Alerts = append(o.Alerts, Alert{Kind: "limit_warn", Agent: l.Agent,
 				Text: fmt.Sprintf("%s usou %d%% do limite diário (%s de %s).", agentName(l.Agent), ls.Pct, usd(ls.AgentSpentUSD), usd(l.DailyUSD))})
@@ -287,7 +286,7 @@ func (s *server) buildOverview() (Overview, error) {
 	}
 	for _, ta := range todayAgents {
 		if !seen[ta.Key] {
-			t.PerAgent = append(t.PerAgent, AgentSpend{Agent: ta.Key, SpentUSD: ta.CostUSD, Unpriced: ta.Unpriced})
+			t.PerAgent = append(t.PerAgent, AgentSpend{Agent: ta.Key, SpentUSD: ta.CostUSD, Unpriced: ta.Unpriced, Credits: ta.Credits})
 		}
 	}
 	sort.Slice(t.PerAgent, func(i, j int) bool { return t.PerAgent[i].Agent < t.PerAgent[j].Agent })

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"log"
 	"net/http"
 	"os"
@@ -36,7 +37,7 @@ func (f *fakeAdapter) Install() (adapter.InstallReport, error) { return adapter.
 func (f *fakeAdapter) Binary() string                          { return "/x/fake" }
 func (f *fakeAdapter) LaunchCommand(bin, p string) []string    { return []string{bin, p} }
 
-func newHookAPI(t *testing.T, adapters map[string]adapter.Adapter) *testAPI {
+func newHookAPI(t *testing.T, adapters *agents.Registry) *testAPI {
 	t.Helper()
 	st, err := store.Open(t.TempDir() + "/cockpit.db")
 	if err != nil {
@@ -45,7 +46,7 @@ func newHookAPI(t *testing.T, adapters map[string]adapter.Adapter) *testAPI {
 	t.Cleanup(func() { st.Close() })
 	hub := NewHub()
 	t.Cleanup(hub.Close)
-	h := New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Adapters: adapters})
+	h := New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Agents: adapters})
 	return &testAPI{st: st, h: h, hub: hub}
 }
 
@@ -59,7 +60,7 @@ func TestHookUnknownAgent(t *testing.T) {
 
 func TestHookPassesCallAndReply(t *testing.T) {
 	f := &fakeAdapter{reply: adapter.HookReply{Stdout: `{"decision":"block"}`}}
-	a := newHookAPI(t, map[string]adapter.Adapter{"fake": f})
+	a := newHookAPI(t, agents.New(f))
 	rec := a.do(t, "POST", "/api/hooks/fake", map[string]any{
 		"event": "Stop", "payload": map[string]any{"session_id": "s"}, "agent_pid": 77, "env": map[string]string{"NOBRE_RESUME": "NAC-1"},
 	}, 0)
@@ -79,7 +80,7 @@ func TestHookPassesCallAndReply(t *testing.T) {
 
 func TestHookErrorNeverBreaksAgent(t *testing.T) {
 	f := &fakeAdapter{err: errors.New("banco fora")}
-	a := newHookAPI(t, map[string]adapter.Adapter{"fake": f})
+	a := newHookAPI(t, agents.New(f))
 	rec := a.do(t, "POST", "/api/hooks/fake", map[string]any{"event": "Stop", "payload": map[string]any{}}, 0)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
@@ -103,7 +104,7 @@ func TestHookClaudeEndToEnd(t *testing.T) {
 	ad := claude.New(st, adapter.Deps{Now: func() time.Time { return testNow }, Publish: hub.Publish})
 	t.Cleanup(ad.Wait)
 	a = &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub,
-		Adapters: map[string]adapter.Adapter{"claude": ad}})}
+		Agents: agents.New(ad)})}
 	if _, err := st.CreateProject("api", "/w/api"); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +191,7 @@ func TestHookAcceptsLargePayload(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	ad := claude.New(st, adapter.Deps{Now: func() time.Time { return testNow }})
 	t.Cleanup(ad.Wait)
-	a := &testAPI{st: st, h: New(st, Deps{Now: func() time.Time { return testNow }, Adapters: map[string]adapter.Adapter{"claude": ad}})}
+	a := &testAPI{st: st, h: New(st, Deps{Now: func() time.Time { return testNow }, Agents: agents.New(ad)})}
 	if _, err := st.CreateProject("api", "/w/api"); err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +220,7 @@ func TestHookRejectsHugePayloadAndLogs(t *testing.T) {
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	f := &fakeAdapter{}
-	a := newHookAPI(t, map[string]adapter.Adapter{"fake": f})
+	a := newHookAPI(t, agents.New(f))
 	big := strings.Repeat("x", maxHookBody)
 	rec := a.do(t, "POST", "/api/hooks/fake", map[string]any{"event": "PostToolUse", "payload": map[string]any{"c": big}}, 0)
 	if rec.Code != http.StatusRequestEntityTooLarge {

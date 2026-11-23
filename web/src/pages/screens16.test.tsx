@@ -42,13 +42,13 @@ const agents = [
     { key: 'hooks', label: 'Hooks instalados', detail: 'faltam: Stop', ok: false },
     { key: 'skill', label: 'Skill do Cockpit instalada', detail: '', ok: true },
     { key: 'events', label: 'Recebendo eventos', detail: 'nenhum evento recebido ainda', ok: false },
-  ] } },
-  ...['codex', 'kiro'].map((agent) => ({ agent, detection: { ...stub, checks: [{ key: 'adapter', label: 'Adaptador', detail: 'Adaptador chega no plano 2', ok: false }] } })),
+  ] }, installable: true, status_line: true },
+  ...['codex', 'kiro'].map((agent) => ({ agent, installable: false, status_line: false, detection: { ...stub, checks: [{ key: 'adapter', label: 'Adaptador', detail: 'Adaptador chega no plano 2', ok: false }] } })),
 ]
 
 describe('Config', () => {
   const routes = {
-    '/api/settings': settings, '/api/limits': [], '/api/projects': [{ id: 1, name: 'api', path: '/w/api', capture: true }],
+    '/api/settings': settings, '/api/limits': [], '/api/agents': agents, '/api/projects': [{ id: 1, name: 'api', path: '/w/api', capture: true }],
     '/api/cards': [], '/api/prices': [], '/api/usage/totals?group=model': [tot({ key: 'gpt-x', unpriced: true })],
     'PUT /api/settings': settings, 'PUT /api/limits': {}, 'PATCH /api/projects/1': {}, 'POST /api/projects': {},
   }

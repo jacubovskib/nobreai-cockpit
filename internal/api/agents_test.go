@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -42,7 +43,7 @@ func agentsAPIWith(t *testing.T, src IntegrationSource) (*testAPI, string, strin
 	ad.SetPaths(claude.Paths{SettingsPath: settings, SkillsDir: skills, NobreBin: nobre, ClaudeBin: "/nao/existe"})
 	hub := NewHub()
 	t.Cleanup(hub.Close)
-	h := New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Adapters: map[string]adapter.Adapter{"claude": ad}, Integration: srcOrNil(src)})
+	h := New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub, Agents: agents.New(ad), Integration: srcOrNil(src)})
 	return &testAPI{st: st, h: h, hub: hub}, settings, skills
 }
 

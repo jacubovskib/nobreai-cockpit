@@ -102,7 +102,7 @@ describe('alerta plan_limit na Sala de controle', () => {
   it('renderiza com link para o painel, sem card nem agente', async () => {
     const overview: Overview = {
       active: [], no_card: [], events: [],
-      today: { active_agents: 0, cards_in_progress: 0, cards_without_live_session: 0, cost_usd: 0, cost_unpriced: false, daily_limit_usd: 0, tokens_input: 0, tokens_output: 0, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [] },
+      today: { active_agents: 0, cards_in_progress: 0, cards_without_live_session: 0, cost_usd: 0, cost_unpriced: false, credits: 0, daily_limit_usd: 0, tokens_input: 0, tokens_output: 0, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [] },
       alerts: [{ kind: 'plan_limit', card_key: '', agent: 'claude', text: 'Sessão de 5 h do plano em 85% (reinicia às 17:30).' }],
     }
     mock({ '/api/overview': overview, '/api/settings': {}, [URL]: data({}), '/api/terminals': [] })
@@ -116,7 +116,7 @@ describe('alerta plan_limit na Sala de controle', () => {
   it('some quando a janela já reiniciou no relógio do cliente', async () => {
     const overview: Overview = {
       active: [], no_card: [], events: [],
-      today: { active_agents: 0, cards_in_progress: 0, cards_without_live_session: 0, cost_usd: 0, cost_unpriced: false, daily_limit_usd: 0, tokens_input: 0, tokens_output: 0, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [] },
+      today: { active_agents: 0, cards_in_progress: 0, cards_without_live_session: 0, cost_usd: 0, cost_unpriced: false, credits: 0, daily_limit_usd: 0, tokens_input: 0, tokens_output: 0, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [] },
       alerts: [
         { kind: 'plan_limit', card_key: '', agent: 'claude', text: 'Sessão de 5 h do plano em 85% (reinicia às 15:15).', resets_at: iso(-1) },
         { kind: 'plan_limit', card_key: '', agent: 'claude', text: 'Limite semanal do plano em 90% (reinicia ter às 19:05).', resets_at: iso(60 * 24) },
@@ -131,7 +131,7 @@ describe('alerta plan_limit na Sala de controle', () => {
   it('sem alertas vigentes diz que nada precisa de atenção', async () => {
     const overview: Overview = {
       active: [], no_card: [], events: [],
-      today: { active_agents: 0, cards_in_progress: 0, cards_without_live_session: 0, cost_usd: 0, cost_unpriced: false, daily_limit_usd: 0, tokens_input: 0, tokens_output: 0, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [] },
+      today: { active_agents: 0, cards_in_progress: 0, cards_without_live_session: 0, cost_usd: 0, cost_unpriced: false, credits: 0, daily_limit_usd: 0, tokens_input: 0, tokens_output: 0, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [] },
       alerts: [{ kind: 'plan_limit', card_key: '', agent: 'claude', text: 'Sessão de 5 h do plano em 85% (reinicia às 15:15).', resets_at: iso(-1) }],
     }
     mock({ '/api/overview': overview, '/api/settings': {}, [URL]: data({}), '/api/terminals': [] })
@@ -147,7 +147,7 @@ describe('Config: aviso do plano', () => {
   }
   const routes = {
     '/api/settings': settings, '/api/limits': [], '/api/projects': [], '/api/cards': [], '/api/prices': [], '/api/usage/totals?group=model': [],
-    '/api/agents': [{ agent: 'claude', detection: { found: true, path: '/usr/bin/claude', version: '2', checks: [{ key: 'statusline', label: 'Status line integrada', detail: '', ok: false }] } }],
+    '/api/agents': [{ agent: 'claude', installable: true, status_line: true, detection: { found: true, path: '/usr/bin/claude', version: '2', checks: [{ key: 'statusline', label: 'Status line integrada', detail: '', ok: false }] } }],
     'PUT /api/settings': settings,
   }
   it('mostra o check da status line e salva plan_warn_pct', async () => {

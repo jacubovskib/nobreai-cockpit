@@ -26,6 +26,8 @@ type overviewResp struct {
 		CardsInProgress  int     `json:"cards_in_progress"`
 		CardsWithoutLive int     `json:"cards_without_live_session"`
 		CostUSD          float64 `json:"cost_usd"`
+		CostUnpriced     bool    `json:"cost_unpriced"`
+		Credits          float64 `json:"credits"`
 		DailyLimitUSD    float64 `json:"daily_limit_usd"`
 		TokensInput      int64   `json:"tokens_input"`
 		PerAgent         []struct {
@@ -33,6 +35,7 @@ type overviewResp struct {
 			SpentUSD float64 `json:"spent_usd"`
 			DailyUSD float64 `json:"daily_usd"`
 			Action   string  `json:"action"`
+			Credits  float64 `json:"credits"`
 		} `json:"per_agent"`
 	} `json:"today"`
 	Alerts []struct {
@@ -326,5 +329,35 @@ func TestOverviewIncompleteAlertDependsOnSetting(t *testing.T) {
 	got, _ := a.st.GetCard(c.Key)
 	if !got.HandoffIncomplete {
 		t.Fatal("a marca deveria continuar no banco")
+	}
+}
+
+func TestOverviewTodayCredits(t *testing.T) {
+	a := newTestAPI(t)
+	if err := a.st.StartSession(domain.Session{ID: "kiro:1", Agent: "kiro", PID: 1, StartedAt: testNow.Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.UpsertUsage([]domain.UsageRow{
+		{SessionID: "kiro:1", MessageID: "k1", Model: "auto", Credits: 0.25, At: testNow.Add(-30 * time.Minute)},
+		{SessionID: "kiro:1", MessageID: "k2", Model: "auto", Credits: 0.5, At: testNow.Add(-20 * time.Minute)},
+		// Turno sem gasto (0 créditos, sem tokens): nada a precificar.
+		{SessionID: "kiro:1", MessageID: "k3", Model: "auto", Credits: 0, At: testNow.Add(-10 * time.Minute)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	o := decode[overviewResp](t, a.do(t, "GET", "/api/overview", nil, 0))
+	if o.Today.Credits != 0.75 || o.Today.CostUSD != 0 {
+		t.Fatalf("today = credits %v, usd %v", o.Today.Credits, o.Today.CostUSD)
+	}
+	if o.Today.CostUnpriced {
+		t.Fatal("custo de hoje sem preço por turno sem tokens")
+	}
+	if len(o.Today.PerAgent) != 1 || o.Today.PerAgent[0].Agent != "kiro" || o.Today.PerAgent[0].Credits != 0.75 || o.Today.PerAgent[0].SpentUSD != 0 {
+		t.Fatalf("por agente = %+v", o.Today.PerAgent)
+	}
+	for _, al := range o.Alerts {
+		if al.Kind == "unpriced" {
+			t.Fatalf("alerta de modelo sem preço: %+v", al)
+		}
 	}
 }

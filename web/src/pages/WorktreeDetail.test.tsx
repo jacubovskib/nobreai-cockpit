@@ -6,7 +6,7 @@ import { Worktrees } from './Worktrees'
 import type { WorktreeDetail } from '../api/types'
 import { ago, res, session, wt } from './worktreeFixtures'
 
-const total = { key: '', agent: '', day: '', sessions: 1, input: 1200, output: 300, cache_write: 0, cache_read: 0, cost_usd: 0.42, unpriced: false }
+const total = { key: '', agent: '', day: '', sessions: 1, input: 1200, output: 300, cache_write: 0, cache_read: 0, cost_usd: 0.42, credits: 0, unpriced: false }
 const detailURL = '/api/worktrees/detail?project=1&path=%2Fw%2Fapi-oauth'
 
 function mockApi(routes: Record<string, unknown>) {

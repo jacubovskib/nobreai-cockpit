@@ -5,7 +5,7 @@ import type { Total } from '../../api/types'
 import { CurrencyContext } from '../../ui/money'
 
 const t = (day: string, agent: string, cost: number, unpriced = false): Total =>
-  ({ key: `${day}|${agent}`, agent, day, sessions: 1, input: 0, output: 0, cache_write: 0, cache_read: 0, cost_usd: cost, unpriced })
+  ({ key: `${day}|${agent}`, agent, day, sessions: 1, input: 0, output: 0, cache_write: 0, cache_read: 0, cost_usd: cost, credits: 0, unpriced })
 
 describe('DailyChart', () => {
   const days = buildDays([t('2026-11-04', 'claude', 6.9), t('2026-11-04', 'codex', 6.3), t('2026-11-05', 'kiro', 0.69)], '2026-11-04', '2026-11-06')

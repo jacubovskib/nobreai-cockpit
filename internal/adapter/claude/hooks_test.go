@@ -1609,3 +1609,47 @@ func TestLegacySessionNoFalseNotice(t *testing.T) {
 		t.Fatalf("seen = %+v", sess.SeenConfig)
 	}
 }
+
+// SessionEnd de uma conversa que o Cockpit nunca viu (o daemon estava fora a
+// sessão inteira) cria a sessão, encerra e lê o transcript: o uso não se perde.
+func TestSessionEndWithoutSessionCreatesAndEnds(t *testing.T) {
+	e := newEnv(t)
+	e.project(t)
+	e.call(t, "session_end")
+	e.a.Wait()
+	x, err := e.st.GetSession(sessID)
+	if err != nil || x.EndedAt == nil || x.EndReason != "usuário saiu" {
+		t.Fatalf("sessão = %+v, err = %v", x, err)
+	}
+	if ts, _ := e.st.Totals(store.TotalsFilter{GroupBy: "session"}); len(ts) != 1 || ts[0].Output == 0 {
+		t.Fatalf("uso = %+v", ts)
+	}
+	if len(e.events(t, domain.EvSessionEnd)) != 1 {
+		t.Fatal("session_end não registrado")
+	}
+}
+
+// O motivo do SessionEnd é traduzido na sessão; o evento guarda o código do
+// Claude Code como veio.
+func TestSessionEndReasonTranslated(t *testing.T) {
+	for code, want := range map[string]string{
+		"clear": "conversa limpa (/clear)", "logout": "logout", "prompt_input_exit": "usuário saiu",
+		"other": "encerrada pelo agente", "novo_motivo": "novo_motivo", "": "encerrada pelo agente",
+	} {
+		e := newEnv(t)
+		e.project(t)
+		e.call(t, "session_start")
+		e.call(t, "session_end", with("reason", code))
+		e.a.Wait()
+		if x, _ := e.st.GetSession(sessID); x.EndReason != want {
+			t.Fatalf("%q: motivo = %q", code, x.EndReason)
+		}
+		evs := e.events(t, domain.EvSessionEnd)
+		var d struct {
+			Reason string `json:"reason"`
+		}
+		if len(evs) != 1 || json.Unmarshal(evs[0].Data, &d) != nil || d.Reason != code {
+			t.Fatalf("%q: eventos = %+v", code, evs)
+		}
+	}
+}

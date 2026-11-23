@@ -57,7 +57,10 @@ type ContextTurn struct {
 	CacheWrite int64
 	// TTL do cache gravado no turno: "1h" se ephemeral_1h_input_tokens > 0,
 	// senão "5m" se ephemeral_5m_input_tokens > 0, senão "".
-	TTL        string
+	TTL string
+	// Pct é a ocupação da janela em % quando o agente só informa isso (Kiro,
+	// com Tokens 0); nil nos turnos do Claude.
+	Pct        *float64
 	UUID       string
 	ParentUUID string
 }

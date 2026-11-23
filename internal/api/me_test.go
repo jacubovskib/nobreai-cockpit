@@ -2,13 +2,19 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/kiro"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
 // liveSession cria uma sessão viva com o PID e, se key != "", liga ao card.
@@ -159,7 +165,7 @@ func TestMeStartAndContent(t *testing.T) {
 }
 
 func TestMeStartWithoutProjectAsksTheUser(t *testing.T) {
-	a := newTestAPI(t)
+	a := guideAPI(t) // o aviso cita a skill do driver do Claude
 	a.liveSession(t, "claude:s", 4242, "")
 	rec := a.do(t, "POST", "/api/me/start", map[string]string{"title": "Novo"}, 4242)
 	want := "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan (veja a skill nobre-cockpit)."
@@ -456,6 +462,43 @@ func TestMeCardsNoProject409(t *testing.T) {
 	rec := a.do(t, "POST", "/api/me/cards", map[string]string{"title": "B"}, 4242)
 	if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != msgNoProject {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// guideAPI é o testAPI com os drivers do Claude e do Kiro registrados.
+func guideAPI(t *testing.T) *testAPI {
+	t.Helper()
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	reg := agents.New(claude.New(st, adapter.Deps{}), kiro.New(st, adapter.Deps{}))
+	return &testAPI{st: st, h: New(st, Deps{Now: func() time.Time { return testNow }, Agents: reg})}
+}
+
+// O aviso de repositório não cadastrado cita o guia do nobre do agente da
+// sessão (agentcore.Guide); sem driver registrado, não cita guia.
+func TestMeNoProjectCitesAgentGuide(t *testing.T) {
+	a := guideAPI(t)
+	st := a.st
+	base := "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan"
+	for _, c := range []struct {
+		id, agent string
+		pid       int
+		want      string
+	}{
+		{"claude:s", "claude", 4242, base + " (veja a skill nobre-cockpit)."},
+		{"kiro:s", "kiro", 4343, base + " (veja as instruções do Cockpit no steering do Kiro)."},
+		{"codex:s", "codex", 4444, base + "."},
+	} {
+		if err := st.StartSession(domain.Session{ID: c.id, Agent: c.agent, PID: c.pid, Cwd: "/w/fora", StartedAt: testNow}); err != nil {
+			t.Fatal(err)
+		}
+		rec := a.do(t, "POST", "/api/me/cards", map[string]string{"title": "B"}, c.pid)
+		if got := decode[map[string]string](t, rec)["error"]; rec.Code != http.StatusConflict || got != c.want {
+			t.Errorf("%s: code = %d, erro = %q", c.agent, rec.Code, got)
+		}
 	}
 }
 
@@ -782,5 +825,85 @@ func TestMeAppGeralRefusedWhenFamilyRootIsAGroup(t *testing.T) {
 	}
 	if got, _ := a.st.GetCard(c.Key); got.ProjectID != repo.ID {
 		t.Fatalf("project_id = %d", got.ProjectID)
+	}
+}
+
+// doSessionHeader chama /api/me/note só com X-Nobre-Agent-Session (e PID opcional).
+func (a *testAPI) doSessionHeader(t *testing.T, header string, pid int) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/me/note", strings.NewReader(`{"text":"x"}`))
+	req.Host = "127.0.0.1:7420"
+	req.RemoteAddr = "127.0.0.1:50000"
+	req.Header.Set("Content-Type", "application/json")
+	if header != "" {
+		req.Header.Set("X-Nobre-Agent-Session", header)
+	}
+	if pid > 0 {
+		req.Header.Set("X-Nobre-Agent-PID", strconv.Itoa(pid))
+	}
+	rec := httptest.NewRecorder()
+	a.h.ServeHTTP(rec, req)
+	return rec
+}
+
+func (a *testAPI) kiroSession(t *testing.T, id string, pid int, key string) {
+	t.Helper()
+	if err := a.st.StartSession(domain.Session{ID: id, Agent: "kiro", PID: pid, Cwd: "/w/api/sub", StartedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.AttachSession(id, key, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMeAchaSessaoPeloCabecalhoDoAgente(t *testing.T) {
+	a := newTestAPI(t)
+	key := a.card(t).Key
+	a.kiroSession(t, "kiro:sess_x", 111, key)
+	// PID desconhecido, cabeçalho de sessão viva.
+	if rec := a.doSessionHeader(t, "kiro:sess_x", 9999); rec.Code != http.StatusOK {
+		t.Fatalf("PID desconhecido + cabeçalho: %d %s", rec.Code, rec.Body)
+	}
+	// Sem PID algum.
+	if rec := a.doSessionHeader(t, "kiro:sess_x", 0); rec.Code != http.StatusOK {
+		t.Fatalf("só cabeçalho: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMeCabecalhoDeSessaoEncerradaOuDesconhecida404(t *testing.T) {
+	a := newTestAPI(t)
+	key := a.card(t).Key
+	a.kiroSession(t, "kiro:sess_x", 111, key)
+	if err := a.st.EndSession("kiro:sess_x", "exit", testNow); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"kiro:sess_x", "kiro:sess_nao_existe"} {
+		rec := a.doSessionHeader(t, h, 0)
+		if rec.Code != http.StatusNotFound || decode[map[string]string](t, rec)["error"] != msgNoSession {
+			t.Fatalf("%s: %d %s", h, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestMeSemPIDNemCabecalho400(t *testing.T) {
+	a := newTestAPI(t)
+	if rec := a.doSessionHeader(t, "", 0); rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	// Cabeçalho malformado (agente desconhecido) conta como ausente.
+	if rec := a.doSessionHeader(t, "zzz:sess_x", 0); rec.Code != http.StatusBadRequest {
+		t.Fatalf("agente desconhecido: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMePIDVivoTemPrioridadeSobreCabecalho(t *testing.T) {
+	a := newTestAPI(t)
+	key := a.card(t).Key
+	a.liveSession(t, "claude:s1", 4242, "")
+	a.kiroSession(t, "kiro:sess_x", 111, key)
+	// PID acha claude:s1 (sem card -> 409); o cabeçalho (com card) é ignorado.
+	rec := a.doSessionHeader(t, "kiro:sess_x", 4242)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
 	}
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"net/http"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func TestNobreCommandsPerProcess(t *testing.T) {
 	ad.SetAlive(func(pid int) bool { return pid == 100 || pid == 200 })
 	t.Cleanup(ad.Wait)
 	a := &testAPI{st: st, hub: hub, h: New(st, Deps{Now: func() time.Time { return testNow }, Hub: hub,
-		Adapters: map[string]adapter.Adapter{"claude": ad}})}
+		Agents: agents.New(ad)})}
 	if _, err := st.CreateProject("api", "/w/api"); err != nil {
 		t.Fatal(err)
 	}

@@ -156,14 +156,16 @@ type Question struct {
 }
 
 type UsageRow struct {
-	SessionID  string    `json:"session_id"`
-	MessageID  string    `json:"message_id"`
-	Model      string    `json:"model"`
-	Input      int64     `json:"input"`
-	Output     int64     `json:"output"`
-	CacheWrite int64     `json:"cache_write"`
-	CacheRead  int64     `json:"cache_read"`
-	At         time.Time `json:"at"`
+	SessionID  string `json:"session_id"`
+	MessageID  string `json:"message_id"`
+	Model      string `json:"model"`
+	Input      int64  `json:"input"`
+	Output     int64  `json:"output"`
+	CacheWrite int64  `json:"cache_write"`
+	CacheRead  int64  `json:"cache_read"`
+	// Credits é o gasto em créditos do turno (Kiro); 0 nos agentes que medem em tokens.
+	Credits float64   `json:"credits,omitempty"`
+	At      time.Time `json:"at"`
 	// WindowSessionID é a janela dona do uso quando não é a sessão SessionID
 	// (a filha que divide o transcript com a principal); vazio = SessionID.
 	WindowSessionID string `json:"window_session_id,omitempty"`

@@ -11,25 +11,6 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/usage"
 )
 
-func TestFmtTokens(t *testing.T) {
-	for n, want := range map[int64]string{
-		0: "0", 999: "999", 1000: "1 mil", 22000: "22 mil", 22400: "22 mil", 22600: "23 mil", 820000: "820 mil",
-		999600: "1 milhão", 1000000: "1 milhão", 1200000: "1,2 milhão", 1960000: "2 milhões", 2500000: "2,5 milhões",
-	} {
-		if got := fmtTokens(n); got != want {
-			t.Errorf("fmtTokens(%d) = %q, quer %q", n, got, want)
-		}
-	}
-}
-
-func TestContextWarningText(t *testing.T) {
-	got := contextWarningText(82, 164000)
-	want := "Contexto em 82% da janela (164 mil tokens). Numa pausa natural, registre onde parou com nobre note e use /compact dizendo o que preservar, ou recomece limpo pelo card."
-	if got != want {
-		t.Fatalf("texto = %q", got)
-	}
-}
-
 // alertsEnv abre a sessão principal com captura ligada.
 func alertsEnv(t *testing.T) *env {
 	t.Helper()
@@ -45,6 +26,17 @@ func (e *env) turn(t *testing.T, n, segment int, tokens int64) {
 	err := e.st.SaveContext(sessID, e.transcript, false, nil, []usage.ContextTurn{{
 		Turn: n, Segment: segment, MessageID: fmt.Sprintf("m%d", n), At: e.now, Tokens: tokens, Input: tokens,
 	}}, 0, usage.ContextState{LastTurn: n, LastMessageID: fmt.Sprintf("m%d", n), Segment: segment})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// turnPct grava um turno só com a % da janela (agente sem contagem de tokens).
+func (e *env) turnPct(t *testing.T, n int, pct float64) {
+	t.Helper()
+	err := e.st.SaveContext(sessID, e.transcript, false, nil, []usage.ContextTurn{{
+		Turn: n, MessageID: fmt.Sprintf("m%d", n), At: e.now, Pct: &pct,
+	}}, 0, usage.ContextState{LastTurn: n, LastMessageID: fmt.Sprintf("m%d", n)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,5 +243,22 @@ func TestBigOutputWarning_RoundsUp(t *testing.T) {
 	// {"content":"…","type":"text"}: 28 bytes de moldura.
 	if got := postContext(t, e.postWithResponse(t, 4001-28)); got != bigWarn("1 mil") {
 		t.Fatalf("4.001 bytes = %q", got)
+	}
+}
+
+func TestContextWarning_PctOnly(t *testing.T) {
+	e := alertsEnv(t)
+	e.turnPct(t, 0, 50)
+	if got := promptContext(t, e.call(t, "user_prompt_submit")); got != "" {
+		t.Fatalf("50%% = %q", got)
+	}
+	e.turnPct(t, 1, 62)
+	want := "Contexto em 62% da janela. Numa pausa natural, registre onde parou com nobre note e use /compact dizendo o que preservar, ou recomece limpo pelo card."
+	if got := promptContext(t, e.call(t, "user_prompt_submit")); got != want {
+		t.Fatalf("62%% = %q", got)
+	}
+	e.turnPct(t, 2, 65)
+	if got := promptContext(t, e.call(t, "user_prompt_submit")); got != "" {
+		t.Fatalf("65%% repetiu = %q", got)
 	}
 }

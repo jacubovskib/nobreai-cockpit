@@ -1,4 +1,4 @@
-package claude
+package agentcore
 
 import (
 	"strings"
@@ -34,7 +34,7 @@ func TestConfigNoticeCaptureOff(t *testing.T) {
 
 func TestConfigNoticeCaptureOn(t *testing.T) {
 	text, _ := configNotice(&domain.SeenConfig{AgentCreatesCards: true, Capture: false}, true, domain.DefaultSettings())
-	if !strings.Contains(text, "foi ligada") || !strings.Contains(text, registeredPhrase) {
+	if !strings.Contains(text, "foi ligada") || !strings.Contains(text, RegisteredPhrase) {
 		t.Fatalf("text = %q", text)
 	}
 }

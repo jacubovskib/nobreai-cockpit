@@ -4,16 +4,22 @@ import (
 	"net/http"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/agentcore"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 )
-
-// agentOrder é a ordem fixa da lista de agentes.
-var agentOrder = []string{"claude", "codex", "kiro"}
 
 const msgAdapterLater = "Adaptador chega no plano 2"
 
 type agentInfo struct {
 	Agent     string            `json:"agent"`
 	Detection adapter.Detection `json:"detection"`
+	// Installable: o agente tem driver registrado (Instalar funciona).
+	Installable bool `json:"installable"`
+	// StatusLine: o driver integra uma status line (adapter.StatusLiner).
+	StatusLine bool `json:"status_line"`
+	// SpendsCredits: o driver mede o gasto em créditos (agentcore.SpendUnit);
+	// a UI não oferece limites em US$ para ele.
+	SpendsCredits bool `json:"spends_credits"`
 }
 
 func (s *server) agentRoutes(mux *http.ServeMux) {
@@ -26,14 +32,16 @@ func (s *server) agentRoutes(mux *http.ServeMux) {
 // listAgents devolve a detecção de cada agente. Agentes sem adaptador
 // aparecem como não encontrados.
 func (s *server) listAgents(w http.ResponseWriter, r *http.Request) {
-	out := make([]agentInfo, 0, len(agentOrder))
-	for _, name := range agentOrder {
-		if ad, ok := s.deps.Adapters[name]; ok {
+	out := make([]agentInfo, 0, len(agents.Known))
+	for _, name := range agents.Known {
+		if ad, ok := s.deps.Agents.Get(name); ok {
 			d := ad.Detect()
 			if d.Checks == nil {
 				d.Checks = []adapter.Check{}
 			}
-			out = append(out, agentInfo{Agent: name, Detection: d})
+			_, sl := ad.(adapter.StatusLiner)
+			su, _ := ad.(agentcore.SpendUnit)
+			out = append(out, agentInfo{Agent: name, Detection: d, Installable: true, StatusLine: sl, SpendsCredits: su != nil && su.SpendsCredits()})
 			continue
 		}
 		out = append(out, agentInfo{Agent: name, Detection: adapter.Detection{
@@ -47,10 +55,10 @@ func (s *server) listAgents(w http.ResponseWriter, r *http.Request) {
 // conhecido sem adaptador) ou 404 e devolve false quando não há.
 func (s *server) agentAdapter(w http.ResponseWriter, r *http.Request) (adapter.Adapter, bool) {
 	name := r.PathValue("agent")
-	if ad, ok := s.deps.Adapters[name]; ok {
+	if ad, ok := s.deps.Agents.Get(name); ok {
 		return ad, true
 	}
-	for _, n := range agentOrder {
+	for _, n := range agents.Known {
 		if n == name {
 			writeError(w, http.StatusNotImplemented, msgAdapterLater)
 			return nil, false

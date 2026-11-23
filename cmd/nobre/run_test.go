@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,7 @@ type binAdapter struct {
 }
 
 func (b binAdapter) Binary() string { return b.bin }
+func (b binAdapter) Name() string   { return "claude" }
 
 type runEnv struct {
 	srv  *httptest.Server
@@ -56,7 +58,7 @@ func newRunEnvOpts(t *testing.T, script string, opts pty.Options) *runEnv {
 	mgr := pty.NewManager(opts)
 	t.Cleanup(mgr.Close)
 	srv := httptest.NewServer(api.New(st, api.Deps{Hub: hub, Terminals: mgr,
-		Adapters: map[string]adapter.Adapter{"claude": binAdapter{bin: bin}}}))
+		Agents: agents.New(binAdapter{bin: bin})}))
 	t.Cleanup(srv.Close)
 	return &runEnv{srv: srv, mgr: mgr, addr: strings.TrimPrefix(srv.URL, "http://")}
 }

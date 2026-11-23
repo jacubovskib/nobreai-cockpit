@@ -151,3 +151,13 @@ func TestHookRecoversFromPanic(t *testing.T) {
 		t.Fatalf("code = %d, saída %q", code, out.String())
 	}
 }
+
+// O driver que bloqueia com código de saída (Kiro) manda o motivo no stderr.
+func TestHookPassesStderr(t *testing.T) {
+	r := runCLI(t, fake(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"stdout":"","stderr":"limite atingido","exit":2}`))
+	}), "{}", nil, "hook", "kiro", "PreToolUse")
+	if r.code != 2 || r.stdout != "" || r.err != "limite atingido" {
+		t.Fatalf("%+v", r)
+	}
+}

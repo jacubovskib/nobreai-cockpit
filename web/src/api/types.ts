@@ -143,6 +143,8 @@ export interface ContextLive {
   window_tokens: number
   window_estimated: boolean
   pct: number
+  // pct_only: o agente informa só a % (sem tokens nem janela).
+  pct_only?: boolean
   growth_per_turn: number
   turns_to_limit: number
   at_limit: boolean
@@ -165,6 +167,7 @@ export interface LiveContextSummary {
   window_tokens: number
   pct: number
   over80: boolean
+  pct_only?: boolean
   rewrite: boolean
   idle_over_ttl: boolean
 }
@@ -182,6 +185,8 @@ export interface Total {
   cache_write: number
   cache_read: number
   cost_usd: number
+  // credits: gasto em créditos (Kiro); nunca somado ao cost_usd.
+  credits: number
   unpriced: boolean
 }
 
@@ -235,6 +240,8 @@ export interface AgentSpend {
   warn_pct: number
   action: 'pause' | 'warn' | ''
   unpriced: boolean
+  // credits: gasto de hoje em créditos, ao lado do US$ (nunca somado).
+  credits: number
 }
 
 export interface TodayTotals {
@@ -243,6 +250,7 @@ export interface TodayTotals {
   cards_without_live_session: number
   cost_usd: number
   cost_unpriced: boolean
+  credits: number
   daily_limit_usd: number
   tokens_input: number
   tokens_output: number
@@ -281,7 +289,7 @@ export interface Overview {
 export type StreamKind = 'cards' | 'sessions' | 'config' | 'usage' | 'prompts' | string
 
 export interface AgentCheck { key: string; label: string; detail: string; ok: boolean }
-export interface AgentDetection { agent: string; detection: { found: boolean; path: string; version: string; checks: AgentCheck[] } }
+export interface AgentDetection { agent: string; installable: boolean; status_line: boolean; spends_credits: boolean; detection: { found: boolean; path: string; version: string; checks: AgentCheck[] } }
 export interface InstallReport { changed: string[]; backup: string; messages: string[] }
 
 // GET /api/worktrees

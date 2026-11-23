@@ -6,7 +6,7 @@ import type { Total } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { OtherWindowTag } from '../ui/OtherWindowTag'
 import { AgentSwatch } from '../ui/AgentSwatch'
-import { Money } from '../ui/Money'
+import { Credits, Money } from '../ui/Money'
 import { formatAmount, formatMoney, moneySymbol, useCurrency } from '../ui/money'
 import { RtkSavings } from './analytics/RtkSavings'
 import { ContextSection } from './analytics/ContextSection'
@@ -62,6 +62,7 @@ export function Analytics() {
 
   const agentRows = byAgent.data ?? []
   const cost = sum(agentRows, (t) => t.cost_usd)
+  const credits = sum(agentRows, (t) => t.credits)
   const costUnpriced = agentRows.some((t) => t.unpriced)
   const inTok = sum(agentRows, (t) => t.input)
   const outTok = sum(agentRows, (t) => t.output)
@@ -109,7 +110,7 @@ export function Analytics() {
       <section aria-label={`Resumo de ${long}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
         <div style={panel}>
           <span style={muted}>Custo em {long}</span>
-          <span style={{ fontSize: 26, fontWeight: 600 }}><Money usd={cost} unpriced={costUnpriced && cost === 0} {...cur} /></span>
+          <span style={{ fontSize: 26, fontWeight: 600 }}><Money usd={cost} unpriced={costUnpriced && cost === 0} {...cur} /><Credits credits={credits} /></span>
           <span style={muted}>
             {costUnpriced ? 'inclui uso de modelo sem preço, fora da soma' : `média ${money(avg)}/dia`}
             {symbol === 'US$' && cur.rate ? ` · ≈ ${formatMoney(cost, { currency: 'BRL', rate: cur.rate })}` : ''}
@@ -200,7 +201,7 @@ export function Analytics() {
                     <td style={num}>{tokens(t.input)}</td>
                     <td style={num}>{tokens(t.output)}</td>
                     <td style={num} title={`${tokens(t.cache_write)} escrita · ${tokens(t.cache_read)} leitura`}>{tokens(t.cache_write + t.cache_read)}</td>
-                    <td style={num}><Money usd={t.cost_usd} unpriced={t.unpriced} {...cur} /></td>
+                    <td style={num}><Money usd={t.cost_usd} unpriced={t.unpriced} {...cur} /><Credits credits={t.credits} /></td>
                     <td style={num}>{t.unpriced || t.sessions === 0 ? '—' : amount(t.cost_usd / t.sessions)}</td>
                   </tr>
                 ))}
@@ -267,7 +268,7 @@ export function Analytics() {
                     <td style={num}>{tokens(s.usage.input)}</td>
                     <td style={num}>{tokens(s.usage.output)}</td>
                     <td style={num}>{tokens(s.usage.cache_write + s.usage.cache_read)}</td>
-                    <td style={num}><Money usd={s.usage.cost_usd} unpriced={s.unpriced} {...cur} /></td>
+                    <td style={num}><Money usd={s.usage.cost_usd} unpriced={s.unpriced} {...cur} /><Credits credits={s.usage.credits} /></td>
                   </tr>
                 )
               })}

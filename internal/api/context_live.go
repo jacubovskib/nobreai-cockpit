@@ -32,6 +32,7 @@ type LiveContext struct {
 	Tokens       int64   `json:"tokens"`
 	WindowTokens int64   `json:"window_tokens"`
 	Pct          float64 `json:"pct"`
+	PctOnly      bool    `json:"pct_only"`
 	Over80       bool    `json:"over80"`
 	Rewrite      bool    `json:"rewrite"`
 	IdleOverTTL  bool    `json:"idle_over_ttl"`
@@ -59,7 +60,7 @@ func (s *server) contextLive(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, err, "")
 			return
 		}
-		l := LiveContext{ID: x.ID, Tokens: c.Tokens, WindowTokens: c.WindowTokens, Pct: c.Pct,
+		l := LiveContext{ID: x.ID, Tokens: c.Tokens, WindowTokens: c.WindowTokens, Pct: c.Pct, PctOnly: c.PctOnly,
 			Over80: c.Pct > ctxOver, Rewrite: c.RecentRewrite != nil, IdleOverTTL: c.IdleOverTTL}
 		if x.CardID != nil {
 			if card, err := s.st.GetCardByID(*x.CardID); err == nil {

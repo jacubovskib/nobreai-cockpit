@@ -11,7 +11,7 @@ const total = { key: '', agent: '', day: '', sessions: 0, input: 0, output: 0, c
 const overview: Overview = {
   active: [],
   today: {
-    active_agents: 0, cards_in_progress: 1, cards_without_live_session: 1, cost_usd: 1.5, cost_unpriced: false,
+    active_agents: 0, cards_in_progress: 1, cards_without_live_session: 1, cost_usd: 1.5, cost_unpriced: false, credits: 0,
     daily_limit_usd: 33, tokens_input: 1000, tokens_output: 500, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [],
   },
   alerts: [{ kind: 'stale', card_key: 'NAC-38', agent: 'claude', text: 'NAC-38 está em “Em andamento” sem sessão viva há 12 min.' }],
@@ -126,6 +126,18 @@ describe('ControlRoom', () => {
     expect(screen.getByTestId('warn-marker-claude')).toHaveStyle({ left: '60%' })
     expect(screen.getByTestId('warn-marker-codex')).toHaveStyle({ left: '80%' })
     expect(screen.getByText('+ sem preço')).toBeInTheDocument()
+  })
+
+  it('gasto de hoje por agente mostra os créditos ao lado, sem somar', async () => {
+    const per_agent = [
+      { agent: 'claude', spent_usd: 5, daily_usd: 10, pct: 50, warn_pct: 80, action: 'warn', unpriced: false, credits: 0 },
+      { agent: 'kiro', spent_usd: 0, daily_usd: 0, pct: 0, warn_pct: 0, action: '', unpriced: false, credits: 12.5 },
+    ]
+    mock({ '/api/overview': { ...overview, today: { ...overview.today, per_agent } }, '/api/settings': {} })
+    wrap(<ControlRoom />)
+    const kiro = (await screen.findByTitle('Kiro: sem limite diário'))
+    expect(kiro).toHaveTextContent('US$ 0,00 · 12,50 créditos / sem limite')
+    expect(screen.getByTitle(/^Claude Code:/)).not.toHaveTextContent(/créditos/)
   })
 
   it('sessão sem card encerrada aparece marcada e permite criar card', async () => {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -28,6 +29,10 @@ type setupDeps struct {
 	NobredBin    string        // caminho absoluto do nobred; vazio = não encontrado
 	DaemonWait   time.Duration // quanto esperar o nobred responder antes de cadastrar o projeto
 	Run          func(name string, args ...string) error
+	// Drivers são os agentes do passo de cada agente: o setup instala e
+	// remove os que têm adapter.SetupInstaller e adapter.SetupUninstaller.
+	// nil = nenhum (os passos do Claude seguem explícitos).
+	Drivers []adapter.Adapter
 }
 
 func defaultSetupDeps() (*setupDeps, error) {
@@ -47,6 +52,7 @@ func defaultSetupDeps() (*setupDeps, error) {
 		SkillsDir:    filepath.Join(home, ".claude", "skills"),
 		UnitDir:      filepath.Join(home, ".config", "systemd", "user"),
 		NobreBin:     exe,
+		Drivers:      agents.Compiled(),
 		DaemonWait:   10 * time.Second,
 		Run: func(name string, args ...string) error {
 			out, err := exec.Command(name, args...).CombinedOutput()
@@ -140,9 +146,10 @@ func (l *checklist) bad(format string, a ...any) {
 	fmt.Fprintf(l.c.out, "! "+format+"\n", a...)
 }
 
-// setup instala hooks, status line e skill do Claude Code, grava e ativa o serviço do
-// daemon e oferece cadastrar o repositório atual como projeto. Com
-// --remover-statusline só desfaz a integração da status line.
+// setup instala hooks, status line e skill do Claude Code (e a integração
+// dos outros agentes que sabem se instalar: adapter.SetupInstaller), grava e
+// ativa o serviço do daemon e oferece cadastrar o repositório atual como
+// projeto. Com --remover-statusline só desfaz a integração da status line.
 func (c *cli) setup(args []string) error {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	dry := fs.Bool("dry-run", false, "mostra o que mudaria sem gravar nada")
@@ -206,16 +213,65 @@ func (c *cli) setup(args []string) error {
 		l.ok("Skill do Cockpit instalada em %s", claude.SkillFile(d.SkillsDir))
 	}
 
-	// 3. Serviço do daemon.
+	// 3. Os outros agentes, cada um pela própria instalação.
+	c.setupDrivers(d, *dry, l)
+
+	// 4. Serviço do daemon.
 	c.setupService(d, *dry, l)
 
-	// 4. Projeto atual.
+	// 5. Projeto atual.
 	c.setupProject(d, *dry, l)
 
 	if l.warn {
 		return errors.New("Setup terminou com pendências (itens com !).")
 	}
 	return nil
+}
+
+// setupDrivers roda a instalação de cada driver que a tem
+// (adapter.SetupInstaller), na ordem dos drivers; a falha de um vira
+// pendência com o nome de tela do agente e o setup segue.
+func (c *cli) setupDrivers(d *setupDeps, dry bool, l *checklist) {
+	prefix := ""
+	if dry {
+		prefix = "[dry-run] "
+	}
+	for _, a := range d.Drivers {
+		si, ok := a.(adapter.SetupInstaller)
+		if !ok {
+			continue
+		}
+		rep, err := si.SetupInstall(d.NobreBin, dry)
+		if err != nil {
+			l.bad("%s: %v", agents.DisplayName(a.Name()), err)
+			continue
+		}
+		for _, m := range rep.Messages {
+			l.ok("%s%s", prefix, m)
+		}
+	}
+}
+
+// removeDrivers desfaz a instalação de cada driver que sabe se remover
+// (adapter.SetupUninstaller).
+func (c *cli) removeDrivers(d *setupDeps, dry bool, l *checklist) {
+	prefix := ""
+	if dry {
+		prefix = "[dry-run] "
+	}
+	for _, a := range d.Drivers {
+		su, ok := a.(adapter.SetupUninstaller)
+		if !ok {
+			continue
+		}
+		rep, err := su.SetupUninstall(dry)
+		if err != nil {
+			l.bad("%s: %v", agents.DisplayName(a.Name()), err)
+		}
+		for _, m := range rep.Messages {
+			l.ok("%s%s", prefix, m)
+		}
+	}
 }
 
 // removeStatusLine é o "nobre setup --remover-statusline": só desfaz a
@@ -287,6 +343,8 @@ func (c *cli) removeAll(d *setupDeps, dry bool, l *checklist) error {
 			l.ok("Skill removida: %s", skill)
 		}
 	}
+
+	c.removeDrivers(d, dry, l)
 
 	if dir := filepath.Dir(d.NobreBin); !dry {
 		fmt.Fprintf(c.out, "\nOs binários em %s e o banco em %s não foram tocados (o make uninstall também apaga os binários).\n"+

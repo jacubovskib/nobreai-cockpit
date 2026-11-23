@@ -1,7 +1,7 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useCards, useProjects, useTotals } from '../api/queries'
-import { Money } from '../ui/Money'
+import { Credits, Money } from '../ui/Money'
 import { ProjectTag } from '../ui/ProjectTag'
 import { projectColor, useWithProject } from '../app/project'
 import { range } from './analytics/data'
@@ -55,7 +55,7 @@ function Line({ r, list, max, withP, label, sub, action }: RowProps & { label?: 
           <span style={muted}>captura desligada</span>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <Money usd={r.costUsd} unpriced={r.unpriced && r.costUsd === 0} />
+            <span><Money usd={r.costUsd} unpriced={r.unpriced && r.costUsd === 0} /><Credits credits={r.credits} /></span>
             <div aria-hidden="true" style={{ height: 6, borderRadius: 3, background: 'var(--border)' }}>
               <div style={{ height: 6, borderRadius: 3, width: `${(r.costUsd / max) * 100}%`, background: r.project ? projectColor(r.project.id, list) : 'var(--text-2)' }} />
             </div>
