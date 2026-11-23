@@ -8,7 +8,7 @@ afterEach(() => vi.unstubAllGlobals())
 // Sessão parada não dispara hook nem evento: o medidor se atualiza sozinho
 // (tempo parado e "parada além do cache").
 describe('medidor de contexto sem eventos', () => {
-  it.each([
+  it.each<[string, () => unknown]>([
     ['context-live', () => useContextLive()],
     ['session-context', () => useSessionContext('claude:x')],
   ])('%s refaz a consulta a cada 30 s', (key, hook) => {
