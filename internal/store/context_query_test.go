@@ -230,3 +230,71 @@ func TestContextEmpty(t *testing.T) {
 		t.Fatalf("nil: %v %v %v %v %v %+v", keys == nil, sess == nil, proj == nil, turns == nil, top == nil, tot)
 	}
 }
+
+// detailWindows cria a principal claude:p e a filha claude:p@2 com turnos e
+// saídas intercalados (m* = principal, c* = filha).
+func detailWindows(t *testing.T) *Store {
+	t.Helper()
+	s := newTestStore(t)
+	ctxSession(t, s, "claude:p", nil, nil)
+	child := newSession("claude:p@2", 2)
+	child.ParentSessionID = "claude:p"
+	child.TranscriptPath = "/main"
+	if err := s.StartSession(child); err != nil {
+		t.Fatal(err)
+	}
+	turns := []usage.ContextTurn{
+		liveTurn(0, 0, 5*time.Minute, 1000, 0, 0, "", "m0"),
+		liveTurn(1, 0, 4*time.Minute, 2000, 0, 0, "", "c0"),
+		liveTurn(2, 0, 3*time.Minute, 3000, 0, 0, "", "m1"),
+		liveTurn(3, 0, 2*time.Minute, 4000, 0, 0, "", "c1"),
+	}
+	om := ctxOut("om", "Read", "main-key", 10, 0, 0, 0)
+	om.UUID = "m0"
+	oc := ctxOut("oc", "Bash", "child-key", 20, 0, 1, 0)
+	oc.UUID = "c0"
+	w := ContextWindows{ByUUID: map[string]string{"c0": "claude:p@2", "c1": "claude:p@2"}}
+	if err := s.SaveContextWindows("claude:p", "/main", false, []usage.ToolOutput{om, oc}, turns, 1, usage.ContextState{LastTurn: -1}, w); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestContextSessionDetailPerWindow(t *testing.T) {
+	s := detailWindows(t)
+	main, mtop, err := s.ContextSessionDetail("claude:p", 10)
+	if err != nil || len(main) != 2 || main[0].Tokens != 1000 || main[1].Tokens != 3000 || len(mtop) != 1 || mtop[0].Key != "main-key" {
+		t.Fatalf("principal turns=%+v top=%+v err=%v", main, mtop, err)
+	}
+	ch, ctop, err := s.ContextSessionDetail("claude:p@2", 10)
+	if err != nil || len(ch) != 2 || ch[0].Tokens != 2000 || ch[1].Tokens != 4000 || len(ctop) != 1 || ctop[0].Key != "child-key" {
+		t.Fatalf("filha turns=%+v top=%+v err=%v", ch, ctop, err)
+	}
+	for _, p := range append(main, ch...) {
+		if p.AfterCompact || p.PctOnly {
+			t.Fatalf("ponto %+v", p)
+		}
+	}
+}
+
+func TestContextSessionDetailPctOnly(t *testing.T) {
+	s := newTestStore(t)
+	ctxSession(t, s, "k", nil, nil)
+	save(t, s, "k", "/main", nil, []usage.ContextTurn{pctTurn(0, 10), pctTurn(1, 14), pctTurn(2, 18)})
+	turns, _, err := s.ContextSessionDetail("k", 5)
+	if err != nil || len(turns) != 3 {
+		t.Fatalf("%+v %v", turns, err)
+	}
+	for i, p := range turns {
+		if !p.PctOnly || p.Tokens != 0 || p.Pct != []float64{10, 14, 18}[i] {
+			t.Fatalf("turns[%d]=%+v", i, p)
+		}
+	}
+	// Claude (pct NULL) não é só %.
+	ctxSession(t, s, "c", nil, nil)
+	save(t, s, "c", "/main", nil, ctxTurns(0, 0, 0))
+	ct, _, _ := s.ContextSessionDetail("c", 5)
+	if len(ct) != 1 || ct[0].PctOnly || ct[0].Pct != 0 {
+		t.Fatalf("%+v", ct)
+	}
+}

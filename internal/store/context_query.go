@@ -60,10 +60,12 @@ type ContextOutput struct {
 }
 
 type ContextTurnPoint struct {
-	Turn         int    `json:"turn"`
-	At           string `json:"at"`
-	Tokens       int64  `json:"tokens"`
-	AfterCompact bool   `json:"after_compact"` // segmento maior que o do turno anterior
+	Turn         int     `json:"turn"`
+	At           string  `json:"at"`
+	Tokens       int64   `json:"tokens"`
+	AfterCompact bool    `json:"after_compact"` // segmento maior que o do turno anterior
+	Pct          float64 `json:"pct"`           // % da janela informada pelo agente (só com PctOnly)
+	PctOnly      bool    `json:"pct_only"`      // só a % é conhecida (sem tokens)
 }
 
 // ctxOutputsCTE junta cada saída (já filtrada em base) à sua sessão/card e
@@ -71,7 +73,11 @@ type ContextTurnPoint struct {
 // segmento) menos o turno da saída, mínimo 0 (0 se o segmento não tem turno).
 // O máximo por segmento vem de um CTE agregado uma vez (só para as sessões
 // presentes em base), não de um COUNT correlacionado por saída.
-func ctxOutputsCTE(where string) string {
+func ctxOutputsCTE(where string) string { return ctxOutputsCTEWin(where, "") }
+
+// ctxOutputsCTEWin é ctxOutputsCTE com um filtro extra (ex.: " AND window_session_id = ?")
+// nos turnos que dão o máximo por segmento, para a janela medir só os próprios turnos.
+func ctxOutputsCTEWin(where, turnWhere string) string {
 	return `WITH base AS (
 	SELECT o.session_id, o.path, o.tool, o.key, o.tokens, o.in_tokens, o.at, o.turn, o.segment, s.transcript_path,
 	       COALESCE(c.project_id, s.project_id) AS project_id
@@ -80,7 +86,7 @@ func ctxOutputsCTE(where string) string {
 	LEFT JOIN cards c ON c.id = s.card_id` + where + `
 ), seg_max AS (
 	SELECT session_id, path, segment, MAX(turn) AS max_turn FROM context_turns
-	WHERE session_id IN (SELECT session_id FROM base) GROUP BY session_id, path, segment
+	WHERE session_id IN (SELECT session_id FROM base)` + turnWhere + ` GROUP BY session_id, path, segment
 ), outs AS (
 	SELECT b.session_id, b.path, b.tool, b.key, b.tokens, b.in_tokens, b.at, b.transcript_path, b.project_id,
 	       MAX(0, COALESCE(m.max_turn, b.turn) - b.turn) AS rereads,
@@ -228,27 +234,43 @@ func (s *Store) ContextTotals(f ContextFilter) (ContextTotals, error) {
 }
 
 // ContextSessionDetail devolve a curva de contexto do transcript principal e
-// as saídas mais pesadas da sessão (principal e subagentes).
+// as saídas mais pesadas da sessão (principal e subagentes). Como no medidor
+// ao vivo, a janela decide as linhas: a principal lê as suas (window_session_id
+// ” ou o dela); a filha lê as gravadas sob a principal com o id da filha.
+// Turnos só com % (agente sem tokens) saem com PctOnly e Pct.
 func (s *Store) ContextSessionDetail(sessionID string, limit int) (turns []ContextTurnPoint, top []ContextOutput, err error) {
-	var path string
-	if err = s.DB.QueryRow(`SELECT transcript_path FROM sessions WHERE id=?`, sessionID).Scan(&path); err != nil {
+	var path, parent string
+	if err = s.DB.QueryRow(`SELECT transcript_path, parent_session_id FROM sessions WHERE id=?`, sessionID).Scan(&path, &parent); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			err = ErrNotFound
 		}
 		return nil, nil, err
 	}
+	owner, where, args := sessionID, `window_session_id IN ('', ?)`, []any{sessionID}
+	if parent != "" {
+		owner, where = parent, `window_session_id = ?`
+		if err := s.DB.QueryRow(`SELECT transcript_path FROM sessions WHERE id=?`, parent).Scan(&path); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, err
+		}
+	}
 	turns, top = []ContextTurnPoint{}, []ContextOutput{}
-	rows, err := s.DB.Query(`SELECT turn, at, tokens, segment FROM context_turns WHERE session_id=? AND path=? ORDER BY turn`, sessionID, path)
+	rows, err := s.DB.Query(`SELECT turn, at, tokens, segment, pct FROM context_turns WHERE session_id=? AND path=? AND `+where+` ORDER BY turn`,
+		append([]any{owner, path}, args...)...)
 	if err != nil {
 		return nil, nil, err
 	}
-	prev := 0
+	prev := -1
 	for rows.Next() {
 		var p ContextTurnPoint
 		var seg int
-		if err := rows.Scan(&p.Turn, &p.At, &p.Tokens, &seg); err != nil {
+		var pct sql.NullFloat64
+		if err := rows.Scan(&p.Turn, &p.At, &p.Tokens, &seg, &pct); err != nil {
 			rows.Close()
 			return nil, nil, err
+		}
+		p.Pct, p.PctOnly = pct.Float64, pct.Valid && p.Tokens == 0
+		if prev < 0 {
+			prev = seg
 		}
 		p.AfterCompact = seg > prev
 		prev = seg
@@ -259,9 +281,10 @@ func (s *Store) ContextSessionDetail(sessionID string, limit int) (turns []Conte
 		return nil, nil, err
 	}
 
-	orows, err := s.DB.Query(ctxOutputsCTE(` WHERE o.session_id = ?`)+`
+	oargs := append([]any{owner}, args...)
+	orows, err := s.DB.Query(ctxOutputsCTEWin(` WHERE o.session_id = ? AND o.`+where, ` AND `+where)+`
 		SELECT tool, key, tokens, in_tokens, rereads, weight, at, path <> transcript_path FROM outs
-		ORDER BY weight DESC, tokens DESC, at LIMIT ?`, sessionID, sqlLimit(limit))
+		ORDER BY weight DESC, tokens DESC, at LIMIT ?`, append(append(oargs, args...), sqlLimit(limit))...)
 	if err != nil {
 		return nil, nil, err
 	}

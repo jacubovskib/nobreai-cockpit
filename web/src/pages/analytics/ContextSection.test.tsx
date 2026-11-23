@@ -118,4 +118,23 @@ describe('ContextSection', () => {
     show()
     expect(await screen.findByText('Nenhuma saída medida no período.')).toBeInTheDocument()
   })
+
+  it('sessão só com %: curva em % com "janela informada pelo agente"', async () => {
+    mock({ ...routes, '/api/context/sessions/s1': { turns: [
+      { turn: 0, at: 'a', tokens: 0, after_compact: false, pct: 12, pct_only: true },
+      { turn: 1, at: 'b', tokens: 0, after_compact: false, pct: 37, pct_only: true },
+    ], top: [] } })
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: /NAC-7/ }))
+    expect(await screen.findByText('janela informada pelo agente')).toBeInTheDocument()
+    expect(screen.getByText('pico 37%')).toBeInTheDocument()
+  })
+
+  it('sessão com tokens não mostra o aviso de janela informada', async () => {
+    mock(routes)
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: /NAC-7/ }))
+    expect(await screen.findByText('pico 9 k')).toBeInTheDocument()
+    expect(screen.queryByText('janela informada pelo agente')).toBeNull()
+  })
 })

@@ -14,8 +14,10 @@ function SessionDetail({ id }: { id: string }) {
   if (q.isError) return <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar a sessão.</p>
   const turns = q.data.turns ?? []
   const top = q.data.top ?? []
+  const pctOnly = turns.length > 0 && turns.every((t) => t.pct_only)
   return (
     <div style={{ padding: '8px 12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {pctOnly && <span style={muted}>janela informada pelo agente</span>}
       <ContextCurve turns={turns} />
       <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Saídas mais pesadas</h3>
       <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -140,7 +142,7 @@ export function ContextSection({ from, to, projectId, exact }: { from: string; t
                         <span style={{ flex: 1, minWidth: 0 }}>{s.card_title}</span>
                         <span style={muted}>{startFmt.format(new Date(s.started_at))}</span>
                         <span style={{ fontVariantNumeric: 'tabular-nums' }}>peso {tokens(s.weight)}</span>
-                        <span style={{ ...muted, fontVariantNumeric: 'tabular-nums' }}>pico {tokens(s.peak_context)}</span>
+                        {s.peak_context > 0 && <span style={{ ...muted, fontVariantNumeric: 'tabular-nums' }}>pico {tokens(s.peak_context)}</span>}
                         <span style={muted}>{s.compactions} {s.compactions === 1 ? 'compactação' : 'compactações'}</span>
                       </button>
                       {expanded && <SessionDetail id={s.session_id} />}
