@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -26,6 +27,27 @@ const Timeout = 2 * time.Second
 
 // AgentPIDHeader identifica o processo do agente nas rotas /api/me.
 const AgentPIDHeader = "X-Nobre-Agent-PID"
+
+// AgentSessionHeader leva `<agente>:<id>` da variável de sessão do agente,
+// para quando o PID não acha a sessão.
+const AgentSessionHeader = "X-Nobre-Agent-Session"
+
+// agentSessionFromEnv devolve `<agente>:<valor>` da primeira variável de
+// sessão presente (agentes em ordem alfabética, para ser determinístico).
+func agentSessionFromEnv() string {
+	envs := agents.SessionEnvs()
+	names := make([]string, 0, len(envs))
+	for n := range envs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if v := os.Getenv(envs[n]); v != "" {
+			return n + ":" + v
+		}
+	}
+	return ""
+}
 
 // Client fala com o nobred. PID é o processo do agente (0 = desconhecido).
 type Client struct {
@@ -100,6 +122,9 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 	}
 	if c.PID > 0 {
 		req.Header.Set(AgentPIDHeader, strconv.Itoa(c.PID))
+	}
+	if v := agentSessionFromEnv(); v != "" {
+		req.Header.Set(AgentSessionHeader, v)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {

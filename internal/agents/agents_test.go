@@ -74,3 +74,9 @@ func TestStaticTemOsDriversCompilados(t *testing.T) {
 		t.Fatalf("Static = %v", got)
 	}
 }
+
+func TestSessionEnvsSoDosDriversQueTem(t *testing.T) {
+	if got := SessionEnvs(); !reflect.DeepEqual(got, map[string]string{"kiro": "KIRO_SESSION_ID"}) {
+		t.Fatalf("SessionEnvs = %v", got)
+	}
+}

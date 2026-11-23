@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -782,5 +783,85 @@ func TestMeAppGeralRefusedWhenFamilyRootIsAGroup(t *testing.T) {
 	}
 	if got, _ := a.st.GetCard(c.Key); got.ProjectID != repo.ID {
 		t.Fatalf("project_id = %d", got.ProjectID)
+	}
+}
+
+// doSessionHeader chama /api/me/note só com X-Nobre-Agent-Session (e PID opcional).
+func (a *testAPI) doSessionHeader(t *testing.T, header string, pid int) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/me/note", strings.NewReader(`{"text":"x"}`))
+	req.Host = "127.0.0.1:7420"
+	req.RemoteAddr = "127.0.0.1:50000"
+	req.Header.Set("Content-Type", "application/json")
+	if header != "" {
+		req.Header.Set("X-Nobre-Agent-Session", header)
+	}
+	if pid > 0 {
+		req.Header.Set("X-Nobre-Agent-PID", strconv.Itoa(pid))
+	}
+	rec := httptest.NewRecorder()
+	a.h.ServeHTTP(rec, req)
+	return rec
+}
+
+func (a *testAPI) kiroSession(t *testing.T, id string, pid int, key string) {
+	t.Helper()
+	if err := a.st.StartSession(domain.Session{ID: id, Agent: "kiro", PID: pid, Cwd: "/w/api/sub", StartedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.AttachSession(id, key, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMeAchaSessaoPeloCabecalhoDoAgente(t *testing.T) {
+	a := newTestAPI(t)
+	key := a.card(t).Key
+	a.kiroSession(t, "kiro:sess_x", 111, key)
+	// PID desconhecido, cabeçalho de sessão viva.
+	if rec := a.doSessionHeader(t, "kiro:sess_x", 9999); rec.Code != http.StatusOK {
+		t.Fatalf("PID desconhecido + cabeçalho: %d %s", rec.Code, rec.Body)
+	}
+	// Sem PID algum.
+	if rec := a.doSessionHeader(t, "kiro:sess_x", 0); rec.Code != http.StatusOK {
+		t.Fatalf("só cabeçalho: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMeCabecalhoDeSessaoEncerradaOuDesconhecida404(t *testing.T) {
+	a := newTestAPI(t)
+	key := a.card(t).Key
+	a.kiroSession(t, "kiro:sess_x", 111, key)
+	if err := a.st.EndSession("kiro:sess_x", "exit", testNow); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"kiro:sess_x", "kiro:sess_nao_existe"} {
+		rec := a.doSessionHeader(t, h, 0)
+		if rec.Code != http.StatusNotFound || decode[map[string]string](t, rec)["error"] != msgNoSession {
+			t.Fatalf("%s: %d %s", h, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestMeSemPIDNemCabecalho400(t *testing.T) {
+	a := newTestAPI(t)
+	if rec := a.doSessionHeader(t, "", 0); rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	// Cabeçalho malformado (agente desconhecido) conta como ausente.
+	if rec := a.doSessionHeader(t, "zzz:sess_x", 0); rec.Code != http.StatusBadRequest {
+		t.Fatalf("agente desconhecido: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMePIDVivoTemPrioridadeSobreCabecalho(t *testing.T) {
+	a := newTestAPI(t)
+	key := a.card(t).Key
+	a.liveSession(t, "claude:s1", 4242, "")
+	a.kiroSession(t, "kiro:sess_x", 111, key)
+	// PID acha claude:s1 (sem card -> 409); o cabeçalho (com card) é ignorado.
+	rec := a.doSessionHeader(t, "kiro:sess_x", 4242)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
 	}
 }

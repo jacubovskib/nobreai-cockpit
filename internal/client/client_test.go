@@ -94,3 +94,28 @@ func TestFindAgentPIDAchaAncestralDoRegistro(t *testing.T) {
 		t.Fatalf("claude: got %d, want 150", got)
 	}
 }
+
+func TestClientEnviaSessaoDoAgentePelaVariavel(t *testing.T) {
+	t.Setenv("NOBRE_AGENT_PID", "77")
+	t.Setenv("KIRO_SESSION_ID", "sess_x")
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get(AgentSessionHeader)
+		w.Write([]byte(`{"session":{},"card":null}`))
+	}))
+	defer srv.Close()
+	if _, err := New(strings.TrimPrefix(srv.URL, "http://")).Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got != "kiro:sess_x" {
+		t.Fatalf("header = %q", got)
+	}
+	t.Setenv("KIRO_SESSION_ID", "")
+	got = "?"
+	if _, err := New(strings.TrimPrefix(srv.URL, "http://")).Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("sem variável, header = %q", got)
+	}
+}

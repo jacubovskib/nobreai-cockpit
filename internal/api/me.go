@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
@@ -22,10 +24,12 @@ import (
 
 const (
 	agentPIDHeader = "X-Nobre-Agent-PID"
-	msgNoSession   = "nenhuma sessão de agente encontrada para este processo"
-	msgNoCard      = `Esta sessão ainda não tem card. Use nobre start "<título>" ou nobre resume <KEY>.`
-	msgNoProject   = "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan (veja a skill nobre-cockpit)."
-	msgNotGit      = "Esta pasta não é um repositório git e não pode ser cadastrada no NobreAI Cockpit; a sessão segue sem card."
+	// agentSessionHeader é `<agente>:<id>` da variável de sessão do agente.
+	agentSessionHeader = "X-Nobre-Agent-Session"
+	msgNoSession       = "nenhuma sessão de agente encontrada para este processo"
+	msgNoCard          = `Esta sessão ainda não tem card. Use nobre start "<título>" ou nobre resume <KEY>.`
+	msgNoProject       = "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan (veja a skill nobre-cockpit)."
+	msgNotGit          = "Esta pasta não é um repositório git e não pode ser cadastrada no NobreAI Cockpit; a sessão segue sem card."
 )
 
 func (s *server) meRoutes(mux *http.ServeMux) {
@@ -52,22 +56,54 @@ type sessionCardHandler func(http.ResponseWriter, *http.Request, domain.Session,
 
 func (s *server) withSession(h sessionHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		pid, err := strconv.Atoi(r.Header.Get(agentPIDHeader))
-		if err != nil || pid <= 0 {
-			writeError(w, http.StatusBadRequest, "cabeçalho "+agentPIDHeader+" ausente ou inválido")
-			return
+		pid, perr := strconv.Atoi(r.Header.Get(agentPIDHeader))
+		hasPID := perr == nil && pid > 0
+		if hasPID {
+			sess, err := s.st.SessionByPID(pid)
+			if err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+			if sess != nil {
+				h(w, r, *sess)
+				return
+			}
 		}
-		sess, err := s.st.SessionByPID(pid)
-		if err != nil {
-			writeStoreError(w, err, "")
-			return
-		}
-		if sess == nil {
+		// Sem PID que ache sessão viva: a variável de sessão do agente.
+		if id, ok := agentSessionID(r.Header.Get(agentSessionHeader)); ok {
+			sess, err := s.st.GetSession(id)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				writeStoreError(w, err, "")
+				return
+			}
+			if err == nil && sess.EndedAt == nil {
+				h(w, r, sess)
+				return
+			}
 			writeError(w, http.StatusNotFound, msgNoSession)
 			return
 		}
-		h(w, r, *sess)
+		if !hasPID {
+			writeError(w, http.StatusBadRequest, "cabeçalho "+agentPIDHeader+" ausente ou inválido")
+			return
+		}
+		writeError(w, http.StatusNotFound, msgNoSession)
 	}
+}
+
+// agentSessionID valida `<agente>:<id>` (agente conhecido, tamanho razoável,
+// sem espaços nem controle) e devolve o id da sessão no store.
+func agentSessionID(v string) (string, bool) {
+	name, rest, ok := strings.Cut(v, ":")
+	if !ok || rest == "" || len(v) > 200 || !slices.Contains(agents.Known, name) {
+		return "", false
+	}
+	for _, c := range v {
+		if c <= ' ' || c == 0x7f {
+			return "", false
+		}
+	}
+	return v, true
 }
 
 func (s *server) withSessionCard(h sessionCardHandler) http.HandlerFunc {

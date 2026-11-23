@@ -83,3 +83,23 @@ func Static() []string {
 		kiro.New(nil, adapter.Deps{}),
 	).AllProcessNames()
 }
+
+// sessionEnver é a capacidade opcional de um driver cujo CLI põe o id da
+// sessão numa variável de ambiente do shell do agente.
+type sessionEnver interface{ SessionEnv() string }
+
+// SessionEnvs mapeia o agente à variável de ambiente com o id da sua sessão,
+// só para os drivers que têm uma (o Claude não tem). Sem store: o `nobre` usa
+// como alternativa ao PID.
+func SessionEnvs() map[string]string {
+	out := map[string]string{}
+	for _, a := range New(
+		claude.New(nil, adapter.Deps{}),
+		kiro.New(nil, adapter.Deps{}),
+	).All() {
+		if e, ok := a.(sessionEnver); ok && e.SessionEnv() != "" {
+			out[a.Name()] = e.SessionEnv()
+		}
+	}
+	return out
+}
