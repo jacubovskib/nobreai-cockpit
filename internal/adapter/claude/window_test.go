@@ -743,6 +743,7 @@ func TestWindow_OldChildSubagentFixedByV4(t *testing.T) {
 	e, mc, cc := childAgentCall(t, true)
 	p := e.writeSub(t, "ab1", time.Minute+10*time.Second)
 	orig := parseContext
+	t.Cleanup(func() { parseContext = orig })
 	parseContext = func(path string, off int64, st usage.ContextState, known usage.KnownTurn) ([]usage.ToolOutput, []usage.ContextTurn, []usage.Prompt, []usage.LineRef, int64, usage.ContextState, bool, error) {
 		outs, turns, prompts, lines, next, st, reset, err := orig(path, off, st, known)
 		for i := range lines {
