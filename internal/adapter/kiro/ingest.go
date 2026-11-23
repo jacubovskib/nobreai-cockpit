@@ -183,10 +183,13 @@ func (a *Adapter) readHistory(sess domain.Session, now time.Time) (bool, error) 
 			saved = append(saved, t)
 		}
 	}
-	if err := a.st.SaveContext(sess.ID, path, h.reset, outs, saved, h.next, st); err != nil {
+	// O uso (upsert) vai antes: o SaveContext avança o cursor, e uma falha
+	// depois dele perderia os créditos. Falhando o uso, o cursor fica onde
+	// estava e a próxima leitura tenta de novo.
+	if err := a.st.UpsertUsage(rows); err != nil {
 		return false, err
 	}
-	if err := a.st.UpsertUsage(rows); err != nil {
+	if err := a.st.SaveContext(sess.ID, path, h.reset, outs, saved, h.next, st); err != nil {
 		return false, err
 	}
 	if err := a.st.SetFileOffset(sess.ID, path, h.next); err != nil {

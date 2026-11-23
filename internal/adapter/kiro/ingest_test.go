@@ -440,3 +440,29 @@ func TestHistoryFileRejectsPathyIDs(t *testing.T) {
 		}
 	}
 }
+
+// Falha ao gravar o uso não pode avançar o cursor: os créditos entram na
+// leitura seguinte.
+func TestIngestUsageFailureKeepsCursor(t *testing.T) {
+	h := newHist(t)
+	h.write(t, fixtureBytes(t, "messages.jsonl"))
+	if _, err := h.st.DB.Exec(`CREATE TRIGGER falha BEFORE INSERT ON usage BEGIN SELECT RAISE(ABORT, 'falha de teste'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.a.readLocked(h.sess(t), t0); err == nil {
+		t.Fatal("a leitura devia falhar com a gravação do uso")
+	}
+	if len(h.usage(t)) != 0 {
+		t.Fatal("uso gravado apesar da falha")
+	}
+	if off, _, _ := h.st.ContextCursor(sessID, h.file); off != 0 {
+		t.Fatalf("cursor avançou para %d", off)
+	}
+	if _, err := h.st.DB.Exec(`DROP TRIGGER falha`); err != nil {
+		t.Fatal(err)
+	}
+	h.read(t)
+	if u := h.usage(t); len(u) != 2 || !near(u[0].credits, 0.30) || !near(u[1].credits, 0.5) {
+		t.Fatalf("uso = %+v", u)
+	}
+}
