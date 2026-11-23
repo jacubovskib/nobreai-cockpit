@@ -82,3 +82,27 @@ func TestAgentsListaInstalavelEStatusLine(t *testing.T) {
 		t.Fatal("campo ausente")
 	}
 }
+
+// creditsAgent mede o gasto em créditos (agentcore.SpendUnit).
+type creditsAgent struct{ namedAgent }
+
+func (creditsAgent) SpendsCredits() bool { return true }
+
+func TestAgentsListaSpendsCredits(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	plain := &namedAgent{binAdapter: binAdapter{bin: "/bin/cat"}, n: "claude"}
+	cred := &creditsAgent{namedAgent{binAdapter: binAdapter{bin: "/bin/cat"}, n: "kiro"}}
+	h := New(st, Deps{Agents: agents.New(plain, cred)})
+	a := &testAPI{st: st, h: h}
+	rows := decode[[]map[string]any](t, a.do(t, "GET", "/api/agents", nil, 0))
+	want := map[string]bool{"claude": false, "codex": false, "kiro": true}
+	for _, r := range rows {
+		if r["spends_credits"] != want[r["agent"].(string)] {
+			t.Errorf("%v: spends_credits = %v", r["agent"], r["spends_credits"])
+		}
+	}
+}

@@ -756,7 +756,7 @@ export function Config() {
       {failed && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar as configurações.</p>}
       {!failed && (settings.isPending || limits.isPending || projects.isPending) && <p className="placeholder">Carregando…</p>}
       <Agents settings={settings.data} />
-      {limits.data && agentList.data && <Limits limits={limits.data} agents={agentList.data.map((a) => a.agent)} />}
+      {limits.data && agentList.data && <Limits limits={limits.data} agents={agentList.data.filter((a) => !a.spends_credits).map((a) => a.agent)} />}
       {settings.data && <CardCreation settings={settings.data} />}
       {settings.data && <Handoff settings={settings.data} />}
       {settings.data && <ContextMonitor settings={settings.data} />}

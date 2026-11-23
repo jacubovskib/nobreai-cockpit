@@ -287,7 +287,7 @@ export interface Overview {
 export type StreamKind = 'cards' | 'sessions' | 'config' | 'usage' | 'prompts' | string
 
 export interface AgentCheck { key: string; label: string; detail: string; ok: boolean }
-export interface AgentDetection { agent: string; installable: boolean; status_line: boolean; detection: { found: boolean; path: string; version: string; checks: AgentCheck[] } }
+export interface AgentDetection { agent: string; installable: boolean; status_line: boolean; spends_credits: boolean; detection: { found: boolean; path: string; version: string; checks: AgentCheck[] } }
 export interface InstallReport { changed: string[]; backup: string; messages: string[] }
 
 // GET /api/worktrees

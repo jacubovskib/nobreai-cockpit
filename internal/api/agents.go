@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/agentcore"
 	"github.com/nobretech/nobreai-cockpit/internal/agents"
 )
 
@@ -16,6 +17,9 @@ type agentInfo struct {
 	Installable bool `json:"installable"`
 	// StatusLine: o driver integra uma status line (adapter.StatusLiner).
 	StatusLine bool `json:"status_line"`
+	// SpendsCredits: o driver mede o gasto em créditos (agentcore.SpendUnit);
+	// a UI não oferece limites em US$ para ele.
+	SpendsCredits bool `json:"spends_credits"`
 }
 
 func (s *server) agentRoutes(mux *http.ServeMux) {
@@ -36,7 +40,8 @@ func (s *server) listAgents(w http.ResponseWriter, r *http.Request) {
 				d.Checks = []adapter.Check{}
 			}
 			_, sl := ad.(adapter.StatusLiner)
-			out = append(out, agentInfo{Agent: name, Detection: d, Installable: true, StatusLine: sl})
+			su, _ := ad.(agentcore.SpendUnit)
+			out = append(out, agentInfo{Agent: name, Detection: d, Installable: true, StatusLine: sl, SpendsCredits: su != nil && su.SpendsCredits()})
 			continue
 		}
 		out = append(out, agentInfo{Agent: name, Detection: adapter.Detection{

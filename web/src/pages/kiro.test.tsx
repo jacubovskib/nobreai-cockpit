@@ -128,25 +128,30 @@ describe('seletor do Continuar', () => {
   })
 })
 
-describe('seletor da nova tarefa', () => {
-  const open = async () => fireEvent.click(await screen.findByRole('button', { name: 'Nova tarefa' }))
-  it('com dois instalados mostra o seletor, padrão o primeiro, e envia o escolhido', async () => {
-    const fn = mock({ ...base, '/api/agents': agentsApi([['claude', true], ['kiro', true], ['codex', false]]), 'POST /api/cards': { key: 'NAC-1' } })
+describe('nova tarefa', () => {
+  it('não tem seletor de agente e não envia agent', async () => {
+    const fn = mock({ ...base, '/api/agents': agentsApi([['claude', true], ['kiro', true]]), 'POST /api/cards': { key: 'NAC-1' } })
     wrap(<NewTask />)
-    await open()
-    const sel = await screen.findByLabelText('Agente')
-    expect(sel).toHaveValue('claude')
-    expect(Array.from((sel as HTMLSelectElement).options).map((o) => o.text)).toEqual(['Claude Code', 'Kiro'])
-    fireEvent.change(sel, { target: { value: 'kiro' } })
-    fireEvent.change(screen.getByLabelText('Título'), { target: { value: 'Algo' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova tarefa' }))
+    fireEvent.change(await screen.findByLabelText('Título'), { target: { value: 'Algo' } })
+    expect(screen.queryByLabelText('Agente')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Criar tarefa' }))
-    await waitFor(() => expect(bodies(fn, 'POST', '/api/cards')[0]).toMatchObject({ title: 'Algo', agent: 'kiro' }))
+    await waitFor(() => expect(bodies(fn, 'POST', '/api/cards')).toHaveLength(1))
+    expect(bodies(fn, 'POST', '/api/cards')[0]).not.toHaveProperty('agent')
   })
-  it('com um só instalado esconde o seletor', async () => {
-    mock({ ...base, '/api/agents': agentsApi([['claude', false], ['kiro', true]]) })
-    wrap(<NewTask />)
-    await open()
-    await screen.findByLabelText('Título')
-    await waitFor(() => expect(screen.queryByLabelText('Agente')).not.toBeInTheDocument())
+})
+
+describe('limites em US$', () => {
+  it('não listam agentes que gastam créditos', async () => {
+    mock({
+      '/api/settings': { rules: {}, currency: 'USD', brl_rate: 0 }, '/api/limits': [], '/api/projects': [], '/api/cards': [], '/api/prices': [], '/api/usage/totals?group=model': [],
+      '/api/agents': [
+        { agent: 'claude', detection: det(true), installable: true, status_line: true, spends_credits: false },
+        { agent: 'kiro', detection: det(true), installable: true, status_line: false, spends_credits: true },
+      ],
+    })
+    wrap(<Config />)
+    expect(await screen.findByLabelText('Limite diário de Claude Code')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Limite diário de Kiro')).not.toBeInTheDocument()
   })
 })
