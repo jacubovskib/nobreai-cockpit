@@ -103,9 +103,9 @@ describe('kinds do RTK', () => {
 })
 
 describe('medidor de contexto ao vivo', () => {
-  it('usage e sessions invalidam context-live e session-context', async () => {
+  it('usage, sessions e config invalidam context-live e session-context', async () => {
     const { invalidateForKind } = await import('./useStream')
-    for (const kind of ['usage', 'sessions']) {
+    for (const kind of ['usage', 'sessions', 'config']) {
       const qc = new QueryClient()
       const spy = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue()
       invalidateForKind(qc, kind)

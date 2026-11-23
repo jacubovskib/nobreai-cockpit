@@ -8,8 +8,9 @@ const KIND_KEYS: Record<string, string[]> = {
   // Sem 'context': sessions sai a cada hook, e o contexto medido sempre
   // publica usage.
   sessions: ['sessions', 'card', 'cards', 'overview', 'usage', 'events', 'worktrees', 'context-live', 'session-context'],
-  // 'memories': o limite das memórias muda a prévia.
-  config: ['settings', 'limits', 'prices', 'projects', 'overview', 'worktrees', 'rtk', 'rtk-savings', 'memories'],
+  // 'memories': o limite das memórias muda a prévia. O medidor de contexto
+  // depende das janelas por modelo e das faixas de aviso.
+  config: ['settings', 'limits', 'prices', 'projects', 'overview', 'worktrees', 'rtk', 'rtk-savings', 'memories', 'context-live', 'session-context'],
   // Só a economia do RTK: o estado ('rtk') roda rtk --version e a prévia não muda com o uso.
   usage: ['usage', 'context', 'overview', 'cards', 'card', 'rtk-savings', 'context-live', 'session-context'],
   prompts: ['prompts', 'continue-preview'],

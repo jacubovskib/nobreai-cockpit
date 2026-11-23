@@ -141,8 +141,14 @@ export const useMemoryPreview = (projectId: number | null) =>
     queryFn: () => get<MemoryPreview>(`/api/memories/preview?project=${projectId}`),
   })
 
+// Sessão parada não manda evento: a cada 30 s o medidor refaz a consulta
+// para o tempo parado e o "parada além do cache" andarem.
 export const useContextLive = () =>
-  useQuery({ queryKey: ['context-live'], queryFn: () => get<LiveContextSummary[]>('/api/context/live') })
+  useQuery({ queryKey: ['context-live'], queryFn: () => get<LiveContextSummary[]>('/api/context/live'), refetchInterval: 30_000 })
 
 export const useSessionContext = (id: string) =>
-  useQuery({ queryKey: ['session-context', id], queryFn: () => get<ContextLive>(`/api/sessions/${encodeURIComponent(id)}/context`) })
+  useQuery({
+    queryKey: ['session-context', id],
+    queryFn: () => get<ContextLive>(`/api/sessions/${encodeURIComponent(id)}/context`),
+    refetchInterval: 30_000,
+  })
