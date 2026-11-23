@@ -1628,3 +1628,28 @@ func TestSessionEndWithoutSessionCreatesAndEnds(t *testing.T) {
 		t.Fatal("session_end não registrado")
 	}
 }
+
+// O motivo do SessionEnd é traduzido na sessão; o evento guarda o código do
+// Claude Code como veio.
+func TestSessionEndReasonTranslated(t *testing.T) {
+	for code, want := range map[string]string{
+		"clear": "conversa limpa (/clear)", "logout": "logout", "prompt_input_exit": "usuário saiu",
+		"other": "encerrada pelo agente", "novo_motivo": "novo_motivo", "": "encerrada pelo agente",
+	} {
+		e := newEnv(t)
+		e.project(t)
+		e.call(t, "session_start")
+		e.call(t, "session_end", with("reason", code))
+		e.a.Wait()
+		if x, _ := e.st.GetSession(sessID); x.EndReason != want {
+			t.Fatalf("%q: motivo = %q", code, x.EndReason)
+		}
+		evs := e.events(t, domain.EvSessionEnd)
+		var d struct {
+			Reason string `json:"reason"`
+		}
+		if len(evs) != 1 || json.Unmarshal(evs[0].Data, &d) != nil || d.Reason != code {
+			t.Fatalf("%q: eventos = %+v", code, evs)
+		}
+	}
+}

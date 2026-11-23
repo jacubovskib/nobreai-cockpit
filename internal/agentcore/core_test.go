@@ -207,27 +207,26 @@ func TestToolAfterWithoutCaptureRecordsNothing(t *testing.T) {
 	}
 }
 
-func TestEndedFinishesWithTranslatedReason(t *testing.T) {
+func TestEndedFinishesWithDriverReason(t *testing.T) {
 	e, d := newFake(t)
 	e.project(t)
 	e.handle(t, d, Event{Kind: Started})
-	e.handle(t, d, Event{Kind: Ended, Reason: "prompt_input_exit"})
+	// O driver traduz o motivo; o código bruto vai para o evento.
+	e.handle(t, d, Event{Kind: Ended, Reason: "saiu pelo menu", ReasonCode: "menu_exit"})
 	x, _ := e.st.GetSession(fakeID)
-	if x.EndedAt == nil || x.EndReason != "usuário saiu" {
+	if x.EndedAt == nil || x.EndReason != "saiu pelo menu" {
 		t.Fatalf("sessão = %+v", x)
 	}
-	if evs := e.events(t, domain.EvSessionEnd); len(evs) != 1 || evs[0]["reason"] != "prompt_input_exit" {
+	if evs := e.events(t, domain.EvSessionEnd); len(evs) != 1 || evs[0]["reason"] != "menu_exit" {
 		t.Fatalf("eventos = %v", evs)
 	}
 
-	// Motivo desconhecido fica como veio; sem motivo, o padrão.
-	for reason, want := range map[string]string{"desconhecido": "desconhecido", "": "encerrada pelo agente"} {
-		e, d := newFake(t)
-		e.handle(t, d, Event{Kind: Started})
-		e.handle(t, d, Event{Kind: Ended, Reason: reason})
-		if x, _ := e.st.GetSession(fakeID); x.EndReason != want {
-			t.Fatalf("motivo %q: %q", reason, x.EndReason)
-		}
+	// Sem motivo, o padrão.
+	e, d = newFake(t)
+	e.handle(t, d, Event{Kind: Started})
+	e.handle(t, d, Event{Kind: Ended})
+	if x, _ := e.st.GetSession(fakeID); x.EndReason != "encerrada pelo agente" {
+		t.Fatalf("motivo vazio: %q", x.EndReason)
 	}
 }
 

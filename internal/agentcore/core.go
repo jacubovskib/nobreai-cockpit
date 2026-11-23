@@ -74,7 +74,8 @@ func New(st *store.Store, deps adapter.Deps, d Driver) *Core {
 }
 
 // Deps são as dependências do núcleo, compartilhadas com o driver: o que um
-// muda (o Git, nos testes) vale para os dois.
+// muda (o Git, nos testes) vale para os dois. Só mude antes do primeiro hook
+// (como SetAlive): hooks em andamento leem sem trava.
 func (c *Core) Deps() *adapter.Deps { return &c.deps }
 
 // Handle trata um hook: tradução, sessão, regras e resposta. Toda sessão é

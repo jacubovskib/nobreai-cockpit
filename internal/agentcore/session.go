@@ -111,21 +111,10 @@ func (c *Core) FollowMain(sess domain.Session, ev Event) (domain.Session, error)
 	return c.followBranch(sess, false), nil
 }
 
-// endReasons traduz o motivo do fim da sessão informado pelo agente.
-var endReasons = map[string]string{
-	"clear":             "conversa limpa (/clear)",
-	"logout":            "logout",
-	"prompt_input_exit": "usuário saiu",
-	"other":             "encerrada pelo agente",
-}
-
 // end encerra a sessão (o card sai de em_andamento) e só depois pede a
 // leitura do histórico.
 func (c *Core) end(sess domain.Session, ev Event) error {
-	reason := endReasons[ev.Reason]
-	if reason == "" {
-		reason = ev.Reason
-	}
+	reason := ev.Reason
 	if reason == "" {
 		reason = "encerrada pelo agente"
 	}
@@ -133,7 +122,7 @@ func (c *Core) end(sess domain.Session, ev Event) error {
 		return err
 	}
 	c.publish("sessions", "cards")
-	c.Event(sess.ID, domain.EvSessionEnd, map[string]any{"reason": ev.Reason}, ev.At)
+	c.Event(sess.ID, domain.EvSessionEnd, map[string]any{"reason": ev.ReasonCode}, ev.At)
 	c.ingest(sess, ev)
 	return nil
 }

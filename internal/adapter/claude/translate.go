@@ -29,12 +29,29 @@ func (a *Adapter) Translate(event string, raw []byte) (agentcore.Event, error) {
 		event = p.HookEventName
 	}
 	ev := agentcore.Event{Kind: kinds[event], ProviderSessionID: p.SessionID, Cwd: p.Cwd, Source: p.Source,
-		Prompt: p.Prompt, Reason: p.Reason, TranscriptPath: p.TranscriptPath, SubagentID: p.AgentID,
+		Prompt: p.Prompt, Reason: endReason(p.Reason), ReasonCode: p.Reason, TranscriptPath: p.TranscriptPath, SubagentID: p.AgentID,
 		StopActive: p.StopHookActive, Raw: raw}
 	if p.ToolName != "" {
 		ev.Tool = translateTool(p)
 	}
 	return ev, nil
+}
+
+// endReasons traduz o reason do SessionEnd do Claude Code.
+var endReasons = map[string]string{
+	"clear":             "conversa limpa (/clear)",
+	"logout":            "logout",
+	"prompt_input_exit": "usuário saiu",
+	"other":             "encerrada pelo agente",
+}
+
+// endReason é o motivo do fim no texto do Cockpit: o traduzido, senão o
+// reason como veio (vazio fica com o padrão do núcleo).
+func endReason(code string) string {
+	if r := endReasons[code]; r != "" {
+		return r
+	}
+	return code
 }
 
 // translateTool mapeia as ferramentas do Claude Code: Read é leitura;

@@ -77,8 +77,12 @@ type Event struct {
 	Source string
 	// Prompt é o texto do usuário (Prompt).
 	Prompt string
-	// Reason é o motivo do fim como o agente o informa (Ended).
+	// Reason é o motivo do fim no texto do Cockpit, já traduzido pelo driver
+	// (Ended; vazio = "encerrada pelo agente").
 	Reason string
+	// ReasonCode é o motivo do fim como o agente o informa, guardado no
+	// evento de fim da sessão (Ended).
+	ReasonCode string
 	// TranscriptPath é o histórico da conversa no disco.
 	TranscriptPath string
 	// SubagentID vem preenchido quando o hook dispara dentro de um subagente:
