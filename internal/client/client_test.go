@@ -84,10 +84,10 @@ func TestFindAgentPIDAchaAncestralDoRegistro(t *testing.T) {
 	fakeProc(t, root, 150, 100, "claude")
 	fakeProc(t, root, 200, 100, "bash")
 	fakeProc(t, root, 300, 200, "nobre")
-	if got := findAgentPID(root, 300, agents.Static()); got != 0 {
-		t.Fatalf("sem driver do kiro compilado, got %d", got)
+	if got := findAgentPID(root, 300, []string{"claude"}); got != 0 {
+		t.Fatalf("sem o nome do kiro-cli, got %d", got)
 	}
-	if got := findAgentPID(root, 300, append(agents.Static(), "kiro-cli")); got != 100 {
+	if got := findAgentPID(root, 300, agents.Static()); got != 100 {
 		t.Fatalf("kiro-cli: got %d, want 100", got)
 	}
 	if got := findAgentPID(root, 150, agents.Static()); got != 150 {

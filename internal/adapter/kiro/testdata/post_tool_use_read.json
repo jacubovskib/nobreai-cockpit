@@ -1,0 +1,1 @@
+{"session_id":"sess_0b6f3c1e-5a2d-4e8f-9c7b-2d1e0f3a4b5c","hook_event_name":"PostToolUse","cwd":"/w/api","tool_name":"read_file","tool_input":{"path":"/w/api/a.txt","offset":null,"limit":null},"tool_response":"<file name=\"/w/api/a.txt\" language=\"plaintext\" >\n<content>\nlinha um\n\n</content>\n</file>"}

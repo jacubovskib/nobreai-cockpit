@@ -1,0 +1,1 @@
+{"session_id":"sess_0b6f3c1e-5a2d-4e8f-9c7b-2d1e0f3a4b5c","hook_event_name":"PostToolUse","cwd":"/w/api","tool_name":"execute_bash","tool_input":{"command":"echo oi","description":null,"cwd":null,"run_in_background":false,"timeout":null},"tool_response":"Output:\noi\n\n\nExit Code: 0"}

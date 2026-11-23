@@ -70,7 +70,7 @@ func TestNomesExibidos(t *testing.T) {
 }
 
 func TestStaticTemOsDriversCompilados(t *testing.T) {
-	if got := Static(); !reflect.DeepEqual(got, []string{"claude"}) {
+	if got := Static(); !reflect.DeepEqual(got, []string{"claude", "kiro-cli"}) {
 		t.Fatalf("Static = %v", got)
 	}
 }

@@ -57,8 +57,8 @@ type Fixtures struct {
 	// agente (vazio se não há).
 	DecodeContext func(adapter.HookReply) []string
 	// DecodeHold diz se a resposta segura o fim do turno e o motivo. nil: o
-	// agente não segura o turno (o texto chegaria no próximo prompt; esse
-	// caminho da bateria é da Task 6 e hoje é pulado).
+	// agente não segura o turno e o cenário é pulado (Claude e Kiro seguram;
+	// o núcleo ainda não tem como entregar o texto no próximo prompt).
 	DecodeHold func(adapter.HookReply) (string, bool)
 }
 
@@ -179,7 +179,7 @@ func Run(t *testing.T, newAdapter func(st *store.Store, deps adapter.Deps) adapt
 
 	t.Run("Stop com handoff pendente segura o turno", func(t *testing.T) {
 		if fx.DecodeHold == nil {
-			t.Skip("driver sem como segurar o turno: o texto do handoff chegar no próximo prompt é da Task 6 (ainda não existe no núcleo)")
+			t.Skip("driver sem como segurar o turno: o núcleo ainda não entrega o texto do handoff no próximo prompt")
 		}
 		h := setup(t)
 		p := h.project

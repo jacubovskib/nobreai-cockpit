@@ -17,6 +17,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/kiro"
 	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"github.com/nobretech/nobreai-cockpit/internal/api"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
@@ -119,7 +120,8 @@ func run(dbPath string, seedDemo bool) error {
 	paths.SearchPATH = func() string { return userPATH.Get(time.Minute) }
 	go userPATH.Get(0) // já na partida, sem atrasar o servidor
 	claudeAdapter.SetPaths(paths)
-	registry := agents.New(claudeAdapter)
+	// O Claude vem primeiro: é o agente padrão quando o pedido não escolhe.
+	registry := agents.New(claudeAdapter, kiro.New(st, adapter.Deps{Now: time.Now, Git: git, Publish: hub.Publish}))
 	// RTK: comprime a saída dos comandos do Claude Code; o hook mora no mesmo
 	// settings.json. Sem demo o Tool existe, mas o monitor não roda.
 	home, _ := os.UserHomeDir()

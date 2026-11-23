@@ -6,6 +6,7 @@ package agents
 import (
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/kiro"
 )
 
 // Known é a ordem fixa dos agentes conhecidos, com ou sem driver.
@@ -79,5 +80,6 @@ func (r *Registry) AllProcessNames() []string {
 func Static() []string {
 	return New(
 		claude.New(nil, adapter.Deps{}),
+		kiro.New(nil, adapter.Deps{}),
 	).AllProcessNames()
 }
