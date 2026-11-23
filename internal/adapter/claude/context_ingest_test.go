@@ -62,7 +62,7 @@ func ctxEnv(t *testing.T) (e *env, main, sub string) {
 
 func TestReadTranscripts_Context(t *testing.T) {
 	e, main, sub := ctxEnv(t)
-	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{main, sub} {
@@ -71,7 +71,7 @@ func TestReadTranscripts_Context(t *testing.T) {
 		}
 	}
 	// Segunda leitura sem mudança não duplica.
-	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
 		t.Fatal(err)
 	}
 	if ctxCount(t, e, "tool_outputs", main) != 1 || ctxCount(t, e, "context_turns", main) != 1 {
@@ -85,7 +85,7 @@ func TestReadTranscripts_Context(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendFile(t, main, ctxAssistant("m2", "Grep", "t3")+ctxResult("t3", "xy"))
-	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
 		t.Fatal(err)
 	}
 	if ctxCount(t, e, "tool_outputs", main) != 2 || ctxCount(t, e, "context_turns", main) != 2 {
@@ -139,7 +139,7 @@ func TestBackfillContext(t *testing.T) {
 
 func TestReadTranscripts_ContextTruncated(t *testing.T) {
 	e, main, _ := ctxEnv(t)
-	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
 		t.Fatal(err)
 	}
 	// O arquivo é reescrito menor, com outro conteúdo.
@@ -150,7 +150,7 @@ func TestReadTranscripts_ContextTruncated(t *testing.T) {
 	if off, _, _ := e.st.ContextCursor(ctxSess, main); off <= int64(len(short)) {
 		t.Fatalf("pré-condição: tool_offset %d deveria superar %d", off, len(short))
 	}
-	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
 		t.Fatal(err)
 	}
 	var tool string
@@ -177,7 +177,7 @@ func TestBackfillContext_ReaderVersion(t *testing.T) {
 	e, main, sub := ctxEnv(t)
 	// Dois turnos no principal: a releitura do começo tem de renumerar do zero.
 	appendFile(t, main, ctxAssistant("m2", "Grep", "t3")+ctxResult("t3", "xy"))
-	if _, err := e.a.readTranscripts(ctxSess, main); err != nil {
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
 		t.Fatal(err)
 	}
 	var usageRows int

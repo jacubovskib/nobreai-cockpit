@@ -16,15 +16,17 @@ import (
 
 // ingestAsync lê o transcript da sessão (e os dos subagentes) em segundo
 // plano, depois da resposta do hook. Leituras da mesma sessão são
-// serializadas; Wait espera as pendentes.
+// serializadas; Wait espera as pendentes. O relógio é lido no hook, antes de
+// a leitura sair do caminho dele.
 func (a *Adapter) ingestAsync(sessionID, path string) {
 	if path == "" {
 		return
 	}
+	now := a.deps.Now()
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
-		changed, err := a.readLocked(sessionID, path)
+		changed, err := a.readLocked(sessionID, path, now)
 		if err != nil {
 			log.Printf("hook claude: transcript da sessão %s: %v", sessionID, err)
 		}
@@ -37,7 +39,7 @@ func (a *Adapter) ingestAsync(sessionID, path string) {
 // readLocked lê os transcripts da sessão com o mutex dela e devolve se há
 // dado novo (uso ou contexto). Um pânico aqui não pode derrubar o daemon:
 // vira log e a leitura termina sem mudança.
-func (a *Adapter) readLocked(sessionID, path string) (changed bool, err error) {
+func (a *Adapter) readLocked(sessionID, path string, now time.Time) (changed bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("hook claude: pânico ao ler o transcript da sessão %s: %v\n%s", sessionID, r, debug.Stack())
@@ -49,7 +51,7 @@ func (a *Adapter) readLocked(sessionID, path string) (changed bool, err error) {
 	mu, _ := a.ingest.LoadOrStore(sessionID, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
-	return a.readTranscripts(sessionID, path)
+	return a.readTranscripts(sessionID, path, now)
 }
 
 // readTranscripts grava o uso novo do transcript principal e dos subagentes.
@@ -62,11 +64,11 @@ func (a *Adapter) readLocked(sessionID, path string) (changed bool, err error) {
 // atribui as linhas às janelas, e o uso é lido só até onde ela chegou (uma
 // linha escrita entre as duas leituras ficaria com o card da principal para
 // sempre). Se a leitura de contexto falha, o uso é lido mesmo assim, até o
-// fim, e fica com a principal.
-func (a *Adapter) readTranscripts(sessionID, mainPath string) (bool, error) {
+// fim, e fica com a principal. now é o relógio de quem pediu a leitura.
+func (a *Adapter) readTranscripts(sessionID, mainPath string, now time.Time) (bool, error) {
 	changed, ctxChanged := false, false
 	// Fora do hook: os prompts velhos de window_prompts somem a cada leitura.
-	if err := a.st.PruneWindowPrompts(a.deps.Now()); err != nil {
+	if err := a.st.PruneWindowPrompts(now); err != nil {
 		log.Printf("hook claude: limpar prompts das janelas: %v", err)
 	}
 	for i, path := range append([]string{mainPath}, usage.SubagentTranscripts(mainPath)...) {
@@ -245,12 +247,12 @@ func (a *Adapter) BackfillContext(ctx context.Context) {
 		log.Printf("medição de contexto: listar sessões: %v", err)
 		return
 	}
-	done, changed := 0, false
+	done, changed, now := 0, false, a.deps.Now()
 	for id, path := range transcripts {
 		if ctx.Err() != nil {
 			break
 		}
-		c, err := a.readLocked(id, path)
+		c, err := a.readLocked(id, path, now)
 		if err != nil {
 			log.Printf("medição de contexto: sessão %s: %v", id, err)
 		}

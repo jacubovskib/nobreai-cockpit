@@ -88,9 +88,12 @@ func (e *env) childCard(t *testing.T, pid int, title string) domain.Card {
 	return c
 }
 
+// read lê o transcript depois das leituras em segundo plano dos hooks (sem
+// elas correndo junto, fora do mutex da sessão).
 func (e *env) read(t *testing.T) {
 	t.Helper()
-	if _, err := e.a.readTranscripts(sessID, e.transcript); err != nil {
+	e.a.Wait()
+	if _, err := e.a.readTranscripts(sessID, e.transcript, e.now); err != nil {
 		t.Fatal(err)
 	}
 }
