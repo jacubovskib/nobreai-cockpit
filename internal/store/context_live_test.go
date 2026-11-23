@@ -334,3 +334,35 @@ func TestSessionContextCompactionsPerWindow(t *testing.T) {
 		t.Fatalf("reset deixou %d compactações (%v)", n, err)
 	}
 }
+
+func pctTurn(turn int, pct float64) usage.ContextTurn {
+	return usage.ContextTurn{Turn: turn, MessageID: "p" + string(rune('a'+turn)), At: liveNow.Add(-time.Duration(10-turn) * time.Minute), Pct: &pct}
+}
+
+func TestSessionContextPctOnly(t *testing.T) {
+	s := newTestStore(t)
+	liveSession(t, s, "s", "auto", time.Minute)
+	save(t, s, "s", "/main", nil, []usage.ContextTurn{pctTurn(0, 10), pctTurn(1, 14), pctTurn(2, 18)})
+	got := liveCtx(t, s, "s")
+	if !got.PctOnly || got.Pct != 18 || got.WindowTokens != 0 || got.Tokens != 0 ||
+		got.GrowthPerTurn != 4 || got.TurnsToLimit != 19 || got.AtLimit || got.TurnsSinceCompact != 3 ||
+		got.CacheHitPct != 0 || got.TTL != "" || got.IdleOverTTL || got.RecentRewrite != nil || got.WindowEstimated {
+		t.Fatalf("%+v", got)
+	}
+	// Claude segue sem PctOnly (pct NULL).
+	liveSession(t, s, "c", "claude-sonnet-x", time.Minute)
+	save(t, s, "c", "/main", nil, []usage.ContextTurn{liveTurn(0, 0, time.Minute, 100000, 0, 0, "", "u0")})
+	if c := liveCtx(t, s, "c"); c.PctOnly || c.Pct != 50 {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestContextTotalsIgnoresPctOnly(t *testing.T) {
+	s := newTestStore(t)
+	liveSession(t, s, "s", "auto", time.Minute)
+	save(t, s, "s", "/main", nil, []usage.ContextTurn{pctTurn(0, 10), liveTurn(1, 0, time.Minute, 500, 0, 0, "", "u1")})
+	got, err := s.ContextTotals(ContextFilter{})
+	if err != nil || got.ContextTotal != 500 {
+		t.Fatalf("%+v %v", got, err)
+	}
+}

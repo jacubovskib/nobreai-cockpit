@@ -28,12 +28,12 @@ func (s *Store) UpsertUsage(rows []domain.UsageRow) error {
 		if r.WindowSessionID != "" {
 			owner = r.WindowSessionID
 		}
-		if _, err := tx.Exec(`INSERT INTO usage (session_id, card_id, message_id, model, input, output, cache_write, cache_read, at, window_session_id)
-			VALUES (?, (SELECT card_id FROM sessions WHERE id=?), ?,?,?,?,?,?,?,?)
+		if _, err := tx.Exec(`INSERT INTO usage (session_id, card_id, message_id, model, input, output, cache_write, cache_read, at, window_session_id, credits)
+			VALUES (?, (SELECT card_id FROM sessions WHERE id=?), ?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(session_id, message_id) DO UPDATE SET model=excluded.model, input=excluded.input,
-			output=excluded.output, cache_write=excluded.cache_write, cache_read=excluded.cache_read, at=excluded.at,
+			output=excluded.output, cache_write=excluded.cache_write, cache_read=excluded.cache_read, at=excluded.at, credits=excluded.credits,
 			card_id=COALESCE(usage.card_id, excluded.card_id)`,
-			r.SessionID, owner, r.MessageID, r.Model, r.Input, r.Output, r.CacheWrite, r.CacheRead, fmtTime(r.At), r.WindowSessionID); err != nil {
+			r.SessionID, owner, r.MessageID, r.Model, r.Input, r.Output, r.CacheWrite, r.CacheRead, fmtTime(r.At), r.WindowSessionID, r.Credits); err != nil {
 			return err
 		}
 	}
@@ -150,7 +150,9 @@ type Total struct {
 	CacheWrite int64   `json:"cache_write"`
 	CacheRead  int64   `json:"cache_read"`
 	CostUSD    float64 `json:"cost_usd"`
-	Unpriced   bool    `json:"unpriced"`
+	// Credits é o gasto em créditos (Kiro), separado do custo em dólares.
+	Credits  float64 `json:"credits"`
+	Unpriced bool    `json:"unpriced"`
 }
 
 // Totals agrega o uso por grupo; o custo é calculado em Go (usage.Cost) com a
@@ -174,7 +176,7 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 
 	// A sessão de cada linha é a janela dona (a filha grava o uso com o id da
 	// principal): por sessão, cada janela tem o seu custo e a sua contagem.
-	q := `SELECT COALESCE(NULLIF(u.window_session_id,''), u.session_id), u.model, u.input, u.output, u.cache_write, u.cache_read, u.at, s.agent, COALESCE(c.key, ''), COALESCE(c.project_id, s.project_id)
+	q := `SELECT COALESCE(NULLIF(u.window_session_id,''), u.session_id), u.model, u.input, u.output, u.cache_write, u.cache_read, u.credits, u.at, s.agent, COALESCE(c.key, ''), COALESCE(c.project_id, s.project_id)
 		FROM usage u JOIN sessions s ON s.id = u.session_id LEFT JOIN cards c ON c.id = u.card_id WHERE 1=1`
 	var args []any
 	if f.CardID != nil {
@@ -211,7 +213,7 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 		var r domain.UsageRow
 		var at, agent, cardKey string
 		var projectID sql.NullInt64
-		if err := rows.Scan(&r.SessionID, &r.Model, &r.Input, &r.Output, &r.CacheWrite, &r.CacheRead, &at, &agent, &cardKey, &projectID); err != nil {
+		if err := rows.Scan(&r.SessionID, &r.Model, &r.Input, &r.Output, &r.CacheWrite, &r.CacheRead, &r.Credits, &at, &agent, &cardKey, &projectID); err != nil {
 			return nil, err
 		}
 		if r.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
@@ -246,6 +248,10 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 		t.Output += r.Output
 		t.CacheWrite += r.CacheWrite
 		t.CacheRead += r.CacheRead
+		t.Credits += r.Credits
+		if r.Credits > 0 && r.Input+r.Output+r.CacheWrite+r.CacheRead == 0 {
+			continue // gasto só em créditos: não há o que precificar nem ficar "sem preço"
+		}
 		if usd, priced := usage.Cost(r, pm[r.Model]); priced {
 			t.CostUSD += usd
 		} else {

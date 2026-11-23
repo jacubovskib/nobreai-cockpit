@@ -34,6 +34,11 @@ func contextWarningText(pct int, tokens int64) string {
 	return fmt.Sprintf("Contexto em %d%% da janela (%s tokens). Numa pausa natural, registre onde parou com nobre note e use /compact dizendo o que preservar, ou recomece limpo pelo card.", pct, fmtTokens(tokens))
 }
 
+// contextWarningPctText é o aviso de faixa para o agente que só informa a % da janela.
+func contextWarningPctText(pct int) string {
+	return fmt.Sprintf("Contexto em %d%% da janela. Numa pausa natural, registre onde parou com nobre note e use /compact dizendo o que preservar, ou recomece limpo pelo card.", pct)
+}
+
 // bigOutputText é o aviso de saída de ferramenta grande ao agente.
 func bigOutputText(tokens int64) string {
 	return fmt.Sprintf("Essa saída teve ~%s tokens e fica sendo relida a cada turno. Prefira ler trechos (offset/limit, grep) em vez do arquivo inteiro.", fmtTokens(tokens))
@@ -69,7 +74,7 @@ func (c *Core) ContextWarning(sess domain.Session, ev Event) string {
 		return ""
 	}
 	live, err := c.st.SessionContextWith(sess.ID, c.deps.Now(), set)
-	if err != nil || live.Tokens == 0 {
+	if err != nil || (live.Tokens == 0 && !live.PctOnly) {
 		if err != nil {
 			c.logf("contexto de %s: %v", sess.ID, err)
 		}
@@ -91,6 +96,9 @@ func (c *Core) ContextWarning(sess domain.Session, ev Event) string {
 	}
 	if band == 0 {
 		return ""
+	}
+	if live.PctOnly {
+		return contextWarningPctText(int(live.Pct))
 	}
 	return contextWarningText(int(live.Pct), live.Tokens)
 }

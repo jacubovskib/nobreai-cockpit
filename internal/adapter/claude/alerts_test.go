@@ -31,6 +31,17 @@ func (e *env) turn(t *testing.T, n, segment int, tokens int64) {
 	}
 }
 
+// turnPct grava um turno só com a % da janela (agente sem contagem de tokens).
+func (e *env) turnPct(t *testing.T, n int, pct float64) {
+	t.Helper()
+	err := e.st.SaveContext(sessID, e.transcript, false, nil, []usage.ContextTurn{{
+		Turn: n, MessageID: fmt.Sprintf("m%d", n), At: e.now, Pct: &pct,
+	}}, 0, usage.ContextState{LastTurn: n, LastMessageID: fmt.Sprintf("m%d", n)})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func ctxWarn(pct, tokens string) string {
 	return "Contexto em " + pct + "% da janela (" + tokens + " tokens). Numa pausa natural, registre onde parou com nobre note e use /compact dizendo o que preservar, ou recomece limpo pelo card."
 }
@@ -232,5 +243,22 @@ func TestBigOutputWarning_RoundsUp(t *testing.T) {
 	// {"content":"…","type":"text"}: 28 bytes de moldura.
 	if got := postContext(t, e.postWithResponse(t, 4001-28)); got != bigWarn("1 mil") {
 		t.Fatalf("4.001 bytes = %q", got)
+	}
+}
+
+func TestContextWarning_PctOnly(t *testing.T) {
+	e := alertsEnv(t)
+	e.turnPct(t, 0, 50)
+	if got := promptContext(t, e.call(t, "user_prompt_submit")); got != "" {
+		t.Fatalf("50%% = %q", got)
+	}
+	e.turnPct(t, 1, 62)
+	want := "Contexto em 62% da janela. Numa pausa natural, registre onde parou com nobre note e use /compact dizendo o que preservar, ou recomece limpo pelo card."
+	if got := promptContext(t, e.call(t, "user_prompt_submit")); got != want {
+		t.Fatalf("62%% = %q", got)
+	}
+	e.turnPct(t, 2, 65)
+	if got := promptContext(t, e.call(t, "user_prompt_submit")); got != "" {
+		t.Fatalf("65%% repetiu = %q", got)
 	}
 }

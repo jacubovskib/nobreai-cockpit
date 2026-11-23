@@ -132,13 +132,13 @@ func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []us
 		}
 	}
 	for _, t := range turns {
-		if _, err := tx.Exec(`INSERT INTO context_turns (session_id, path, turn, segment, message_id, at, tokens, input, cache_read, cache_write, ttl, window_session_id)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+		if _, err := tx.Exec(`INSERT INTO context_turns (session_id, path, turn, segment, message_id, at, tokens, input, cache_read, cache_write, ttl, window_session_id, pct)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(session_id, path, turn) DO UPDATE SET segment=excluded.segment,
 			  message_id=excluded.message_id, at=excluded.at, tokens=excluded.tokens,
 			  input=excluded.input, cache_read=excluded.cache_read, cache_write=excluded.cache_write, ttl=excluded.ttl,
-			  window_session_id=excluded.window_session_id`,
-			sessionID, path, t.Turn, t.Segment, t.MessageID, fmtTime(t.At), t.Tokens, t.Input, t.CacheRead, t.CacheWrite, t.TTL, w.ByUUID[t.UUID]); err != nil {
+			  window_session_id=excluded.window_session_id, pct=excluded.pct`,
+			sessionID, path, t.Turn, t.Segment, t.MessageID, fmtTime(t.At), t.Tokens, t.Input, t.CacheRead, t.CacheWrite, t.TTL, w.ByUUID[t.UUID], t.Pct); err != nil {
 			return err
 		}
 	}
