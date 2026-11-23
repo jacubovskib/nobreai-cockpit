@@ -9,6 +9,11 @@
 //		return meuagente.New(st, deps)
 //	}, contracttest.Fixtures{...})
 //
+// A fábrica devolve o driver pronto para os hooks: o que depende da máquina
+// tem de ser configurado nela, a verificação de processo vivo inclusive (no
+// Claude, SetAlive): a bateria usa PIDs falsos (4242), que não existem no
+// /proc de quem roda os testes.
+//
 // Os payloads usam três marcadores, trocados pela bateria antes de cada
 // chamada: {{session}} (id da sessão no agente), {{cwd}} (diretório do
 // projeto cadastrado) e {{transcript}} (caminho de um arquivo temporário).
