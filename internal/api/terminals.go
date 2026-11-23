@@ -113,7 +113,7 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 	path := s.sessionPATH(0)
 	bin := ad.Binary()
 	if bin == "" {
-		writeError(w, http.StatusConflict, msgNoAgentBin)
+		writeError(w, http.StatusConflict, noAgentBinMsg(ad))
 		return
 	}
 	env := s.terminalEnv(path)

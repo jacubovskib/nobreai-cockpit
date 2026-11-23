@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nobretech/nobreai-cockpit/internal/agentcore"
 	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -28,8 +29,9 @@ const (
 	agentSessionHeader = "X-Nobre-Agent-Session"
 	msgNoSession       = "nenhuma sessão de agente encontrada para este processo"
 	msgNoCard          = `Esta sessão ainda não tem card. Use nobre start "<título>" ou nobre resume <KEY>.`
-	msgNoProject       = "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan (veja a skill nobre-cockpit)."
-	msgNotGit          = "Esta pasta não é um repositório git e não pode ser cadastrada no NobreAI Cockpit; a sessão segue sem card."
+	// msgNoProject é o aviso sem guia; noProjectMsg cita o do agente.
+	msgNoProject = "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan."
+	msgNotGit    = "Esta pasta não é um repositório git e não pode ser cadastrada no NobreAI Cockpit; a sessão segue sem card."
 )
 
 func (s *server) meRoutes(mux *http.ServeMux) {
@@ -177,12 +179,27 @@ func (s *server) sessionProject(w http.ResponseWriter, sess domain.Session) (int
 	if p != nil {
 		return p.ID, true
 	}
-	msg := msgNoProject
+	msg := s.noProjectMsg(sess)
 	if wr, ok := s.deps.Git.(gitinfo.WorktreeReader); ok && wr.Locate(sess.Cwd).Root == "" {
 		msg = msgNotGit
 	}
 	writeError(w, http.StatusConflict, msg)
 	return 0, false
+}
+
+// noProjectMsg é msgNoProject citando, antes do ponto final, as instruções
+// do nobre que o Cockpit instala no agente da sessão (agentcore.Guide), se o
+// driver dele as tem.
+func (s *server) noProjectMsg(sess domain.Session) string {
+	ad, ok := s.deps.Agents.Get(sess.Agent)
+	if !ok {
+		return msgNoProject
+	}
+	g, ok := ad.(agentcore.Guide)
+	if !ok || g.GuideName() == "" {
+		return msgNoProject
+	}
+	return strings.TrimSuffix(msgNoProject, ".") + " (veja " + g.GuideName() + ")."
 }
 
 func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Session) {

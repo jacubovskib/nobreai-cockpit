@@ -8,8 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/kiro"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
 // liveSession cria uma sessão viva com o PID e, se key != "", liga ao card.
@@ -160,7 +165,7 @@ func TestMeStartAndContent(t *testing.T) {
 }
 
 func TestMeStartWithoutProjectAsksTheUser(t *testing.T) {
-	a := newTestAPI(t)
+	a := guideAPI(t) // o aviso cita a skill do driver do Claude
 	a.liveSession(t, "claude:s", 4242, "")
 	rec := a.do(t, "POST", "/api/me/start", map[string]string{"title": "Novo"}, 4242)
 	want := "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan (veja a skill nobre-cockpit)."
@@ -457,6 +462,43 @@ func TestMeCardsNoProject409(t *testing.T) {
 	rec := a.do(t, "POST", "/api/me/cards", map[string]string{"title": "B"}, 4242)
 	if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != msgNoProject {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// guideAPI é o testAPI com os drivers do Claude e do Kiro registrados.
+func guideAPI(t *testing.T) *testAPI {
+	t.Helper()
+	st, err := store.Open(t.TempDir() + "/cockpit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	reg := agents.New(claude.New(st, adapter.Deps{}), kiro.New(st, adapter.Deps{}))
+	return &testAPI{st: st, h: New(st, Deps{Now: func() time.Time { return testNow }, Agents: reg})}
+}
+
+// O aviso de repositório não cadastrado cita o guia do nobre do agente da
+// sessão (agentcore.Guide); sem driver registrado, não cita guia.
+func TestMeNoProjectCitesAgentGuide(t *testing.T) {
+	a := guideAPI(t)
+	st := a.st
+	base := "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan"
+	for _, c := range []struct {
+		id, agent string
+		pid       int
+		want      string
+	}{
+		{"claude:s", "claude", 4242, base + " (veja a skill nobre-cockpit)."},
+		{"kiro:s", "kiro", 4343, base + " (veja as instruções do Cockpit no steering do Kiro)."},
+		{"codex:s", "codex", 4444, base + "."},
+	} {
+		if err := st.StartSession(domain.Session{ID: c.id, Agent: c.agent, PID: c.pid, Cwd: "/w/fora", StartedAt: testNow}); err != nil {
+			t.Fatal(err)
+		}
+		rec := a.do(t, "POST", "/api/me/cards", map[string]string{"title": "B"}, c.pid)
+		if got := decode[map[string]string](t, rec)["error"]; rec.Code != http.StatusConflict || got != c.want {
+			t.Errorf("%s: code = %d, erro = %q", c.agent, rec.Code, got)
+		}
 	}
 }
 

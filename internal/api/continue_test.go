@@ -13,6 +13,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/kiro"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
@@ -275,6 +276,23 @@ func TestContinueAgentBinaryNotFound(t *testing.T) {
 	}
 	if len(g.checkouts) != 0 || len(l.calls) != 0 {
 		t.Fatalf("checkout %v / lançamentos %d sem o claude", g.checkouts, len(l.calls))
+	}
+}
+
+// O aviso de CLI não encontrado cita o comando do agente pedido, não o claude.
+func TestContinueOtherAgentBinaryNotFound(t *testing.T) {
+	g := &fakeGit{branch: "main", clean: true}
+	a, l := continueAPIDeps(t, g, nil, func(d *Deps) {
+		k := kiro.New(nil, adapter.Deps{})
+		k.SetPaths(kiro.Paths{KiroBin: filepath.Join(t.TempDir(), "kiro-cli")})
+		d.Agents = agents.New(k)
+	})
+	got := errOf(t, a, http.StatusConflict, map[string]any{"agent": "kiro"})
+	if got != "não encontrei o comando kiro-cli; rode nobre setup de um terminal onde `kiro-cli` funciona" {
+		t.Fatalf("erro = %q", got)
+	}
+	if len(g.checkouts) != 0 || len(l.calls) != 0 {
+		t.Fatalf("checkout %v / lançamentos %d sem o kiro-cli", g.checkouts, len(l.calls))
 	}
 }
 

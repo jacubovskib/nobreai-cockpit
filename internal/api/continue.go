@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
@@ -26,8 +27,17 @@ const (
 	// maxArgBytes limita cada argumento do comando final (o prompt viaja nele).
 	maxArgBytes     = 128 << 10
 	msgPromptTooBig = `prompt grande demais para abrir no terminal; use "Nenhum"`
-	msgNoAgentBin   = "não encontrei o comando claude; rode nobre setup de um terminal onde `claude` funciona"
 )
+
+// noAgentBinMsg é o erro de CLI do agente ad não encontrado, com o comando
+// dele (o primeiro nome de processo; sem nenhum, o nome do agente).
+func noAgentBinMsg(ad adapter.Adapter) string {
+	cmd := ad.Name()
+	if ps := ad.ProcessNames(); len(ps) > 0 && ps[0] != "" {
+		cmd = ps[0]
+	}
+	return "não encontrei o comando " + cmd + "; rode nobre setup de um terminal onde `" + cmd + "` funciona"
+}
 
 // continuePrompt monta o texto inicial que o Continuar envia ao agente: o
 // prompt escolhido (slug), o padrão de handoff ("") ou nenhum ("nenhum").
@@ -185,7 +195,7 @@ func (s *server) prepareContinue(w http.ResponseWriter, key string, in continueI
 	// Caminho absoluto: o terminal e o systemd não têm ~/.local/bin no PATH.
 	bin := ad.Binary()
 	if bin == "" {
-		writeError(w, http.StatusConflict, msgNoAgentBin)
+		writeError(w, http.StatusConflict, noAgentBinMsg(ad))
 		return none, false
 	}
 	c, err := s.st.GetCard(key)
