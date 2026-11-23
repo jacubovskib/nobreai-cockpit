@@ -35,8 +35,10 @@ const windowTolerance = 30 * time.Second
 //     sessão da conversa, até 30 s antes ou depois: a janela é essa sessão
 //     (com vários, o mais próximo no tempo; o prompt fica usado);
 //  2. senão herda a janela do parentUuid (visto nesta leitura ou em known);
-//  3. senão a principal (resumo de compactação, linhas antes do primeiro
-//     prompt, conversa com uma janela só).
+//  3. compact_boundary (sem pai): a janela do logicalParentUuid, e o resumo
+//     de compactação herda dela pelo parentUuid;
+//  4. senão a principal (linhas antes do primeiro prompt, conversa com uma
+//     janela só, fronteira sem pai lógico conhecido).
 //
 // Devolve as linhas de janela filha (uuid → id da janela), as raízes da
 // principal que penduram num galho de filha (mainRoots) e os prompts usados.
@@ -83,6 +85,10 @@ func assignWindows(mainID string, lines []usage.LineRef, prompts []usage.Prompt,
 		}
 		if !ok && l.ParentUUID != "" {
 			win = parentWin(l.ParentUUID)
+		} else if !ok && l.Compact != 0 && l.LogicalParentUUID != "" {
+			// compact_boundary: sem pai, fica com a janela que compactou; o
+			// resumo e o que vem depois herdam dela pelo parentUuid.
+			win = parentWin(l.LogicalParentUUID)
 		}
 		if win == mainID {
 			win = ""
@@ -98,9 +104,8 @@ func assignWindows(mainID string, lines []usage.LineRef, prompts []usage.Prompt,
 // compactionWindows devolve a janela de cada compactação desta leitura
 // (segmento → janela, "" = principal): a do pai lógico (logicalParentUuid),
 // atribuído nesta leitura (byUUID) ou numa anterior (known), senão a
-// principal. A linha da compactação em si continua sem pai (o resumo e o que
-// vem depois ficam com a principal, ver assignWindows): só a contagem de
-// compactações de cada janela usa isto.
+// principal. A fronteira e o resumo herdam essa mesma janela (assignWindows); isto
+// serve à contagem de compactações de cada janela.
 func compactionWindows(mainID string, lines []usage.LineRef, byUUID, known map[string]string) map[int]string {
 	var out map[int]string
 	for _, l := range lines {

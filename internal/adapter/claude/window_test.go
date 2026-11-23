@@ -294,18 +294,40 @@ func TestWindow_BranchAcrossIncrementalReads(t *testing.T) {
 	wantWindows(t, "card do uso", e.usageCards(t), map[string]string{"c2": cc.Key})
 }
 
-// O resumo de compactação não tem pai: fica com a principal, mesmo depois de
-// um galho da filha.
+// O resumo de compactação herda a janela da fronteira que o antecede
+// (logicalParentUuid): o da principal fica na principal, mesmo depois de um
+// galho da filha.
 func TestWindow_CompactSummaryGoesToMain(t *testing.T) {
 	e, _ := windowEnv(t)
-	e.prompt(t, 200, "revise o readme", time.Minute)
-	appendFile(t, e.transcript, wPrompt("cu1", "", "revise o readme", time.Minute)+
-		wAssistant("ca1", "cu1", "c1", "", time.Minute+2*time.Second)+
-		`{"type":"system","subtype":"compact_boundary",`+parentField("")+`,"logicalParentUuid":"ca1","uuid":"b1","timestamp":"`+ts(2*time.Minute)+`"}`+"\n"+
-		`{"type":"user",`+parentField("b1")+`,"uuid":"s1","isCompactSummary":true,"timestamp":"`+ts(2*time.Minute)+`","message":{"role":"user","content":"resumo"}}`+"\n"+
+	e.prompt(t, 100, "investigue o login", time.Minute)
+	e.prompt(t, 200, "revise o readme", time.Minute+5*time.Second)
+	appendFile(t, e.transcript, wPrompt("mu1", "", "investigue o login", time.Minute)+
+		wPrompt("cu1", "", "revise o readme", time.Minute+5*time.Second)+
+		wAssistant("ma1", "mu1", "m1", "", time.Minute+7*time.Second)+
+		wAssistant("ca1", "cu1", "c1", "", time.Minute+8*time.Second)+
+		wCompact("b1", "ma1", "s1", 2*time.Minute)+
 		wAssistant("k1", "s1", "k1", "", 2*time.Minute+5*time.Second))
 	e.read(t)
-	wantWindows(t, "turno", e.turnWindows(t), map[string]string{"c1": childID(200), "k1": ""})
+	wantWindows(t, "turno", e.turnWindows(t), map[string]string{"m1": "", "c1": childID(200), "k1": ""})
+}
+
+// A filha compacta duas vezes sem prompt entre elas: as duas compactações e
+// os turnos depois de cada uma ficam na filha.
+func TestWindow_ChildCompactsTwiceWithoutPrompt(t *testing.T) {
+	e, _ := windowEnv(t)
+	e.prompt(t, 100, "investigue o login", time.Minute)
+	e.prompt(t, 200, "revise o readme", time.Minute+5*time.Second)
+	appendFile(t, e.transcript, wPrompt("mu1", "", "investigue o login", time.Minute)+
+		wPrompt("cu1", "", "revise o readme", time.Minute+5*time.Second)+
+		wAssistant("ma1", "mu1", "m1", "", time.Minute+7*time.Second)+
+		wAssistant("ca1", "cu1", "c1", "", time.Minute+8*time.Second)+
+		wCompact("b1", "ca1", "s1", 2*time.Minute)+
+		wAssistant("ca2", "s1", "c2", "", 2*time.Minute+5*time.Second)+
+		wCompact("b2", "ca2", "s2", 3*time.Minute)+
+		wAssistant("ca3", "s2", "c3", "", 3*time.Minute+5*time.Second))
+	e.read(t)
+	child := childID(200)
+	wantWindows(t, "turno", e.turnWindows(t), map[string]string{"m1": "", "c1": child, "c2": child, "c3": child})
 }
 
 // Ligar card depois da leitura: o uso sem card de cada janela vai para o
