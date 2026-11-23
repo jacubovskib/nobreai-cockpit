@@ -22,7 +22,7 @@ import (
 // Quando o histórico é lido (decisão da Task 8). O núcleo só chama Ingest no
 // TurnEnd e no Ended, e o kiro-cli grava o usage_summary DEPOIS do hook Stop:
 // os créditos de um turno não estão no arquivo quando o TurnEnd é tratado.
-// Por isso o Kiro lê também (1) em cada prompt, pelo PromptNote (leitura
+// Por isso o Kiro lê também (1) em cada prompt, pelo Observe (leitura
 // barata e incremental, que pega o turno anterior), (2) em duas releituras
 // curtas depois do TurnEnd (retries), para o último turno de uma conversa
 // aparecer sem esperar o prompt seguinte, e (3) no Ended (final).
@@ -39,15 +39,12 @@ func (a *Adapter) Ingest(sess domain.Session, ev agentcore.Event) {
 	}
 }
 
-// StartNote não diz nada (agentcore.Noter): o Noter existe pelo PromptNote.
-func (a *Adapter) StartNote(domain.Session) string { return "" }
-
-// PromptNote dispara a leitura do histórico a cada prompt e não acrescenta
-// texto ao contexto (agentcore.Noter): o usage_summary do turno anterior já
-// está no arquivo.
-func (a *Adapter) PromptNote(sess domain.Session, _ agentcore.Event) string {
-	a.ingestAsync(sess, 0)
-	return ""
+// Observe dispara a leitura do histórico a cada prompt
+// (agentcore.Observer): o usage_summary do turno anterior já está no arquivo.
+func (a *Adapter) Observe(sess domain.Session, ev agentcore.Event) {
+	if ev.Kind == agentcore.Prompt {
+		a.ingestAsync(sess, 0)
+	}
 }
 
 // Wait cancela as releituras ainda esperando e espera as em andamento

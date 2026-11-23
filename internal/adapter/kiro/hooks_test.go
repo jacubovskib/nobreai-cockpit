@@ -133,10 +133,13 @@ func TestCapabilities(t *testing.T) {
 	if g, ok := a.(agentcore.Guide); !ok || g.GuideName() == "" {
 		t.Fatal("o Kiro cita o steering")
 	}
-	// Sem janelas filhas nem memórias. O leitor do histórico (Ingester) tem o
-	// Noter só para ler também a cada prompt: as notas saem sempre vazias.
+	// Sem janelas filhas, memórias nem notas. O leitor do histórico
+	// (Ingester) também lê a cada prompt, como Observer.
 	if _, ok := a.(agentcore.Ingester); !ok {
 		t.Fatal("o Kiro lê o histórico")
+	}
+	if _, ok := a.(agentcore.Observer); !ok {
+		t.Fatal("o Kiro observa o prompt para ler o histórico")
 	}
 	if _, ok := a.(agentcore.Router); ok {
 		t.Fatal("o Kiro não escolhe a sessão")
@@ -144,7 +147,7 @@ func TestCapabilities(t *testing.T) {
 	if _, ok := a.(agentcore.Memories); ok {
 		t.Fatal("o Kiro não tem memórias")
 	}
-	if n, ok := a.(agentcore.Noter); !ok || n.StartNote(domain.Session{}) != "" {
-		t.Fatal("o Noter do Kiro não escreve nada")
+	if _, ok := a.(agentcore.Noter); ok {
+		t.Fatal("o Kiro não tem notas")
 	}
 }

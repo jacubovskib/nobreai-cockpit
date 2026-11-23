@@ -20,14 +20,21 @@ func (a *Adapter) StartNote(sess domain.Session) string {
 	return ""
 }
 
-// PromptNote registra o prompt para a atribuição por janela (só o resumo do
-// texto, em toda sessão: o uso de cada janela depende dele) e devolve o aviso
-// da filha que nasceu fora do SessionStart, uma vez (agentcore.Noter). Falhas
-// só vão para o log.
-func (a *Adapter) PromptNote(sess domain.Session, ev agentcore.Event) string {
+// Observe registra o prompt para a atribuição por janela (só o resumo do
+// texto, em toda sessão: o uso de cada janela depende dele), antes dos avisos
+// do prompt (agentcore.Observer). Falhas só vão para o log.
+func (a *Adapter) Observe(sess domain.Session, ev agentcore.Event) {
+	if ev.Kind != agentcore.Prompt {
+		return
+	}
 	if err := a.st.AddWindowPrompt(sess.ID, promptKey(ev.Prompt), ev.At); err != nil {
 		log.Printf("hook claude: prompt da janela %s: %v", sess.ID, err)
 	}
+}
+
+// PromptNote devolve o aviso da filha que nasceu fora do SessionStart, uma
+// vez (agentcore.Noter). Falhas só vão para o log.
+func (a *Adapter) PromptNote(sess domain.Session, ev agentcore.Event) string {
 	if sess.ParentSessionID == "" {
 		return ""
 	}

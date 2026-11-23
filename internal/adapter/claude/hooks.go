@@ -53,8 +53,8 @@ func (p payload) input() toolInput {
 
 // HandleHook trata um evento de hook pelo núcleo de sessões (agentcore): o
 // Claude é o driver (Translate, Render) com as capacidades Router (janelas
-// duplas), Ingester (leitura do transcript), Noter (aviso da sessão filha),
-// Memories e Guide (a skill).
+// duplas), Observer (prompt de cada janela), Ingester (leitura do
+// transcript), Noter (aviso da sessão filha), Memories e Guide (a skill).
 func (a *Adapter) HandleHook(ctx context.Context, h adapter.HookCall) (adapter.HookReply, error) {
 	return a.core.Handle(ctx, h)
 }

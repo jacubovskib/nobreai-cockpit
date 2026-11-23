@@ -44,6 +44,7 @@ var (
 	_ agentcore.Driver   = (*Adapter)(nil)
 	_ agentcore.Router   = (*Adapter)(nil)
 	_ agentcore.Ingester = (*Adapter)(nil)
+	_ agentcore.Observer = (*Adapter)(nil)
 	_ agentcore.Noter    = (*Adapter)(nil)
 	_ agentcore.Memories = (*Adapter)(nil)
 	_ agentcore.Guide    = (*Adapter)(nil)

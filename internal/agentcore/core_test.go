@@ -53,6 +53,13 @@ type fullDriver struct {
 	ingested []string
 	// seen: "memórias session_start=N", "prompt prompt=N".
 	seen []string
+	// observed: "<kind> <sessão> prompt=N seen=M" de cada Observe (sonda
+	// de ordem: prompts gravados e sondas das notas até ali).
+	observed []string
+}
+
+func (d *fullDriver) Observe(sess domain.Session, ev Event) {
+	d.observed = append(d.observed, fmt.Sprintf("%d %s prompt=%d seen=%d", ev.Kind, sess.ID, d.count(domain.EvPrompt), len(d.seen)))
 }
 
 func (d *fullDriver) Ingest(sess domain.Session, ev Event) {
@@ -469,5 +476,37 @@ func TestOtherEventOnlyTouchesSession(t *testing.T) {
 	}
 	if x, _ := e.st.GetSession(fakeID); !x.LastEventAt.Equal(t0.Add(time.Minute)) {
 		t.Fatalf("sessão = %+v", x)
+	}
+}
+
+// O Observer vê todo evento, já com a sessão resolvida, antes das regras: o
+// prompt ainda não foi gravado e a nota do prompt ainda não foi pedida.
+func TestObserverSeesEveryEventBeforeRules(t *testing.T) {
+	e, d := newFull(t)
+	e.project(t)
+	for _, k := range []Kind{Started, Prompt, ToolBefore, ToolAfter, TurnEnd, Compacted, Other, Ended} {
+		e.handle(t, &d.fakeDriver, Event{Kind: k, Prompt: "corrija o login"})
+	}
+	want := []string{
+		fmt.Sprintf("%d %s prompt=0 seen=0", Started, fakeID),
+		fmt.Sprintf("%d %s prompt=0 seen=1", Prompt, fakeID), // memórias já sondadas; nota do prompt ainda não
+		fmt.Sprintf("%d %s prompt=1 seen=2", ToolBefore, fakeID),
+		fmt.Sprintf("%d %s prompt=1 seen=2", ToolAfter, fakeID),
+		fmt.Sprintf("%d %s prompt=1 seen=2", TurnEnd, fakeID),
+		fmt.Sprintf("%d %s prompt=1 seen=2", Compacted, fakeID),
+		fmt.Sprintf("%d %s prompt=1 seen=2", Other, fakeID),
+		fmt.Sprintf("%d %s prompt=1 seen=2", Ended, fakeID),
+	}
+	if strings.Join(d.observed, ",") != strings.Join(want, ",") {
+		t.Fatalf("observados = %v, quer %v", d.observed, want)
+	}
+}
+
+// Hook ignorado (sem sessão) não chega ao Observer.
+func TestObserverSkipsIgnoredHook(t *testing.T) {
+	e, d := newFull(t)
+	e.handle(t, &d.fakeDriver, Event{Kind: Ended})
+	if len(d.observed) != 0 {
+		t.Fatalf("observados = %v", d.observed)
 	}
 }

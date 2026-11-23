@@ -363,9 +363,7 @@ func TestIngestTriggers(t *testing.T) {
 	t.Run("Prompt pega o turno anterior", func(t *testing.T) {
 		h := newHist(t)
 		h.write(t, fixtureBytes(t, "messages.jsonl"))
-		if got := h.a.PromptNote(h.sess(t), agentcore.Event{Kind: agentcore.Prompt}); got != "" {
-			t.Fatalf("PromptNote = %q, não deve escrever no contexto", got)
-		}
+		h.a.Observe(h.sess(t), agentcore.Event{Kind: agentcore.Prompt})
 		h.a.Wait()
 		if len(h.usage(t)) != 2 {
 			t.Fatalf("uso = %+v", h.usage(t))
@@ -375,6 +373,17 @@ func TestIngestTriggers(t *testing.T) {
 		h := newHist(t)
 		h.write(t, fixtureBytes(t, "messages.jsonl"))
 		h.a.Ingest(h.sess(t), agentcore.Event{Kind: agentcore.Ended})
+		h.a.Wait()
+		if len(h.usage(t)) != 2 {
+			t.Fatalf("uso = %+v", h.usage(t))
+		}
+	})
+	t.Run("pela fiação do núcleo, no hook UserPromptSubmit", func(t *testing.T) {
+		h := newHist(t)
+		h.write(t, fixtureBytes(t, "messages.jsonl"))
+		if r := h.call(t, "UserPromptSubmit", "user_prompt_submit", 4242); r.Stdout != "" || r.Exit != 0 {
+			t.Fatalf("resposta = %+v", r)
+		}
 		h.a.Wait()
 		if len(h.usage(t)) != 2 {
 			t.Fatalf("uso = %+v", h.usage(t))

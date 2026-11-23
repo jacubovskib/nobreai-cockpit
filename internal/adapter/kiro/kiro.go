@@ -43,7 +43,7 @@ var (
 	_ agentcore.SpendUnit = (*Adapter)(nil)
 	_ agentcore.Guide     = (*Adapter)(nil)
 	_ agentcore.Ingester  = (*Adapter)(nil)
-	_ agentcore.Noter     = (*Adapter)(nil)
+	_ agentcore.Observer  = (*Adapter)(nil)
 )
 
 // New cria o adaptador. deps.Now nil vira time.Now; Git e Publish podem ser

@@ -14,8 +14,8 @@ import (
 )
 
 // Driver é o que cada agente implementa: o tradutor do hook e o formatador
-// da resposta. As capacidades opcionais (Router, Ingester, Noter, Memories,
-// Guide, SpendUnit) são descobertas por asserção de tipo.
+// da resposta. As capacidades opcionais (Router, Observer, Ingester, Noter,
+// Memories, Guide, SpendUnit) são descobertas por asserção de tipo.
 type Driver interface {
 	Name() string
 	// Translate traduz o evento event com o payload bruto do agente. event
@@ -33,6 +33,15 @@ type Router interface {
 	Route(c *Core, ev Event) (domain.Session, bool, error)
 }
 
+// Observer é opcional: o driver registra o que é só dele a partir de cada
+// evento (p.ex. o prompt de cada janela, ou uma leitura do histórico). Roda
+// em todo hook com sessão, antes das regras do núcleo e da resposta; o que
+// for demorado fica em segundo plano. Falhas são do driver (log), nunca do
+// hook.
+type Observer interface {
+	Observe(sess domain.Session, ev Event)
+}
+
 // Ingester é opcional: lê o histórico do agente (uso, contexto) depois do fim
 // de turno e do fim da sessão. Roda no caminho do hook: o que for demorado
 // fica em segundo plano.
@@ -47,9 +56,9 @@ type Noter interface {
 	// StartNote entra no contexto do início da sessão registrada, logo
 	// depois das instruções (e das memórias), antes do resto.
 	StartNote(sess domain.Session) string
-	// PromptNote abre o contexto da resposta ao prompt. Roda a cada prompt,
-	// com ou sem captura, antes das regras do núcleo: o driver pode registrar
-	// ali o que for só dele.
+	// PromptNote abre o contexto da resposta ao prompt, com ou sem captura.
+	// Só devolve o texto: o que o driver registra a cada evento vai no
+	// Observer.
 	PromptNote(sess domain.Session, ev Event) string
 }
 
@@ -130,6 +139,9 @@ func (c *Core) Handle(_ context.Context, h adapter.HookCall) (adapter.HookReply,
 	}
 	if err != nil {
 		return adapter.HookReply{}, err
+	}
+	if o, ok := c.d.(Observer); ok {
+		o.Observe(sess, ev)
 	}
 	reply, err := c.apply(sess, ev)
 	out, rerr := c.d.Render(ev, reply)
