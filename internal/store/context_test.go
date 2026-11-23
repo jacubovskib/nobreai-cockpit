@@ -254,3 +254,17 @@ func TestMigration017_Schema(t *testing.T) {
 		t.Fatal("chave de window_lines não é (session_id, path, uuid)")
 	}
 }
+
+func TestMigration018_Schema(t *testing.T) {
+	s := usageFixture(t)
+	if _, err := s.DB.Exec(`INSERT INTO context_compactions(session_id, path, segment) VALUES ('a','/p',1)`); err != nil {
+		t.Fatal(err)
+	}
+	var win string
+	if err := s.DB.QueryRow(`SELECT window_session_id FROM context_compactions`).Scan(&win); err != nil || win != "" {
+		t.Fatalf("padrão de window_session_id: %q %v", win, err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO context_compactions(session_id, path, segment, window_session_id) VALUES ('a','/p',1,'b')`); err == nil {
+		t.Fatal("chave de context_compactions não é (session_id, path, segment)")
+	}
+}
