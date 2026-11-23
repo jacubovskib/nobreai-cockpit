@@ -21,6 +21,7 @@ import (
 type Paths struct {
 	HooksFile    string // ~/.kiro/hooks/nobreai-cockpit.json
 	SteeringFile string // ~/.kiro/steering/nobreai-cockpit.md
+	SessionsDir  string // ~/.kiro/sessions: onde o kiro-cli grava o histórico das sessões
 	NobreBin     string // caminho absoluto do nobre, gravado nos hooks
 	KiroBin      string // kiro-cli; vazio = procurar no PATH e em ~/.local/bin
 	// SearchPATH devolve o PATH onde procurar o CLI; nil = o PATH do processo.
@@ -36,6 +37,7 @@ func DefaultPaths() Paths {
 	if home, err := os.UserHomeDir(); err == nil {
 		p.HooksFile = filepath.Join(home, ".kiro", "hooks", "nobreai-cockpit.json")
 		p.SteeringFile = filepath.Join(home, ".kiro", "steering", "nobreai-cockpit.md")
+		p.SessionsDir = filepath.Join(home, ".kiro", "sessions")
 	}
 	p.NobreBin = findNobre(nil)
 	return p

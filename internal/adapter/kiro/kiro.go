@@ -23,6 +23,18 @@ type Adapter struct {
 	now     func() time.Time
 	paths   Paths
 	nobreMu sync.Mutex
+
+	// publish avisa a tela (nil = ninguém escuta).
+	publish func(kind string)
+	// ingest serializa a leitura do histórico por sessão (chave: id da
+	// sessão, valor: *sync.Mutex); wg acompanha as leituras em andamento.
+	ingest sync.Map
+	wg     sync.WaitGroup
+	// retries são as esperas das releituras depois do fim de turno (o
+	// kiro-cli grava o usage_summary depois do hook Stop); quit as cancela.
+	retries  []time.Duration
+	quit     chan struct{}
+	quitOnce sync.Once
 }
 
 var (
@@ -30,13 +42,16 @@ var (
 	_ agentcore.Driver    = (*Adapter)(nil)
 	_ agentcore.SpendUnit = (*Adapter)(nil)
 	_ agentcore.Guide     = (*Adapter)(nil)
+	_ agentcore.Ingester  = (*Adapter)(nil)
+	_ agentcore.Noter     = (*Adapter)(nil)
 )
 
 // New cria o adaptador. deps.Now nil vira time.Now; Git e Publish podem ser
 // nil. Com st nil (só os nomes de processo, no `nobre`) nenhum hook pode ser
 // tratado.
 func New(st *store.Store, deps adapter.Deps) *Adapter {
-	a := &Adapter{st: st, paths: DefaultPaths(), now: deps.Now}
+	a := &Adapter{st: st, paths: DefaultPaths(), now: deps.Now, publish: deps.Publish,
+		retries: []time.Duration{2 * time.Second, 6 * time.Second}, quit: make(chan struct{})}
 	if a.now == nil {
 		a.now = time.Now
 	}

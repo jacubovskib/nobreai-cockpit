@@ -121,7 +121,9 @@ func run(dbPath string, seedDemo bool) error {
 	go userPATH.Get(0) // já na partida, sem atrasar o servidor
 	claudeAdapter.SetPaths(paths)
 	// O Claude vem primeiro: é o agente padrão quando o pedido não escolhe.
-	registry := agents.New(claudeAdapter, kiro.New(st, adapter.Deps{Now: time.Now, Git: git, Publish: hub.Publish}))
+	kiroAdapter := kiro.New(st, adapter.Deps{Now: time.Now, Git: git, Publish: hub.Publish})
+	defer kiroAdapter.Wait()
+	registry := agents.New(claudeAdapter, kiroAdapter)
 	// RTK: comprime a saída dos comandos do Claude Code; o hook mora no mesmo
 	// settings.json. Sem demo o Tool existe, mas o monitor não roda.
 	home, _ := os.UserHomeDir()

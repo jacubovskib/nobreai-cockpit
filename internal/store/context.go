@@ -1,6 +1,8 @@
 package store
 
 import (
+	"time"
+
 	"database/sql"
 	"errors"
 
@@ -178,6 +180,39 @@ func (s *Store) ClaudeTranscripts() (map[string]string, error) {
 			return nil, err
 		}
 		out[id] = p
+	}
+	return out, rows.Err()
+}
+
+// SetTranscriptPath guarda o caminho do histórico da sessão (agentes que só o
+// descobrem depois do início, como o Kiro).
+func (s *Store) SetTranscriptPath(sessionID, path string) error {
+	_, err := s.DB.Exec(`UPDATE sessions SET transcript_path=? WHERE id=?`, path, sessionID)
+	return err
+}
+
+// ContextTurnsOf devolve os turnos gravados do transcript path da sessão, em
+// ordem (Turn, Segment, MessageID, At e Pct; o resto não é lido).
+func (s *Store) ContextTurnsOf(sessionID, path string) ([]usage.ContextTurn, error) {
+	rows, err := s.DB.Query(`SELECT turn, segment, message_id, at, pct FROM context_turns WHERE session_id=? AND path=? ORDER BY turn`, sessionID, path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []usage.ContextTurn
+	for rows.Next() {
+		var t usage.ContextTurn
+		var at string
+		var pct sql.NullFloat64
+		if err := rows.Scan(&t.Turn, &t.Segment, &t.MessageID, &at, &pct); err != nil {
+			return nil, err
+		}
+		t.At, _ = time.Parse(time.RFC3339Nano, at)
+		if pct.Valid {
+			v := pct.Float64
+			t.Pct = &v
+		}
+		out = append(out, t)
 	}
 	return out, rows.Err()
 }
