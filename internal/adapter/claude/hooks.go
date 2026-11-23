@@ -6,15 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/agentcore"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
-	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/prompts"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
@@ -46,14 +45,6 @@ type payload struct {
 	AgentID string `json:"agent_id"`
 }
 
-// errIgnore marca o hook que não pertence a nenhuma sessão: é respondido
-// vazio, sem gravar nada.
-var errIgnore = errors.New("hook ignorado")
-
-// mainOnlyEvents são os eventos que só o agente principal dispara (o
-// subagente termina com SubagentStop): só eles podem mudar o local da sessão.
-var mainOnlyEvents = map[string]bool{"SessionStart": true, "UserPromptSubmit": true, "Stop": true}
-
 type toolInput struct {
 	FilePath     string `json:"file_path"`
 	NotebookPath string `json:"notebook_path"`
@@ -66,37 +57,26 @@ func (p payload) input() toolInput {
 	return in
 }
 
-// HandleHook trata um evento de hook. Toda sessão é registrada; sem captura
-// completa (projeto cadastrado com capture=true) só sessão e uso são gravados:
-// nada de prompts, arquivos, contexto ou bloqueios.
-//
-// O store não recebe contexto: o trabalho de banco nunca é cancelado junto
-// com a requisição (o `nobre hook` desiste em 2 s, mas o daemon termina o que
-// começou). A leitura do transcript roda em segundo plano (ver ingestAsync).
-func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.HookReply, error) {
+// HandleHook trata um evento de hook pelo núcleo de sessões (agentcore): o
+// Claude é o driver (Translate, Render) com as capacidades Router (janelas
+// duplas), Ingester (leitura do transcript) e Responder.
+func (a *Adapter) HandleHook(ctx context.Context, h adapter.HookCall) (adapter.HookReply, error) {
+	return a.core.Handle(ctx, h)
+}
+
+// Respond monta a resposta do Claude a cada evento (contexto do
+// SessionStart, avisos, limites, fim de turno). Temporário: implementa o
+// agentcore.Responder até as respostas irem para o núcleo.
+func (a *Adapter) Respond(_ *agentcore.Core, sess domain.Session, ev agentcore.Event) (agentcore.Reply, error) {
 	var p payload
-	if err := json.Unmarshal(h.Payload, &p); err != nil {
-		return adapter.HookReply{}, fmt.Errorf("payload do hook inválido: %w", err)
+	if err := json.Unmarshal(ev.Raw, &p); err != nil {
+		return agentcore.Reply{}, fmt.Errorf("payload do hook inválido: %w", err)
 	}
-	if p.SessionID == "" {
-		return adapter.HookReply{}, errors.New("payload do hook sem session_id")
-	}
-	event := h.Event
-	if event == "" {
-		event = p.HookEventName
-	}
-	now := a.deps.Now()
-	sess, err := a.session(p, h.AgentPID, event, now)
-	if errors.Is(err, errIgnore) {
-		return adapter.HookReply{}, nil
-	}
-	if err != nil {
-		return adapter.HookReply{}, err
-	}
-	switch event {
-	case "SessionStart":
-		return a.sessionStart(sess, p, h.Env, now)
-	case "UserPromptSubmit":
+	now := ev.At
+	switch ev.Kind {
+	case agentcore.Started:
+		return a.sessionStart(sess, p, ev.Env, now)
+	case agentcore.Prompt:
 		// Registro para a atribuição por janela (só o resumo do texto, em
 		// toda sessão: o uso de cada janela depende dele). Falha só vai para
 		// o log.
@@ -111,86 +91,56 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 				child = childPhrase // a filha nasceu fora do SessionStart
 			}
 		}
-		notice, noticed := contextReply(event, child, a.noticeText(sess, p, now), a.contextWarning(sess, p))
-		if sess.FullCapture {
-			a.event(sess.ID, domain.EvPrompt, map[string]any{"text": p.Prompt}, now)
-		} else {
-			a.publish("sessions") // última atividade mudou
-		}
-		if noticed {
-			return notice, nil
-		}
-	case "PreToolUse":
+		return agentcore.Reply{Context: []string{child, a.noticeText(sess, p, now), a.contextWarning(sess, p)}}, nil
+	case agentcore.ToolBefore:
 		return a.preToolUse(sess, p, now)
-	case "PostToolUse":
-		notice, _ := contextReply(event, a.noticeText(sess, p, now), a.bigOutputWarning(sess, p))
-		if sess.FullCapture {
-			return notice, a.postToolUse(sess, p, now)
-		}
-		return notice, nil
-	case "Stop":
-		reply, err := a.stop(sess, p, now)
-		a.ingestAsync(ingestID(sess), transcriptPath(p, sess))
-		return reply, err
-	case "SessionEnd":
-		a.outsideSwitch.Delete(sess.ID)
-		return a.sessionEnd(sess, p, now)
+	case agentcore.ToolAfter:
+		return agentcore.Reply{Context: []string{a.noticeText(sess, p, now), a.bigOutputWarning(sess, p)}}, nil
+	case agentcore.TurnEnd:
+		return a.stop(sess, p, now)
 	}
-	return adapter.HookReply{}, nil
+	return agentcore.Reply{}, nil
 }
 
-func transcriptPath(p payload, sess domain.Session) string {
-	if p.TranscriptPath != "" {
-		return p.TranscriptPath
+// Ingest lê o transcript da sessão em segundo plano (agentcore.Ingester).
+func (a *Adapter) Ingest(sess domain.Session, ev agentcore.Event) {
+	path := ev.TranscriptPath
+	if path == "" {
+		path = sess.TranscriptPath
 	}
-	return sess.TranscriptPath
+	a.ingestAsync(ingestID(sess), path)
 }
 
-// session devolve a sessão do evento, criando-a se não existe. Cada processo
-// vivo da conversa tem a sua (ver route): o segundo processo ganha uma sessão
-// filha. Sessão que não está viva (encerrada ou com o processo dado como
-// morto) e volta a mandar eventos é reaberta, com o PID novo; SessionEnd nunca
-// reabre. As demais apenas têm a última atividade atualizada.
-func (a *Adapter) session(p payload, pid int, event string, now time.Time) (domain.Session, error) {
-	id := "claude:" + p.SessionID
-	main, err := a.st.GetSession(id)
+// Route devolve a sessão do evento (agentcore.Router). Cada processo vivo da
+// conversa tem a sua (ver route): o segundo processo ganha uma sessão filha.
+// A sessão escolhida segue a regra do núcleo (Continue): reabre se não está
+// viva, senão só tem a última atividade atualizada. Conversa que o Cockpit
+// ainda não conhece é criada por qualquer evento, SessionEnd inclusive (o
+// daemon esteve fora a sessão inteira: o uso do transcript não se perde).
+func (a *Adapter) Route(c *agentcore.Core, ev agentcore.Event) (domain.Session, bool, error) {
+	main, err := a.st.GetSession(c.SessionID(ev))
 	if errors.Is(err, store.ErrNotFound) {
-		return a.createSession(id, p, pid, now)
+		sess, err := c.CreateSession(ev)
+		return sess, true, err
 	}
 	if err != nil {
-		return main, err
+		return main, true, err
 	}
-	sess, child, err := a.route(main, p.SessionID, pid, event)
+	sess, child, err := a.route(main, ev.ProviderSessionID, ev.PID, ev.Kind)
 	if err != nil {
-		return sess, err
+		return sess, true, err
 	}
 	if child {
-		if event == "SessionEnd" {
+		if ev.Kind == agentcore.Ended {
 			// Fim de um processo que nunca mandou outro hook: não há sessão
 			// dele para encerrar, e a principal é de outro processo vivo.
-			return sess, errIgnore
+			return sess, true, agentcore.ErrIgnore
 		}
-		return a.createChild(main, p, pid, event, now)
+		sess, err := a.createChild(c, main, ev)
+		return sess, true, err
 	}
-	id = sess.ID
-	if event != "SessionEnd" && (!sess.Live() || (pid > 0 && pid != sess.PID)) {
-		if err := a.st.ReopenSession(id, pid, now); err != nil {
-			return sess, err
-		}
-		a.publish("sessions", "cards")
-		sess, err := a.st.GetSession(id)
-		if err != nil {
-			return sess, err
-		}
-		// claude --resume depois de um git switch no terminal: o SessionStart
-		// (cards pausados do branch) já precisa do branch atual.
-		return a.followMain(sess, p, event)
-	}
-	if err := a.st.TouchSession(id, now); err != nil {
-		return sess, err
-	}
-	sess.LastEventAt = now
-	return a.followMain(sess, p, event)
+	sess, err = c.Continue(sess, ev)
+	return sess, true, err
 }
 
 // route escolhe a sessão do processo pid na conversa da principal main:
@@ -207,7 +157,7 @@ func (a *Adapter) session(p payload, pid int, event string, now time.Time) (doma
 // subagente seguem a mesma regra: o subagente roda dentro do processo que o
 // chamou e o hook traz o PID dele (com o PID do dono, fica na principal).
 // SessionEnd nunca reabre: vai para a sessão desse PID mesmo encerrada.
-func (a *Adapter) route(main domain.Session, sid string, pid int, event string) (sess domain.Session, child bool, err error) {
+func (a *Adapter) route(main domain.Session, sid string, pid int, kind agentcore.Kind) (sess domain.Session, child bool, err error) {
 	if pid <= 0 {
 		return main, false, nil
 	}
@@ -215,7 +165,7 @@ func (a *Adapter) route(main domain.Session, sid string, pid int, event string) 
 	if err != nil {
 		return main, false, err
 	}
-	if own != nil && (own.Live() || event == "SessionEnd") {
+	if own != nil && (own.Live() || kind == agentcore.Ended) {
 		return *own, false, nil
 	}
 	shared, err := a.ownedElsewhere(main, pid)
@@ -242,23 +192,24 @@ func (a *Adapter) ownedElsewhere(main domain.Session, pid int) (bool, error) {
 	return cur != nil && cur.ID == main.ID, nil
 }
 
-// createChild cria a sessão filha do processo pid: herda da principal o
-// projeto, a captura, o local e o transcript, sem card.
-func (a *Adapter) createChild(main domain.Session, p payload, pid int, event string, now time.Time) (domain.Session, error) {
-	id := main.ID + "@" + strconv.Itoa(pid)
+// createChild cria a sessão filha do processo do evento: herda da principal
+// o projeto, a captura, o local e o transcript, sem card.
+func (a *Adapter) createChild(c *agentcore.Core, main domain.Session, ev agentcore.Event) (domain.Session, error) {
+	id := main.ID + "@" + strconv.Itoa(ev.PID)
 	tp := main.TranscriptPath
 	if tp == "" {
-		tp = p.TranscriptPath
+		tp = ev.TranscriptPath
 	}
+	now := ev.At
 	x := domain.Session{ID: id, Agent: main.Agent, ProviderSessionID: main.ProviderSessionID, ParentSessionID: main.ID,
-		PID: pid, ProjectID: main.ProjectID, FullCapture: main.FullCapture, Cwd: main.Cwd, Branch: main.Branch,
+		PID: ev.PID, ProjectID: main.ProjectID, FullCapture: main.FullCapture, Cwd: main.Cwd, Branch: main.Branch,
 		GitHead: main.GitHead, Worktree: main.Worktree, WorktreeLinked: main.WorktreeLinked, TranscriptPath: tp,
 		StartedAt: now, LastEventAt: now}
 	// A outra janela pode estar noutro diretório (outro worktree): a filha
 	// nasce no cwd do próprio hook, como uma sessão nova. Hook de subagente
 	// manda o cwd do worktree dele e não conta. O projeto é o da principal.
-	if p.AgentID == "" && p.Cwd != "" && p.Cwd != main.Cwd {
-		l := a.locate(p.Cwd)
+	if ev.SubagentID == "" && ev.Cwd != "" && ev.Cwd != main.Cwd {
+		l := c.Locate(ev.Cwd)
 		x.Cwd, x.Branch, x.GitHead, x.Worktree, x.WorktreeLinked = l.Cwd, l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
 	}
 	// Dois hooks simultâneos do mesmo processo: o segundo é ignorado e a
@@ -266,7 +217,7 @@ func (a *Adapter) createChild(main domain.Session, p payload, pid int, event str
 	if err := a.st.StartSession(x); err != nil {
 		return x, err
 	}
-	if event != "SessionStart" {
+	if ev.Kind != agentcore.Started {
 		// Sem SessionStart (o daemon foi instalado ou voltou com a conversa
 		// aberta): a linha da filha vai no próximo prompt.
 		if err := a.st.MarkChildNoticePending(id); err != nil {
@@ -278,25 +229,7 @@ func (a *Adapter) createChild(main domain.Session, p payload, pid int, event str
 	if err != nil {
 		return sess, err
 	}
-	return a.followMain(sess, p, event)
-}
-
-// followMain faz a sessão acompanhar o local do agente principal nos eventos
-// que só ele dispara. Subagentes com isolation: worktree mandam hooks com o
-// cwd do worktree deles; seguir esses cwds faria a sessão oscilar entre
-// worktrees.
-func (a *Adapter) followMain(sess domain.Session, p payload, event string) (domain.Session, error) {
-	if p.AgentID != "" || !mainOnlyEvents[event] {
-		return sess, nil
-	}
-	if p.Cwd != "" && p.Cwd != sess.Cwd {
-		return a.moveSession(sess, p.Cwd)
-	}
-	// Mesmo diretório: o branch pode ter sido trocado fora do agente (no
-	// terminal do usuário, na IDE), sem nenhum Bash que o PostToolUse visse.
-	// Só a sessão acompanha: o usuário pode estar só revisando outro branch, e
-	// o card segue o que o próprio agente faz (Bash, nobre branch/start/resume).
-	return a.followBranch(sess, false), nil
+	return c.FollowMain(sess, ev)
 }
 
 // ingestID é a sessão em que o uso e o contexto do transcript são gravados:
@@ -309,248 +242,20 @@ func ingestID(sess domain.Session) string {
 	return sess.ID
 }
 
-// moveSession grava o novo diretório da sessão (o agente entrou num worktree,
-// por exemplo) com branch, HEAD e worktree de lá. O projeto ligado não muda.
-func (a *Adapter) moveSession(sess domain.Session, cwd string) (domain.Session, error) {
-	a.outsideSwitch.Delete(sess.ID) // o card acompanha a mudança de diretório
-	l := a.locate(cwd)
-	if err := a.st.UpdateSessionLocation(sess.ID, l); err != nil {
-		return sess, err
-	}
-	a.publish("sessions")
-	sess.Cwd, sess.Branch, sess.GitHead, sess.Worktree, sess.WorktreeLinked = l.Cwd, l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
-	a.syncCardBranch(sess)
-	return sess, nil
-}
-
-// syncCardBranch faz o branch do card da sessão acompanhar o da sessão (a
-// base do projeto nunca vira branch do card). Falha só vai para o log.
-func (a *Adapter) syncCardBranch(sess domain.Session) {
-	if sess.CardID == nil {
-		return
-	}
-	br, _ := a.deps.Git.(gitinfo.BranchReader) // nil quando o Git não lê branches
-	changed, err := board.SyncCardBranch(a.st, br, *sess.CardID, sess.Branch)
-	if err != nil {
-		log.Printf("hook claude: branch do card da sessão %s: %v", sess.ID, err)
-		return
-	}
-	if changed {
-		a.publish("cards")
-	}
-}
-
-// locate consulta o git sobre cwd: branch, HEAD e worktree (este só quando o
-// Git sabe ler worktrees).
-func (a *Adapter) locate(cwd string) store.SessionLocation {
-	l := store.SessionLocation{Cwd: cwd}
-	if a.deps.Git == nil || cwd == "" {
-		return l
-	}
-	l.Branch, l.GitHead = a.deps.Git.Branch(cwd), a.deps.Git.Head(cwd)
-	if wr, ok := a.deps.Git.(gitinfo.WorktreeReader); ok {
-		loc := wr.Locate(cwd)
-		l.Worktree, l.WorktreeLinked, l.Main = loc.Root, loc.Linked, loc.Main
-	}
-	return l
-}
-
-// projectRoot é a raiz do projeto vista pela sessão: num worktree ligado, o
-// diretório equivalente dentro do worktree. Um grupo não é repositório: fica a
-// pasta dele, sem git.
-func (a *Adapter) projectRoot(sess domain.Session, pr domain.Project) string {
-	root := filepath.Clean(pr.Path)
-	if pr.IsGroup() || !sess.WorktreeLinked || sess.Worktree == "" {
-		return root
-	}
-	wr, ok := a.deps.Git.(gitinfo.WorktreeReader)
-	if !ok {
-		return root
-	}
-	main, cached := a.repoRoots.Load(root)
-	if !cached {
-		main = wr.Locate(root).Root
-		if main != "" { // falha do git não fica no cache
-			a.repoRoots.Store(root, main)
-		}
-	}
-	rel, err := filepath.Rel(main.(string), root)
-	if main.(string) == "" || err != nil || strings.HasPrefix(rel, "..") {
-		return root
-	}
-	return filepath.Join(sess.Worktree, rel)
-}
-
-func (a *Adapter) createSession(id string, p payload, pid int, now time.Time) (domain.Session, error) {
-	l := a.locate(p.Cwd)
-	x := domain.Session{ID: id, Agent: a.Name(), ProviderSessionID: p.SessionID, PID: pid, Cwd: p.Cwd,
-		Branch: l.Branch, GitHead: l.GitHead, Worktree: l.Worktree, WorktreeLinked: l.WorktreeLinked,
-		TranscriptPath: p.TranscriptPath, StartedAt: now, LastEventAt: now}
-	proj, err := a.st.ProjectForLocation(p.Cwd, l)
-	if err != nil {
-		return x, err
-	}
-	if proj != nil && proj.Capture {
-		x.ProjectID, x.FullCapture = &proj.ID, true
-	}
-	// Dois hooks simultâneos podem criar a mesma sessão: StartSession ignora o
-	// segundo e a releitura devolve a que ficou.
-	if err := a.st.StartSession(x); err != nil {
-		return x, err
-	}
-	a.publish("sessions")
-	return a.st.GetSession(id)
-}
-
-// event grava um evento da sessão e avisa o stream. Falha só vai para o log:
-// o hook nunca quebra o agente por causa de um evento.
-func (a *Adapter) event(sessionID, kind string, data map[string]any, at time.Time) {
-	b, err := json.Marshal(data)
-	if err == nil {
-		err = a.st.AddEvent(domain.Event{SessionID: sessionID, Kind: kind, Data: b, At: at})
-	}
-	if err != nil {
-		log.Printf("hook claude: evento %s da sessão %s: %v", kind, sessionID, err)
-		return
-	}
-	a.publish("sessions")
-}
-
-func (a *Adapter) postToolUse(sess domain.Session, p payload, now time.Time) error {
-	in := p.input()
-	switch p.ToolName {
-	case "Read", "Edit", "Write", "MultiEdit", "NotebookEdit":
-		path := in.FilePath
-		if path == "" {
-			path = in.NotebookPath
-		}
-		if path == "" {
-			return nil
-		}
-		path, err := a.projectRelative(sess, path)
-		if err != nil {
-			return err
-		}
-		kind := domain.EvFileEdit
-		if p.ToolName == "Read" {
-			kind = domain.EvFileRead
-		}
-		a.event(sess.ID, kind, map[string]any{"path": path}, now)
-	case "Bash":
-		data := map[string]any{"command": in.Command}
-		if code, ok := exitCode(p.ToolResponse); ok {
-			data["exit_code"] = code
-		}
-		a.event(sess.ID, domain.EvCommand, data, now)
-		a.followBranch(sess, true)
-	}
-	return nil
-}
-
-// followBranch percebe troca de branch no mesmo diretório (git switch num
-// comando Bash, ou fora do agente): grava o branch atual na sessão e devolve
-// a sessão atualizada; com syncCard, o card acompanha. Custa um git
-// rev-parse por comando, prompt e fim de turno; falhas só vão para o log.
-func (a *Adapter) followBranch(sess domain.Session, syncCard bool) domain.Session {
-	if a.deps.Git == nil || sess.Cwd == "" {
-		return sess
-	}
-	b := a.deps.Git.Branch(sess.Cwd)
-	if b == "" {
-		return sess
-	}
-	if b == sess.Branch {
-		// A sessão já acompanhou (uma troca vista no prompt ou no fim de
-		// turno, que não move o card): agora que o próprio agente trabalha
-		// nesse branch, o card vem junto.
-		// Só quando o card seguia a sessão: estava no branch de antes da
-		// troca, ou sem branch (o card nunca guarda a base). Um nobre branch
-		// dado de propósito fica.
-		if prev, ok := a.outsideSwitch.Load(sess.ID); ok && syncCard && sess.CardID != nil {
-			a.outsideSwitch.Delete(sess.ID)
-			if c, err := a.st.GetCardByID(*sess.CardID); err == nil && (c.Branch == prev.(string) || c.Branch == "") {
-				a.syncCardBranch(sess)
-			}
-		}
-		return sess
-	}
-	l := a.locate(sess.Cwd)
-	// Vale uma leitura só: se a do locate discordar (falhou ou o branch mudou
-	// no meio), nada é gravado; o próximo evento tenta de novo.
-	if l.Branch != b {
-		return sess
-	}
-	if err := a.st.UpdateSessionLocation(sess.ID, l); err != nil {
-		log.Printf("hook claude: branch da sessão %s: %v", sess.ID, err)
-		return sess
-	}
-	a.publish("sessions")
-	prev := sess.Branch
-	sess.Branch, sess.GitHead, sess.Worktree, sess.WorktreeLinked = l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
-	if syncCard {
-		a.outsideSwitch.Delete(sess.ID)
-		a.syncCardBranch(sess)
-	} else {
-		// Guarda o branch de antes da primeira troca de fora (A→B→C: vale A).
-		a.outsideSwitch.LoadOrStore(sess.ID, prev)
-	}
-	return sess
-}
-
-// projectRelative devolve o caminho relativo à raiz do projeto da sessão
-// quando o arquivo está dentro dela (casa com os arquivos essenciais, que o
-// agente registra relativos); fora do projeto, fica absoluto.
-func (a *Adapter) projectRelative(sess domain.Session, path string) (string, error) {
-	if sess.ProjectID == nil || !filepath.IsAbs(path) {
-		return path, nil
-	}
-	projects, err := a.st.ListProjects()
-	if err != nil {
-		return "", err
-	}
-	for _, pr := range projects {
-		if pr.ID != *sess.ProjectID {
-			continue
-		}
-		root := a.projectRoot(sess, pr)
-		clean := filepath.Clean(path)
-		if rel, err := filepath.Rel(root, clean); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
-			return rel, nil
-		}
-	}
-	return path, nil
-}
-
-// exitCode lê o código de saída do tool_response do Bash, se vier (o Claude
-// Code nem sempre o informa; nunca é inventado).
-func exitCode(raw json.RawMessage) (int, bool) {
-	var r map[string]json.RawMessage
-	if json.Unmarshal(raw, &r) != nil {
-		return 0, false
-	}
-	for _, k := range []string{"exit_code", "exitCode"} {
-		var code int
-		if v, ok := r[k]; ok && json.Unmarshal(v, &code) == nil {
-			return code, true
-		}
-	}
-	return 0, false
-}
-
 // preToolUse nega a ferramenta quando o limite (diário do agente ou do card)
 // foi atingido com ação "pause". Uma chamada simples de um subcomando de
 // handoff do nobre sempre passa (o agente precisa conseguir registrar o
 // handoff); nobre run, setup ou algo encadeado, não (plainNobreCommand).
-func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
+func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (agentcore.Reply, error) {
 	if !sess.FullCapture {
-		return adapter.HookReply{}, nil
+		return agentcore.Reply{}, nil
 	}
 	if p.ToolName == "Bash" && plainNobreCommand(p.input().Command) {
-		return adapter.HookReply{}, nil
+		return agentcore.Reply{}, nil
 	}
 	ls, err := board.LimitStatus(a.st, a.Name(), sess.CardID, now)
 	if err != nil {
-		return adapter.HookReply{}, err
+		return agentcore.Reply{}, err
 	}
 	if !ls.Over || ls.Action != "pause" {
 		if sess.CardID != nil {
@@ -560,25 +265,21 @@ func (a *Adapter) preToolUse(sess domain.Session, p payload, now time.Time) (ada
 				a.publish("cards")
 			}
 		}
-		return adapter.HookReply{}, nil
+		return agentcore.Reply{}, nil
 	}
 	detail, err := a.limitDetail(ls, sess.CardID)
 	if err != nil {
-		return adapter.HookReply{}, err
+		return agentcore.Reply{}, err
 	}
 	if sess.CardID != nil {
 		if ok, err := a.st.PauseForLimit(*sess.CardID, now); err != nil {
 			log.Printf("hook claude: pausar card por limite: %v", err)
 		} else if ok {
-			a.event(sess.ID, domain.EvLimitPause, map[string]any{"detail": detail}, now)
+			a.core.Event(sess.ID, domain.EvLimitPause, map[string]any{"detail": detail}, now)
 			a.publish("cards")
 		}
 	}
-	return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
-		"hookEventName":            "PreToolUse",
-		"permissionDecision":       "deny",
-		"permissionDecisionReason": "NobreAI Cockpit: limite de custo atingido (" + detail + "). Registre “Onde parei” com nobre note 'texto' (uma chamada só, texto entre aspas simples, sem $, crase, heredoc ou redirecionamento) e encerre.",
-	}})
+	return agentcore.Reply{Block: &agentcore.Decision{Reason: "NobreAI Cockpit: limite de custo atingido (" + detail + "). Registre “Onde parei” com nobre note 'texto' (uma chamada só, texto entre aspas simples, sem $, crase, heredoc ou redirecionamento) e encerre."}}, nil
 }
 
 // limitDetail descreve o(s) limite(s) atingido(s): "diário: US$ 10,40 de US$
@@ -610,47 +311,47 @@ func usd(v float64) string {
 // desligada, não bloqueia, pois esse é o único critério por turno. Sem card, lembra uma única
 // vez de criar card quando a sessão já editou ReminderEditThreshold arquivos (só se o agente
 // cria cards por conta própria: AgentCreatesCards).
-func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
+func (a *Adapter) stop(sess domain.Session, p payload, now time.Time) (agentcore.Reply, error) {
 	if p.StopHookActive || !sess.FullCapture {
-		return adapter.HookReply{}, nil
+		return agentcore.Reply{}, nil
 	}
 	set, err := a.st.GetSettings()
 	if err != nil {
-		return adapter.HookReply{}, err
+		return agentcore.Reply{}, err
 	}
 	if sess.CardID != nil {
 		if set.IncompleteAction != "ask_agent" || !set.Rules["where_stopped"] {
-			return adapter.HookReply{}, nil
+			return agentcore.Reply{}, nil
 		}
 		c, err := a.st.GetCardByID(*sess.CardID)
 		if err != nil {
-			return adapter.HookReply{}, err
+			return agentcore.Reply{}, err
 		}
 		edited, err := a.st.SessionEditedAfter(sess.ID, c.ID, c.WhereStoppedAt)
 		if err != nil || !edited {
-			return adapter.HookReply{}, err
+			return agentcore.Reply{}, err
 		}
 		reason, err := a.handoffPrompt(c, sess.ID, set, now)
 		if err != nil {
-			return adapter.HookReply{}, err
+			return agentcore.Reply{}, err
 		}
-		return jsonReply(map[string]any{"decision": "block", "reason": reason})
+		return agentcore.Reply{HoldTurn: &agentcore.Decision{Reason: reason}}, nil
 	}
 	if set.ReminderEditThreshold <= 0 || !set.AgentCreatesCards {
-		return adapter.HookReply{}, nil
+		return agentcore.Reply{}, nil
 	}
 	if reminded, err := a.st.SessionReminded(sess.ID); err != nil || reminded {
-		return adapter.HookReply{}, err
+		return agentcore.Reply{}, err
 	}
 	n, err := a.st.DistinctEditedFiles(sess.ID)
 	if err != nil || n < set.ReminderEditThreshold {
-		return adapter.HookReply{}, err
+		return agentcore.Reply{}, err
 	}
 	if err := a.st.MarkReminded(sess.ID); err != nil {
-		return adapter.HookReply{}, err
+		return agentcore.Reply{}, err
 	}
-	return jsonReply(map[string]any{"decision": "block", "reason": fmt.Sprintf(
-		`NobreAI Cockpit: esta sessão já editou %d arquivos sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.`, n)})
+	return agentcore.Reply{HoldTurn: &agentcore.Decision{Reason: fmt.Sprintf(
+		`NobreAI Cockpit: esta sessão já editou %d arquivos sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.`, n)}}, nil
 }
 
 const handoffSlug = "fechar-handoff"
@@ -701,43 +402,4 @@ func (a *Adapter) handoffPrompt(c domain.Card, sessionID string, set domain.Sett
 		a.publish("prompts")
 	}
 	return out, nil
-}
-
-// endReasons traduz o reason do SessionEnd do Claude Code.
-var endReasons = map[string]string{
-	"clear":             "conversa limpa (/clear)",
-	"logout":            "logout",
-	"prompt_input_exit": "usuário saiu",
-	"other":             "encerrada pelo agente",
-}
-
-// sessionEnd encerra a sessão (o card sai de em_andamento) e só depois lê o
-// transcript.
-func (a *Adapter) sessionEnd(sess domain.Session, p payload, now time.Time) (adapter.HookReply, error) {
-	reason := endReasons[p.Reason]
-	if reason == "" {
-		reason = p.Reason
-	}
-	if reason == "" {
-		reason = "encerrada pelo agente"
-	}
-	if err := board.FinishSession(a.st, sess.ID, reason, now); err != nil {
-		return adapter.HookReply{}, err
-	}
-	a.publish("sessions", "cards")
-	a.event(sess.ID, domain.EvSessionEnd, map[string]any{"reason": p.Reason}, now)
-	a.ingestAsync(ingestID(sess), transcriptPath(p, sess))
-	return adapter.HookReply{}, nil
-}
-
-// jsonReply serializa a resposta do hook (sem escapar <, > e &: o texto vai
-// para o agente ler).
-func jsonReply(v any) (adapter.HookReply, error) {
-	var b strings.Builder
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return adapter.HookReply{}, err
-	}
-	return adapter.HookReply{Stdout: strings.TrimSuffix(b.String(), "\n")}, nil
 }

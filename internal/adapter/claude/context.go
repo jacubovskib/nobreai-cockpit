@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/agentcore"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
@@ -79,16 +79,15 @@ const resumeEnv = "NOBRE_RESUME"
 // que os comandos nobre dela não mexem na sessão da outra janela.
 const childPhrase = "Esta conversa também está aberta em outra janela, com sessão própria no Cockpit; os comandos nobre desta janela valem só para ela."
 
-// sessionStart registra o início e injeta o contexto do Cockpit. Com
+// sessionStart injeta o contexto do Cockpit (o início é gravado pelo núcleo). Com
 // NOBRE_RESUME=<KEY> num início de sessão (source startup), a sessão é ligada
 // ao card (force: o agente foi aberto pelo humano para continuar o card) e o
 // pacote de retomada vai junto, mesmo sem captura completa: é um pedido
 // explícito. Sem captura e sem retomada, não responde nada.
-func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]string, now time.Time) (adapter.HookReply, error) {
-	a.event(sess.ID, domain.EvSessionStart, map[string]any{"source": p.Source}, now)
+func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]string, now time.Time) (agentcore.Reply, error) {
 	set, err := a.st.GetSettings()
 	if err != nil {
-		return adapter.HookReply{}, err
+		return agentcore.Reply{}, err
 	}
 	// O que esta sessão passa a ter visto: o contexto de agora. Substitui o
 	// registro de antes (resume, clear e compact reinjetam a configuração).
@@ -101,22 +100,22 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 		case errors.Is(err, store.ErrNotFound):
 			notFound = key
 		case err != nil:
-			return adapter.HookReply{}, err
+			return agentcore.Reply{}, err
 		default:
 			a.publish("cards", "sessions")
 			c, err := a.st.GetCard(key)
 			if err != nil {
-				return adapter.HookReply{}, err
+				return agentcore.Reply{}, err
 			}
 			// O card passa a acompanhar o branch de trabalho desta sessão
 			// antes de o pacote de retomada ser montado.
 			sess.CardID = &c.ID
-			a.syncCardBranch(sess)
+			a.core.SyncCardBranch(sess)
 			if c, err = a.st.GetCard(key); err != nil {
-				return adapter.HookReply{}, err
+				return agentcore.Reply{}, err
 			}
 			if pkg, err = a.resumePackage(c, sess.ID); err != nil {
-				return adapter.HookReply{}, err
+				return agentcore.Reply{}, err
 			}
 			resumed = &c
 		}
@@ -126,11 +125,11 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	compacted := p.Source == "compact" && resumed == nil && sess.CardID != nil
 	if !sess.FullCapture && resumed == nil && notFound == "" && !compacted {
 		if sess.ProjectID != nil {
-			return adapter.HookReply{}, nil
+			return agentcore.Reply{}, nil
 		}
 		root, folder := a.unregisteredRoot(sess.Cwd)
 		if root == "" {
-			return adapter.HookReply{}, nil
+			return agentcore.Reply{}, nil
 		}
 		phrase := unregisteredPhrase
 		todo := "Antes de seguir com o pedido do usuário, cadastre com nobre project add " + root +
@@ -142,10 +141,7 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 			todo = "Pergunte ao usuário se quer cadastrar esta pasta como grupo com nobre project add " + root +
 				"; só cadastre se ele aceitar. O comando lista os sub-projetos sugeridos, que você mostra ao usuário sem cadastrar. O cadastro liga esta sessão ao board."
 		}
-		return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName":     "SessionStart",
-			"additionalContext": phrase + " (" + root + ").\n" + todo + "\n\n" + guidanceFor(set),
-		}})
+		return agentcore.Reply{Context: []string{phrase + " (" + root + ").\n" + todo + "\n\n" + guidanceFor(set)}}, nil
 	}
 
 	// O começo (instruções e card não encontrado) e o resto são montados
@@ -161,7 +157,7 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	if sess.FullCapture {
 		apps, err := a.appsGuidance(sess)
 		if err != nil {
-			return adapter.HookReply{}, err
+			return agentcore.Reply{}, err
 		}
 		if apps != "" {
 			b.WriteString("\n\n" + apps)
@@ -170,13 +166,13 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	if resumed == nil && sess.CardID != nil {
 		c, err := a.st.GetCardByID(*sess.CardID)
 		if err != nil {
-			return adapter.HookReply{}, err
+			return agentcore.Reply{}, err
 		}
 		fmt.Fprintf(&b, "\n\nEsta sessão está no card %s · %s.", c.Key, c.Title)
 		if compacted {
 			pkg, err := a.resumePackage(c, sess.ID)
 			if err != nil {
-				return adapter.HookReply{}, err
+				return agentcore.Reply{}, err
 			}
 			fmt.Fprintf(&b, " O contexto foi compactado; continue a partir do pacote de retomada do card.\n\n%s", pkg)
 		}
@@ -184,7 +180,7 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 	if sess.FullCapture && set.InjectPausedCards {
 		paused, err := a.pausedCards(sess, resumed)
 		if err != nil {
-			return adapter.HookReply{}, err
+			return agentcore.Reply{}, err
 		}
 		if len(paused) > 0 {
 			b.WriteString("\n\nCards pausados neste repositório e branch (retome com nobre resume <KEY> em vez de criar outro):")
@@ -214,10 +210,7 @@ func (a *Adapter) sessionStart(sess domain.Session, p payload, env map[string]st
 			text = head + "\n\n" + strings.TrimRight(blk, "\n") + rest
 		}
 	}
-	return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
-		"hookEventName":     "SessionStart",
-		"additionalContext": text,
-	}})
+	return agentcore.Reply{Context: []string{text}}, nil
 }
 
 // maxContextRunes é o teto do contexto do SessionStart com folga: o Claude
