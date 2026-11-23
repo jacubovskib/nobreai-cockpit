@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/usage"
 )
 
 // fmtTokens escreve uma quantidade de tokens em pt-BR: até 999 o número
@@ -96,7 +97,8 @@ func (a *Adapter) contextWarning(sess domain.Session, p payload) string {
 }
 
 // bigOutputWarning é o aviso de saída grande do PostToolUse ("" sem nada a
-// dizer): tamanho estimado em bytes/4 da resposta da ferramenta, acima de
+// dizer): tamanho da resposta da ferramenta estimado como
+// usage.EstimateTokens (bytes/4 arredondado para cima), acima de
 // big_output_tokens e até big_output_max avisos por sessão. Só o agente
 // principal (a saída de um subagente não entra no contexto dele).
 func (a *Adapter) bigOutputWarning(sess domain.Session, p payload) string {
@@ -108,7 +110,7 @@ func (a *Adapter) bigOutputWarning(sess domain.Session, p payload) string {
 		log.Printf("hook claude: configurações: %v", err)
 		return ""
 	}
-	tokens := int64(len(p.ToolResponse)) / 4
+	tokens := usage.EstimateTokens(int64(len(p.ToolResponse)), 0)
 	if !set.AgentContextWarnings || tokens <= int64(set.BigOutputTokens) {
 		return ""
 	}

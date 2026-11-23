@@ -238,3 +238,18 @@ func TestChildNoticeSurvivesRestart(t *testing.T) {
 		t.Fatalf("depois do reinício = %q", got)
 	}
 }
+
+// O tamanho da saída é estimado como usage.EstimateTokens (arredonda para
+// cima): 4.001 bytes de resposta são 1.001 tokens, acima de um limite de 1.000.
+func TestBigOutputWarning_RoundsUp(t *testing.T) {
+	e := alertsEnv(t)
+	set := mustSettings(t, e)
+	set.BigOutputTokens = 1000
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+	// {"content":"…","type":"text"}: 28 bytes de moldura.
+	if got := postContext(t, e.postWithResponse(t, 4001-28)); got != bigWarn("1 mil") {
+		t.Fatalf("4.001 bytes = %q", got)
+	}
+}
