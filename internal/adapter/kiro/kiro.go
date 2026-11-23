@@ -38,12 +38,14 @@ type Adapter struct {
 }
 
 var (
-	_ adapter.Adapter     = (*Adapter)(nil)
-	_ agentcore.Driver    = (*Adapter)(nil)
-	_ agentcore.SpendUnit = (*Adapter)(nil)
-	_ agentcore.Guide     = (*Adapter)(nil)
-	_ agentcore.Ingester  = (*Adapter)(nil)
-	_ agentcore.Observer  = (*Adapter)(nil)
+	_ adapter.Adapter          = (*Adapter)(nil)
+	_ adapter.SetupInstaller   = (*Adapter)(nil)
+	_ adapter.SetupUninstaller = (*Adapter)(nil)
+	_ agentcore.Driver         = (*Adapter)(nil)
+	_ agentcore.SpendUnit      = (*Adapter)(nil)
+	_ agentcore.Guide          = (*Adapter)(nil)
+	_ agentcore.Ingester       = (*Adapter)(nil)
+	_ agentcore.Observer       = (*Adapter)(nil)
 )
 
 // New cria o adaptador. deps.Now nil vira time.Now; Git e Publish podem ser

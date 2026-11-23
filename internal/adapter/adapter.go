@@ -38,6 +38,21 @@ type InstallPlanner interface {
 	PlanInstall() (InstallReport, error)
 }
 
+// SetupInstaller é opcional: o adaptador cuja integração o `nobre setup`
+// instala sozinho, no passo de cada agente (sem ele, o setup não mexe no
+// agente). nobre é o caminho do nobre que roda, gravado nos hooks; com dry
+// só informa. Cada mensagem vira uma linha do checklist; o agente ausente na
+// máquina não é erro: uma mensagem dizendo que pulou.
+type SetupInstaller interface {
+	SetupInstall(nobre string, dry bool) (InstallReport, error)
+}
+
+// SetupUninstaller é opcional: desfaz no `nobre setup --remover` o que
+// SetupInstall instalou. dry só informa.
+type SetupUninstaller interface {
+	SetupUninstall(dry bool) (InstallReport, error)
+}
+
 // HookCall é a chamada de hook repassada pelo `nobre hook`.
 type HookCall struct {
 	Event    string            `json:"event"`

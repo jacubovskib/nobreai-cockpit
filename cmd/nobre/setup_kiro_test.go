@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/kiro"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 )
 
 // kiroSetup liga o Kiro do setup a um HOME temporário; withBin cria o kiro-cli.
@@ -25,8 +28,9 @@ func kiroSetup(t *testing.T, e *setupEnv, withBin bool) (hooks, steering string)
 	os.MkdirAll(filepath.Dir(nobre), 0o755)
 	os.WriteFile(nobre, []byte("x"), 0o755)
 	a := kiro.New(nil, adapter.Deps{})
-	a.SetPaths(kiro.Paths{HooksFile: hooks, SteeringFile: steering, NobreBin: nobre, KiroBin: bin})
-	e.d.Kiro = a
+	a.SetPaths(kiro.Paths{HooksFile: hooks, SteeringFile: steering, KiroBin: bin})
+	e.d.Drivers = []adapter.Adapter{a}
+	e.d.NobreBin = nobre // o setup passa o nobre que roda para o driver
 	return hooks, steering
 }
 
@@ -52,6 +56,9 @@ func TestSetupKiroInstallsAndRemoves(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if b, _ := os.ReadFile(hooks); !strings.Contains(string(b), e.d.NobreBin+" hook kiro SessionStart") {
+		t.Fatalf("hooks sem o nobre do setup: %s", b)
 	}
 	r = e.run(t, "127.0.0.1:1", "", cwd)
 	if !strings.Contains(r.stdout, "Hooks do Kiro já instalados") {
@@ -82,5 +89,62 @@ func TestSetupKiroNotFoundSkips(t *testing.T) {
 	}
 	if _, err := os.Stat(hooks); err == nil {
 		t.Fatal("instalou sem kiro-cli")
+	}
+}
+
+// setupDriver é um terceiro agente com instalação própria: o setup o instala
+// e remove pelas capacidades, sem mudar o setup.go.
+type setupDriver struct {
+	adapter.Adapter
+	name string
+	err  error
+	got  []string
+}
+
+func (d *setupDriver) Name() string { return d.name }
+func (d *setupDriver) SetupInstall(nobre string, dry bool) (adapter.InstallReport, error) {
+	d.got = append(d.got, fmt.Sprintf("install %s %v", nobre, dry))
+	return adapter.InstallReport{Messages: []string{"Hooks do Codex gravados."}}, d.err
+}
+func (d *setupDriver) SetupUninstall(dry bool) (adapter.InstallReport, error) {
+	d.got = append(d.got, fmt.Sprintf("uninstall %v", dry))
+	return adapter.InstallReport{Messages: []string{"Hooks do Codex removidos."}}, d.err
+}
+
+func TestSetupDriverCapabilities(t *testing.T) {
+	e := newSetupEnv(t)
+	d := &setupDriver{name: "codex"}
+	// O Claude dos drivers compilados não tem as capacidades: fica de fora
+	// (os passos dele seguem explícitos no setup).
+	claudeDrv := agents.Compiled()[0]
+	if _, ok := claudeDrv.(adapter.SetupInstaller); ok {
+		t.Fatal("o Claude não instala pelo passo de cada agente")
+	}
+	e.d.Drivers = []adapter.Adapter{claudeDrv, d}
+	cwd := t.TempDir()
+	r := e.run(t, "127.0.0.1:1", "", cwd, "--dry-run")
+	if !strings.Contains(r.stdout, "✓ [dry-run] Hooks do Codex gravados.\n") {
+		t.Fatalf("dry-run: %s", r.stdout)
+	}
+	e.run(t, "127.0.0.1:1", "", cwd)
+	e.run(t, "127.0.0.1:1", "", cwd, "--remover", "--dry-run")
+	r = e.run(t, "127.0.0.1:1", "", cwd, "--remover")
+	if !strings.Contains(r.stdout, "✓ Hooks do Codex removidos.\n") {
+		t.Fatalf("remover: %s", r.stdout)
+	}
+	want := []string{"install /opt/x/bin/nobre true", "install /opt/x/bin/nobre false", "uninstall true", "uninstall false"}
+	if strings.Join(d.got, ",") != strings.Join(want, ",") {
+		t.Fatalf("chamadas = %v", d.got)
+	}
+
+	// Falha vira pendência com o nome de tela do agente.
+	d.err = errors.New("sem permissão")
+	r = e.run(t, "127.0.0.1:1", "", cwd)
+	if r.code == 0 || !strings.Contains(r.stdout, "! Codex: sem permissão\n") {
+		t.Fatalf("falha: %+v", r)
+	}
+	r = e.run(t, "127.0.0.1:1", "", cwd, "--remover")
+	if r.code == 0 || !strings.Contains(r.stdout, "! Codex: sem permissão\n") {
+		t.Fatalf("falha ao remover: %+v", r)
 	}
 }

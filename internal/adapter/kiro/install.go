@@ -209,6 +209,26 @@ func (a *Adapter) install(write bool) (adapter.InstallReport, error) {
 	return rep, nil
 }
 
+// SetupInstall é o passo do Kiro no `nobre setup` (adapter.SetupInstaller):
+// grava os hooks com o nobre dado e o steering, ou, com dry, só diz o que
+// gravaria. Sem kiro-cli na máquina, avisa numa linha e não grava nada.
+func (a *Adapter) SetupInstall(nobre string, dry bool) (adapter.InstallReport, error) {
+	if nobre != "" {
+		a.nobreMu.Lock()
+		a.paths.NobreBin = nobre
+		a.nobreMu.Unlock()
+	}
+	if a.Binary() == "" {
+		return adapter.InstallReport{Changed: []string{},
+			Messages: []string{"Kiro não encontrado (kiro-cli fora do PATH e de ~/.local/bin); pulei"}}, nil
+	}
+	return a.install(!dry)
+}
+
+// SetupUninstall é o passo do Kiro no `nobre setup --remover`
+// (adapter.SetupUninstaller): o mesmo que Uninstall.
+func (a *Adapter) SetupUninstall(dry bool) (adapter.InstallReport, error) { return a.Uninstall(dry) }
+
 // Uninstall apaga os dois arquivos do Cockpit (e só eles). dry só informa.
 func (a *Adapter) Uninstall(dry bool) (adapter.InstallReport, error) {
 	rep := adapter.InstallReport{Changed: []string{}, Messages: []string{}}
