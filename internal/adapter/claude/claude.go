@@ -40,11 +40,13 @@ type Adapter struct {
 }
 
 var (
-	_ adapter.Adapter     = (*Adapter)(nil)
-	_ agentcore.Driver    = (*Adapter)(nil)
-	_ agentcore.Router    = (*Adapter)(nil)
-	_ agentcore.Ingester  = (*Adapter)(nil)
-	_ agentcore.Responder = (*Adapter)(nil)
+	_ adapter.Adapter    = (*Adapter)(nil)
+	_ agentcore.Driver   = (*Adapter)(nil)
+	_ agentcore.Router   = (*Adapter)(nil)
+	_ agentcore.Ingester = (*Adapter)(nil)
+	_ agentcore.Noter    = (*Adapter)(nil)
+	_ agentcore.Memories = (*Adapter)(nil)
+	_ agentcore.Guide    = (*Adapter)(nil)
 )
 
 // New cria o adaptador sem caminhos de instalação (use SetPaths; o nobred usa

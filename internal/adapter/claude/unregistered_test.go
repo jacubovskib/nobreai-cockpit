@@ -50,6 +50,18 @@ func TestSessionStartUnregisteredRepoWarns(t *testing.T) {
 	}
 }
 
+// O aviso cita a skill que o Cockpit instala no Claude (agentcore.Guide).
+func TestSessionStartUnregisteredRepoCitesSkill(t *testing.T) {
+	e := newEnv(t)
+	e.realGit()
+	repo := gitRepo(t)
+	e.project(t)
+	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", repo)))
+	if !strings.Contains(ctx, "; crie os cards importantes com nobre card add (veja a skill nobre-cockpit); se o cadastro listar sub-projetos sugeridos") {
+		t.Fatalf("contexto = %q", ctx)
+	}
+}
+
 func TestSessionStartHomeNoWarning(t *testing.T) {
 	e := newEnv(t)
 	e.realGit()

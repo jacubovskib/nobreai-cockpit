@@ -30,7 +30,7 @@ func (a *Adapter) Translate(event string, raw []byte) (agentcore.Event, error) {
 	}
 	ev := agentcore.Event{Kind: kinds[event], ProviderSessionID: p.SessionID, Cwd: p.Cwd, Source: p.Source,
 		Prompt: p.Prompt, Reason: endReason(p.Reason), ReasonCode: p.Reason, TranscriptPath: p.TranscriptPath, SubagentID: p.AgentID,
-		StopActive: p.StopHookActive, Raw: raw}
+		StopActive: p.StopHookActive}
 	if p.ToolName != "" {
 		ev.Tool = translateTool(p)
 	}

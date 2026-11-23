@@ -3,6 +3,8 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,19 +44,49 @@ func (d *fakeDriver) Render(_ Event, r Reply) (adapter.HookReply, error) {
 	return adapter.HookReply{Stdout: strings.Join(r.Context, "|")}, nil
 }
 
-// fullDriver tem as capacidades opcionais: responde com um texto fixo e
-// anota as leituras do histórico pedidas.
+// fullDriver tem as capacidades opcionais: anota as leituras do histórico
+// pedidas e, nas notas e nas memórias, quantos eventos do tipo já estavam
+// gravados quando o núcleo montou a resposta (sondas de ordem).
 type fullDriver struct {
 	fakeDriver
+	st       *store.Store
 	ingested []string
-}
-
-func (d *fullDriver) Respond(_ *Core, sess domain.Session, ev Event) (Reply, error) {
-	return Reply{Context: []string{"resposta " + sess.ID}}, nil
+	// seen: "memórias session_start=N", "prompt prompt=N".
+	seen []string
 }
 
 func (d *fullDriver) Ingest(sess domain.Session, ev Event) {
 	d.ingested = append(d.ingested, sess.ID+" "+ev.TranscriptPath)
+}
+
+func (d *fullDriver) count(kind string) int {
+	all, _ := d.st.RecentEvents(1000)
+	n := 0
+	for _, ev := range all {
+		if ev.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+func (d *fullDriver) StartNote(sess domain.Session) string { return "nota do início" }
+
+func (d *fullDriver) PromptNote(sess domain.Session, ev Event) string {
+	d.seen = append(d.seen, fmt.Sprintf("prompt %s=%d", domain.EvPrompt, d.count(domain.EvPrompt)))
+	return "nota do prompt"
+}
+
+func (d *fullDriver) MemoriesBlock(sess domain.Session, set domain.Settings, room int) string {
+	d.seen = append(d.seen, fmt.Sprintf("memórias %s=%d", domain.EvSessionStart, d.count(domain.EvSessionStart)))
+	return "Memórias deste projeto:\n- x\n"
+}
+
+func newFull(t *testing.T) (*env, *fullDriver) {
+	d := &fullDriver{}
+	e := newEnv(t, d)
+	d.st = e.st
+	return e, d
 }
 
 type env struct {
@@ -95,7 +127,7 @@ func (e *env) handle(t *testing.T, d *fakeDriver, ev Event) adapter.HookReply {
 		pid = ev.PID
 	}
 	d.next = ev
-	r, err := e.c.Handle(context.Background(), adapter.HookCall{AgentPID: pid})
+	r, err := e.c.Handle(context.Background(), adapter.HookCall{AgentPID: pid, Env: ev.Env})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,14 +287,148 @@ func TestEndedNeverCreatesNorReopens(t *testing.T) {
 }
 
 func TestOptionalCapabilities(t *testing.T) {
-	d := &fullDriver{}
-	e := newEnv(t, d)
+	e, d := newFull(t)
+	e.project(t)
+	e.handle(t, &d.fakeDriver, Event{Kind: Started})
+	start := lastReply(t, &d.fakeDriver).Context
+	// Memórias logo depois das instruções; a nota do driver abre o resto.
+	if len(start) != 1 || !strings.HasPrefix(start[0], RegisteredPhrase) ||
+		!strings.Contains(start[0], ".\n\nMemórias deste projeto:\n- x\n\nnota do início") {
+		t.Fatalf("início = %q", start)
+	}
 	e.handle(t, &d.fakeDriver, Event{Kind: TurnEnd, TranscriptPath: "/t/a.jsonl"})
-	if got := e.handle(t, &d.fakeDriver, Event{Kind: Prompt}); got.Stdout != "resposta "+fakeID {
+	if got := e.handle(t, &d.fakeDriver, Event{Kind: Prompt}); got.Stdout != "nota do prompt||" {
 		t.Fatalf("resposta = %+v", got)
 	}
 	e.handle(t, &d.fakeDriver, Event{Kind: Ended, TranscriptPath: "/t/b.jsonl"})
 	if len(d.ingested) != 2 || d.ingested[0] != fakeID+" /t/a.jsonl" || d.ingested[1] != fakeID+" /t/b.jsonl" {
+		t.Fatalf("leituras = %v", d.ingested)
+	}
+}
+
+// Ordem de que um driver sem Router (Kiro) depende: o início é gravado antes
+// de a resposta ser montada; o prompt e a ferramenta, depois.
+func TestRecordOrderAroundResponses(t *testing.T) {
+	e, d := newFull(t)
+	e.project(t)
+	e.handle(t, &d.fakeDriver, Event{Kind: Started})
+	e.handle(t, &d.fakeDriver, Event{Kind: Prompt, Prompt: "corrija o login"})
+	want := []string{"memórias session_start=1", "prompt prompt=0"}
+	if strings.Join(d.seen, ",") != strings.Join(want, ",") {
+		t.Fatalf("sondas = %v, quer %v", d.seen, want)
+	}
+	if evs := e.events(t, domain.EvPrompt); len(evs) != 1 {
+		t.Fatalf("prompt não gravado depois: %v", evs)
+	}
+
+	// ToolAfter: o aviso de saída grande (session_alerts) é decidido antes da
+	// edição ser gravada.
+	for _, q := range []string{
+		`CREATE TABLE probe(n INTEGER)`,
+		`CREATE TRIGGER probe_ins AFTER INSERT ON session_alerts BEGIN
+			INSERT INTO probe SELECT count(*) FROM events WHERE kind='` + domain.EvFileEdit + `'; END`,
+		`CREATE TRIGGER probe_upd AFTER UPDATE ON session_alerts BEGIN
+			INSERT INTO probe SELECT count(*) FROM events WHERE kind='` + domain.EvFileEdit + `'; END`,
+	} {
+		if _, err := e.st.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.handle(t, &d.fakeDriver, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/a.go", OutputBytes: 400_000}})
+	if got := lastReply(t, &d.fakeDriver).Context; !strings.Contains(strings.Join(got, "|"), "Essa saída teve ~100 mil tokens") {
+		t.Fatalf("sem aviso de saída grande: %q", got)
+	}
+	var probes []int
+	rows, err := e.st.DB.Query(`SELECT n FROM probe`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		probes = append(probes, n)
+	}
+	if len(probes) != 1 || probes[0] != 0 {
+		t.Fatalf("edições gravadas quando o aviso foi decidido = %v, quer [0]", probes)
+	}
+	if evs := e.events(t, domain.EvFileEdit); len(evs) != 1 {
+		t.Fatalf("edição não gravada depois: %v", evs)
+	}
+}
+
+// failOn faz o banco recusar a atualização da coluna col de sessions.
+func (e *env) failOn(t *testing.T, col string) {
+	t.Helper()
+	q := `CREATE TRIGGER fail_` + col + ` BEFORE UPDATE OF ` + col + ` ON sessions BEGIN SELECT RAISE(ABORT, 'falha de teste'); END`
+	if _, err := e.st.DB.Exec(q); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *env) handleErr(d *fakeDriver, ev Event) error {
+	ev.ProviderSessionID, ev.Cwd = "s1", "/w/api"
+	d.next = ev
+	_, err := e.c.Handle(context.Background(), adapter.HookCall{AgentPID: 4242})
+	return err
+}
+
+// O fim de turno lê o histórico mesmo quando a resposta falha.
+func TestTurnEndIngestsEvenIfResponseFails(t *testing.T) {
+	e, d := newFull(t)
+	e.project(t)
+	e.handle(t, &d.fakeDriver, Event{Kind: Started})
+	for _, f := range []string{"a.go", "b.go", "c.go"} {
+		e.handle(t, &d.fakeDriver, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/" + f}})
+	}
+	e.failOn(t, "reminded") // o lembrete sem card não consegue se marcar
+	if err := e.handleErr(&d.fakeDriver, Event{Kind: TurnEnd, TranscriptPath: "/t/a.jsonl"}); err == nil {
+		t.Fatal("esperava o erro da resposta")
+	}
+	if len(d.ingested) != 1 || d.ingested[0] != fakeID+" /t/a.jsonl" {
+		t.Fatalf("leituras = %v", d.ingested)
+	}
+}
+
+// brokenRender falha ao formatar a resposta.
+type brokenRender struct{ fullDriver }
+
+func (d *brokenRender) Render(Event, Reply) (adapter.HookReply, error) {
+	return adapter.HookReply{}, errors.New("falha do render")
+}
+
+// O erro da regra não some atrás do erro do Render.
+func TestRenderErrorKeepsRuleError(t *testing.T) {
+	d := &brokenRender{}
+	e := newEnv(t, d)
+	d.st = e.st
+	e.project(t)
+	_ = e.handleErr(&d.fakeDriver, Event{Kind: Started})
+	for _, f := range []string{"a.go", "b.go", "c.go"} {
+		_ = e.handleErr(&d.fakeDriver, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/" + f}})
+	}
+	e.failOn(t, "reminded")
+	err := e.handleErr(&d.fakeDriver, Event{Kind: TurnEnd})
+	if err == nil || !strings.Contains(err.Error(), "falha de teste") || !strings.Contains(err.Error(), "falha do render") {
+		t.Fatalf("erro = %v", err)
+	}
+}
+
+// Fim de sessão que não grava: nem evento, nem leitura.
+func TestEndedFailureRecordsNothing(t *testing.T) {
+	e, d := newFull(t)
+	e.project(t)
+	e.handle(t, &d.fakeDriver, Event{Kind: Started})
+	e.failOn(t, "ended_at")
+	if err := e.handleErr(&d.fakeDriver, Event{Kind: Ended, TranscriptPath: "/t/a.jsonl"}); err == nil {
+		t.Fatal("esperava o erro do fim da sessão")
+	}
+	if evs := e.events(t, domain.EvSessionEnd); len(evs) != 0 {
+		t.Fatalf("eventos = %v", evs)
+	}
+	if len(d.ingested) != 0 {
 		t.Fatalf("leituras = %v", d.ingested)
 	}
 }

@@ -1,7 +1,9 @@
 // Package agentcore é o núcleo de sessões do Cockpit: as regras que valem
 // para qualquer agente (criar, retomar e encerrar a sessão, gravar os eventos
 // de prompt, arquivo e comando, acompanhar branch e worktree, localizar o
-// projeto). Cada agente entra por um Driver, que traduz o hook do agente para
+// projeto) e as respostas ao agente (contexto do início da sessão, avisos de
+// configuração, de contexto e de saída grande, bloqueio por limite de custo,
+// cobrança de handoff no fim do turno). Cada agente entra por um Driver, que traduz o hook do agente para
 // um Event e a Reply do núcleo para a saída que o agente entende.
 package agentcore
 
@@ -99,9 +101,6 @@ type Event struct {
 	// StopActive diz que o fim de turno já é a continuação de um turno
 	// segurado (TurnEnd).
 	StopActive bool
-	// Raw é o payload do hook como o agente o mandou. Temporário: só o
-	// Responder o usa, até as respostas virem para o núcleo.
-	Raw json.RawMessage
 }
 
 // Reply é a resposta normalizada ao hook; a vazia é "nada a dizer".

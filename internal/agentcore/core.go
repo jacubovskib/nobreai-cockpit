@@ -14,8 +14,8 @@ import (
 )
 
 // Driver é o que cada agente implementa: o tradutor do hook e o formatador
-// da resposta. As capacidades opcionais (Router, Ingester, Responder) são
-// descobertas por asserção de tipo.
+// da resposta. As capacidades opcionais (Router, Ingester, Noter, Memories,
+// Guide, SpendUnit) são descobertas por asserção de tipo.
 type Driver interface {
 	Name() string
 	// Translate traduz o evento event com o payload bruto do agente. event
@@ -40,12 +40,38 @@ type Ingester interface {
 	Ingest(sess domain.Session, ev Event)
 }
 
-// Responder é TEMPORÁRIO: as respostas (contexto do início da sessão, avisos,
-// limites, fim de turno) ainda são montadas pelo driver e vêm para o
-// núcleo na tarefa seguinte, que apaga esta interface. O núcleo o
-// chama depois de gravar o que é dele, na mesma ordem do adaptador antigo.
-type Responder interface {
-	Respond(c *Core, sess domain.Session, ev Event) (Reply, error)
+// Noter é opcional: textos que só o driver conhece para o contexto do
+// agente (p.ex. o aviso da sessão filha de uma conversa aberta em duas
+// janelas). Vazio é nada a dizer.
+type Noter interface {
+	// StartNote entra no contexto do início da sessão registrada, logo
+	// depois das instruções (e das memórias), antes do resto.
+	StartNote(sess domain.Session) string
+	// PromptNote abre o contexto da resposta ao prompt. Roda a cada prompt,
+	// com ou sem captura, antes das regras do núcleo: o driver pode registrar
+	// ali o que for só dele.
+	PromptNote(sess domain.Session, ev Event) string
+}
+
+// Memories é opcional: o bloco de memórias do projeto da sessão, com no
+// máximo room caracteres ("" sem memórias ou sem espaço), que entra no início
+// da sessão com captura completa logo depois das instruções.
+type Memories interface {
+	MemoriesBlock(sess domain.Session, set domain.Settings, room int) string
+}
+
+// Guide é opcional: como o agente chama as instruções do nobre que o Cockpit
+// instala nele, já com o artigo ("a <tipo> <nome>"), citadas no aviso de
+// repositório não cadastrado como " (veja <GuideName>)". Sem ele, o aviso não
+// cita guia.
+type Guide interface {
+	GuideName() string
+}
+
+// SpendUnit é opcional: o driver que mede o gasto em créditos
+// (SpendsCredits true) não é bloqueado pelos limites, que são em dólares.
+type SpendUnit interface {
+	SpendsCredits() bool
 }
 
 // Core aplica as regras de sessão do Cockpit aos eventos de um driver.
@@ -92,7 +118,7 @@ func (c *Core) Handle(_ context.Context, h adapter.HookCall) (adapter.HookReply,
 		return adapter.HookReply{}, err
 	}
 	if ev.ProviderSessionID == "" {
-		return adapter.HookReply{}, errors.New("payload do hook sem session_id")
+		return adapter.HookReply{}, errors.New("hook sem id de sessão")
 	}
 	ev.Agent, ev.PID, ev.Env = c.d.Name(), h.AgentPID, h.Env
 	if ev.At.IsZero() {
@@ -108,38 +134,39 @@ func (c *Core) Handle(_ context.Context, h adapter.HookCall) (adapter.HookReply,
 	reply, err := c.apply(sess, ev)
 	out, rerr := c.d.Render(ev, reply)
 	if rerr != nil {
-		return adapter.HookReply{}, rerr
+		// O erro da regra, se houve, não some atrás do da formatação.
+		return adapter.HookReply{}, errors.Join(err, rerr)
 	}
 	return out, err
 }
 
-// apply roda as regras do evento. Started grava o início antes da resposta;
-// Prompt e ToolAfter gravam depois dela (os avisos olham o estado de antes).
+// apply roda as regras do evento e monta a resposta. Started grava o início
+// antes da resposta; Prompt e ToolAfter gravam depois dela (os avisos olham o
+// estado de antes). TurnEnd lê o histórico mesmo quando a resposta falha.
 func (c *Core) apply(sess domain.Session, ev Event) (Reply, error) {
 	switch ev.Kind {
 	case Started:
 		c.Event(sess.ID, domain.EvSessionStart, map[string]any{"source": ev.Source}, ev.At)
-		return c.respond(sess, ev)
+		return c.sessionStart(sess, ev)
 	case Prompt:
-		r, err := c.respond(sess, ev)
+		r := Reply{Context: []string{c.promptNote(sess, ev), c.noticeText(sess, ev), c.ContextWarning(sess, ev)}}
 		if sess.FullCapture {
 			c.Event(sess.ID, domain.EvPrompt, map[string]any{"text": ev.Prompt}, ev.At)
 		} else {
 			c.publish("sessions") // última atividade mudou
 		}
-		return r, err
+		return r, nil
 	case ToolBefore:
-		return c.respond(sess, ev)
+		return c.toolBefore(sess, ev)
 	case ToolAfter:
-		r, err := c.respond(sess, ev)
+		r := Reply{Context: []string{c.noticeText(sess, ev), c.bigOutputWarning(sess, ev)}}
+		var err error
 		if sess.FullCapture {
-			if rerr := c.recordTool(sess, ev); err == nil {
-				err = rerr
-			}
+			err = c.recordTool(sess, ev)
 		}
 		return r, err
 	case TurnEnd:
-		r, err := c.respond(sess, ev)
+		r, err := c.turnEnd(sess, ev)
 		c.ingest(sess, ev)
 		return r, err
 	case Ended:
@@ -149,11 +176,11 @@ func (c *Core) apply(sess domain.Session, ev Event) (Reply, error) {
 	return Reply{}, nil
 }
 
-func (c *Core) respond(sess domain.Session, ev Event) (Reply, error) {
-	if r, ok := c.d.(Responder); ok {
-		return r.Respond(c, sess, ev)
+func (c *Core) promptNote(sess domain.Session, ev Event) string {
+	if n, ok := c.d.(Noter); ok {
+		return n.PromptNote(sess, ev)
 	}
-	return Reply{}, nil
+	return ""
 }
 
 func (c *Core) ingest(sess domain.Session, ev Event) {
