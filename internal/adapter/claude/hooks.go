@@ -254,6 +254,13 @@ func (a *Adapter) createChild(main domain.Session, p payload, pid int, event str
 		PID: pid, ProjectID: main.ProjectID, FullCapture: main.FullCapture, Cwd: main.Cwd, Branch: main.Branch,
 		GitHead: main.GitHead, Worktree: main.Worktree, WorktreeLinked: main.WorktreeLinked, TranscriptPath: tp,
 		StartedAt: now, LastEventAt: now}
+	// A outra janela pode estar noutro diretório (outro worktree): a filha
+	// nasce no cwd do próprio hook, como uma sessão nova. Hook de subagente
+	// manda o cwd do worktree dele e não conta. O projeto é o da principal.
+	if p.AgentID == "" && p.Cwd != "" && p.Cwd != main.Cwd {
+		l := a.locate(p.Cwd)
+		x.Cwd, x.Branch, x.GitHead, x.Worktree, x.WorktreeLinked = l.Cwd, l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
+	}
 	// Dois hooks simultâneos do mesmo processo: o segundo é ignorado e a
 	// releitura devolve a que ficou.
 	if err := a.st.StartSession(x); err != nil {
@@ -271,7 +278,6 @@ func (a *Adapter) createChild(main domain.Session, p payload, pid int, event str
 	if err != nil {
 		return sess, err
 	}
-	// A outra janela pode estar noutro diretório (outro worktree).
 	return a.followMain(sess, p, event)
 }
 

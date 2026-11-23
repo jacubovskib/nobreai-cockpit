@@ -390,7 +390,7 @@ func TestHandoffEndToEnd(t *testing.T) {
 	reconcile := func() {
 		set, err := e.st.GetSettings()
 		must(t, err)
-		_, err = board.Reconcile(e.st, e.procDir, e.clock(), set)
+		_, err = board.Reconcile(e.st, board.Liveness{ProcRoot: e.procDir}, e.clock(), set)
 		must(t, err)
 	}
 	reconcile()
