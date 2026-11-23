@@ -101,3 +101,16 @@ describe('kinds do RTK', () => {
     expect(await keysFor('integration')).toContain('rtk')
   })
 })
+
+describe('medidor de contexto ao vivo', () => {
+  it('usage, sessions e config invalidam context-live e session-context', async () => {
+    const { invalidateForKind } = await import('./useStream')
+    for (const kind of ['usage', 'sessions', 'config']) {
+      const qc = new QueryClient()
+      const spy = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue()
+      invalidateForKind(qc, kind)
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0])
+      expect(keys).toEqual(expect.arrayContaining(['context-live', 'session-context']))
+    }
+  })
+})

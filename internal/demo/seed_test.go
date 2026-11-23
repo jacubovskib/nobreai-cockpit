@@ -205,7 +205,7 @@ func TestSeedLiveSessionsSurviveReconcile(t *testing.T) {
 	set, _ := st.GetSettings()
 	// Duas passadas, a segunda depois da carência: nada pode ser encerrado.
 	for _, at := range []time.Time{now, now.Add(time.Hour)} {
-		if _, err := board.Reconcile(st, "/proc", at, set); err != nil {
+		if _, err := board.Reconcile(st, board.Liveness{ProcRoot: "/proc"}, at, set); err != nil {
 			t.Fatal(err)
 		}
 	}

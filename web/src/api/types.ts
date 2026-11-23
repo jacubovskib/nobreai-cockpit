@@ -129,6 +129,44 @@ export interface Settings {
   agent_creates_cards: boolean
   inject_paused_cards: boolean
   memory_budget_tokens: number
+  context_warn_pcts: number[]
+  big_output_tokens: number
+  big_output_max: number
+  agent_context_warnings: boolean
+  model_windows: Record<string, number>
+}
+
+// GET /api/sessions/{id}/context
+export interface ContextLive {
+  tokens: number
+  model: string
+  window_tokens: number
+  window_estimated: boolean
+  pct: number
+  growth_per_turn: number
+  turns_to_limit: number
+  at_limit: boolean
+  turns_since_compact: number
+  compactions: number
+  cache_hit_pct: number
+  recent_rewrite: { tokens: number; at: string } | null
+  ttl: string
+  idle_sec: number
+  idle_over_ttl: boolean
+  top_outputs: { tool: string; key: string; tokens: number; at: string }[]
+}
+
+// GET /api/context/live (item)
+export interface LiveContextSummary {
+  id: string
+  card_key: string
+  card_title: string
+  tokens: number
+  window_tokens: number
+  pct: number
+  over80: boolean
+  rewrite: boolean
+  idle_over_ttl: boolean
 }
 
 export interface ReadinessItem { rule: string; label: string; ok: boolean }

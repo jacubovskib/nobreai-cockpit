@@ -140,7 +140,7 @@ func TestReconcileChangedWhenMarkFails(t *testing.T) {
 	_, x := liveCard(t, st, 0) // sem PID: encerra por inatividade
 	failHandoffMark(t, st)
 	set, _ := st.GetSettings()
-	changed, err := Reconcile(st, fakeProc(t), t0.Add(IdleNoPID+time.Minute), set)
+	changed, err := Reconcile(st, Liveness{ProcRoot: fakeProc(t)}, t0.Add(IdleNoPID+time.Minute), set)
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}

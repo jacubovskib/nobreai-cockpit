@@ -384,3 +384,38 @@ func TestUserPromptSubmit_NoChildLineAfterSessionStart(t *testing.T) {
 		t.Fatalf("prompt repetiu a linha: %q", got)
 	}
 }
+
+// A filha nasce num hook que não é de prompt (o daemon voltou com a conversa
+// aberta noutro worktree): já fica no diretório dela, não no da principal.
+func TestSession_ChildBornInOwnCwd(t *testing.T) {
+	e, _ := sharedEnv(t)
+	e.alive[300] = true
+	e.now = t0.Add(2 * time.Minute)
+	e.call(t, "post_tool_use_edit", withPID(300), with("cwd", "/w/api-outro"))
+	child, err := e.st.GetSession(childID(300))
+	if err != nil {
+		t.Fatalf("filha não criada: %v", err)
+	}
+	if child.Cwd != "/w/api-outro" || child.Worktree == "/w/api" || child.WorktreeLinked {
+		t.Fatalf("filha não ficou no próprio diretório: %+v", child)
+	}
+	if m, _ := e.st.GetSession(sessID); m.Cwd != "/w/api" {
+		t.Fatalf("principal mudou de diretório: %+v", m)
+	}
+}
+
+// Hook de subagente da outra janela (cwd do worktree do subagente) não
+// define o diretório da filha.
+func TestSession_ChildBornFromSubagentKeepsMainCwd(t *testing.T) {
+	e, _ := sharedEnv(t)
+	e.alive[300] = true
+	e.now = t0.Add(2 * time.Minute)
+	e.call(t, "post_tool_use_edit", withPID(300), with("cwd", "/w/sub-wt"), with("agent_id", "a1"))
+	child, err := e.st.GetSession(childID(300))
+	if err != nil {
+		t.Fatalf("filha não criada: %v", err)
+	}
+	if child.Cwd != "/w/api" || child.Worktree != "/w/api" {
+		t.Fatalf("filha seguiu o cwd do subagente: %+v", child)
+	}
+}

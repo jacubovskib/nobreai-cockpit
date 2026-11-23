@@ -10,7 +10,9 @@ import (
 // ContextCursor devolve até onde o transcript path da sessão já foi lido para
 // a medição de contexto (tool_offset) e o estado do leitor: LastTurn e
 // LastMessageID vêm do último turno gravado do path, Segment da linha de
-// transcript_offsets. Sem nada gravado: off 0 e {LastTurn:-1}.
+// transcript_offsets. Sem nada gravado: off 0 e {LastTurn:-1}. Com off 0 o
+// estado é sempre {LastTurn:-1}, mesmo com turnos gravados (releitura depois
+// de ResetContextCursors): a leitura recomeça a numeração do zero.
 func (s *Store) ContextCursor(sessionID, path string) (off int64, st usage.ContextState, err error) {
 	st = usage.ContextState{LastTurn: -1}
 	err = s.DB.QueryRow(`SELECT tool_offset, segment FROM transcript_offsets WHERE session_id=? AND path=?`,
@@ -20,6 +22,9 @@ func (s *Store) ContextCursor(sessionID, path string) (off int64, st usage.Conte
 	}
 	if err != nil {
 		return 0, usage.ContextState{LastTurn: -1}, err
+	}
+	if off == 0 {
+		return 0, usage.ContextState{LastTurn: -1}, nil
 	}
 	err = s.DB.QueryRow(`SELECT turn, message_id FROM context_turns WHERE session_id=? AND path=? ORDER BY turn DESC LIMIT 1`,
 		sessionID, path).Scan(&st.LastTurn, &st.LastMessageID)
@@ -41,7 +46,22 @@ func (s *Store) ContextCursor(sessionID, path string) (off int64, st usage.Conte
 // tool/key só mudam se o novo não for vazio; in_tokens só se o novo for > 0;
 // bytes/tokens/is_error só se o registro tiver Result; turn/segment/at ficam
 // os da primeira gravação.
+//
+// Sem atribuição por janela: tudo fica com a principal (ver SaveContextWindows).
 func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.ToolOutput, turns []usage.ContextTurn, next int64, st usage.ContextState) error {
+	return s.SaveContextWindows(sessionID, path, reset, outs, turns, next, st, ContextWindows{})
+}
+
+// SaveContextWindows é SaveContext com a atribuição por janela da leitura, na
+// mesma transação: saídas e turnos gravam window_session_id pelo uuid da linha
+// que os criou (w.ByUUID; ausente = principal, ""), as linhas de janela filha
+// e as raízes da principal (w.MainRoots, com o id da principal) vão para
+// window_lines e os prompts casados ficam marcados como usados. A
+// janela é sempre a da leitura mais recente (é determinística: a raiz do galho
+// fica em window_lines). As compactações (w.Compactions) vão para
+// context_compactions por (session_id, path, segment). reset=true apaga
+// também as window_lines e as compactações do path.
+func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []usage.ToolOutput, turns []usage.ContextTurn, next int64, st usage.ContextState, w ContextWindows) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
@@ -54,22 +74,55 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 		if _, err := tx.Exec(`DELETE FROM context_turns WHERE session_id=? AND path=?`, sessionID, path); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(`DELETE FROM window_lines WHERE session_id=? AND path=?`, sessionID, path); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM context_compactions WHERE session_id=? AND path=?`, sessionID, path); err != nil {
+			return err
+		}
+	}
+	for seg, win := range w.Compactions {
+		if _, err := tx.Exec(`INSERT INTO context_compactions (session_id, path, segment, window_session_id) VALUES (?,?,?,?)
+			ON CONFLICT(session_id, path, segment) DO UPDATE SET window_session_id=excluded.window_session_id`,
+			sessionID, path, seg, win); err != nil {
+			return err
+		}
+	}
+	lines := make(map[string]string, len(w.ByUUID)+len(w.MainRoots))
+	for uuid, win := range w.ByUUID {
+		lines[uuid] = win
+	}
+	for _, uuid := range w.MainRoots {
+		lines[uuid] = sessionID
+	}
+	for uuid, win := range lines {
+		if _, err := tx.Exec(`INSERT INTO window_lines (session_id, path, uuid, window_session_id) VALUES (?,?,?,?)
+			ON CONFLICT(session_id, path, uuid) DO UPDATE SET window_session_id=excluded.window_session_id`,
+			sessionID, path, uuid, win); err != nil {
+			return err
+		}
+	}
+	for _, id := range w.UsedPrompts {
+		if _, err := tx.Exec(`UPDATE window_prompts SET used=1 WHERE id=?`, id); err != nil {
+			return err
+		}
 	}
 	for _, o := range outs {
 		res := 0
 		if o.Result {
 			res = 1
 		}
-		if _, err := tx.Exec(`INSERT INTO tool_outputs (session_id, path, item_id, tool, key, bytes, tokens, in_tokens, turn, segment, at, is_error)
-			VALUES (?,?,?, COALESCE(NULLIF(?,''),'?'), COALESCE(NULLIF(?,''),'?'), ?,?,?,?,?,?,?)
+		if _, err := tx.Exec(`INSERT INTO tool_outputs (session_id, path, item_id, tool, key, bytes, tokens, in_tokens, turn, segment, at, is_error, window_session_id)
+			VALUES (?,?,?, COALESCE(NULLIF(?,''),'?'), COALESCE(NULLIF(?,''),'?'), ?,?,?,?,?,?,?,?)
 			ON CONFLICT(session_id, item_id) DO UPDATE SET
+			  window_session_id = excluded.window_session_id,
 			  tool = COALESCE(NULLIF(?,''), tool_outputs.tool),
 			  key = COALESCE(NULLIF(?,''), tool_outputs.key),
 			  in_tokens = CASE WHEN ? > 0 THEN ? ELSE tool_outputs.in_tokens END,
 			  bytes = CASE WHEN ?=1 THEN ? ELSE tool_outputs.bytes END,
 			  tokens = CASE WHEN ?=1 THEN ? ELSE tool_outputs.tokens END,
 			  is_error = CASE WHEN ?=1 THEN ? ELSE tool_outputs.is_error END`,
-			sessionID, path, o.ItemID, o.Tool, o.Key, o.Bytes, o.Tokens, o.InTokens, o.Turn, o.Segment, fmtTime(o.At), o.IsError,
+			sessionID, path, o.ItemID, o.Tool, o.Key, o.Bytes, o.Tokens, o.InTokens, o.Turn, o.Segment, fmtTime(o.At), o.IsError, w.ByUUID[o.UUID],
 			o.Tool, o.Key,
 			o.InTokens, o.InTokens,
 			res, o.Bytes,
@@ -79,11 +132,13 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 		}
 	}
 	for _, t := range turns {
-		if _, err := tx.Exec(`INSERT INTO context_turns (session_id, path, turn, segment, message_id, at, tokens)
-			VALUES (?,?,?,?,?,?,?)
+		if _, err := tx.Exec(`INSERT INTO context_turns (session_id, path, turn, segment, message_id, at, tokens, input, cache_read, cache_write, ttl, window_session_id)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(session_id, path, turn) DO UPDATE SET segment=excluded.segment,
-			  message_id=excluded.message_id, at=excluded.at, tokens=excluded.tokens`,
-			sessionID, path, t.Turn, t.Segment, t.MessageID, fmtTime(t.At), t.Tokens); err != nil {
+			  message_id=excluded.message_id, at=excluded.at, tokens=excluded.tokens,
+			  input=excluded.input, cache_read=excluded.cache_read, cache_write=excluded.cache_write, ttl=excluded.ttl,
+			  window_session_id=excluded.window_session_id`,
+			sessionID, path, t.Turn, t.Segment, t.MessageID, fmtTime(t.At), t.Tokens, t.Input, t.CacheRead, t.CacheWrite, t.TTL, w.ByUUID[t.UUID]); err != nil {
 			return err
 		}
 	}
@@ -94,6 +149,17 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 		return err
 	}
 	return tx.Commit()
+}
+
+// ResetContextCursors volta o cursor de contexto de todos os transcripts ao
+// começo (tool_offset e segment 0) para a próxima leitura refazer a medição.
+// Nada é apagado: a releitura faz upsert nas mesmas chaves (turnos por
+// session_id,path,turn, com a numeração determinística do leitor; saídas por
+// session_id,item_id) e preenche as colunas novas. Linhas de transcript que
+// não existe mais ficam como estão. O offset de uso não muda.
+func (s *Store) ResetContextCursors() error {
+	_, err := s.DB.Exec(`UPDATE transcript_offsets SET tool_offset=0, segment=0`)
+	return err
 }
 
 // ClaudeTranscripts devolve o transcript_path de cada sessão do Claude que

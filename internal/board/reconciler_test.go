@@ -71,7 +71,7 @@ func TestReconcileWaitsGrace(t *testing.T) {
 	set := domain.DefaultSettings() // GraceMin = 15
 	root := fakeProc(t)             // PID 4242 não existe
 
-	changed, err := Reconcile(st, root, t0, set)
+	changed, err := Reconcile(st, Liveness{ProcRoot: root}, t0, set)
 	if err != nil || !changed {
 		t.Fatalf("1ª passada: changed=%v err=%v", changed, err)
 	}
@@ -81,7 +81,7 @@ func TestReconcileWaitsGrace(t *testing.T) {
 	}
 
 	// Morte + 10 min: ainda dentro da carência; nada muda, pid_dead_at é mantido.
-	changed, err = Reconcile(st, root, t0.Add(10*time.Minute), set)
+	changed, err = Reconcile(st, Liveness{ProcRoot: root}, t0.Add(10*time.Minute), set)
 	if err != nil || changed {
 		t.Fatalf("+10min: changed=%v err=%v", changed, err)
 	}
@@ -94,7 +94,7 @@ func TestReconcileWaitsGrace(t *testing.T) {
 	}
 
 	// Morte + 16 min: encerra a sessão e pausa o card.
-	changed, err = Reconcile(st, root, t0.Add(16*time.Minute), set)
+	changed, err = Reconcile(st, Liveness{ProcRoot: root}, t0.Add(16*time.Minute), set)
 	if err != nil || !changed {
 		t.Fatalf("+16min: changed=%v err=%v", changed, err)
 	}
@@ -110,7 +110,7 @@ func TestReconcileWaitsGrace(t *testing.T) {
 func TestReconcileKeepsLive(t *testing.T) {
 	st := newStore(t)
 	c, x := liveCard(t, st, 4242)
-	changed, err := Reconcile(st, fakeProc(t, 4242), t0.Add(time.Hour), domain.DefaultSettings())
+	changed, err := Reconcile(st, Liveness{ProcRoot: fakeProc(t, 4242)}, t0.Add(time.Hour), domain.DefaultSettings())
 	if err != nil || changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
@@ -127,7 +127,7 @@ func TestRunReconcilerPublishesAndStops(t *testing.T) {
 	changes := make(chan struct{}, 4)
 	done := make(chan struct{})
 	go func() {
-		RunReconciler(ctx, st, fakeProc(t), 5*time.Millisecond, func() time.Time { return t0 },
+		RunReconciler(ctx, st, Liveness{ProcRoot: fakeProc(t)}, 5*time.Millisecond, func() time.Time { return t0 },
 			func() { changes <- struct{}{} }, t.Logf)
 		close(done)
 	}()
@@ -148,11 +148,11 @@ func TestReconcileRevivedPIDResetsGrace(t *testing.T) {
 	st := newStore(t)
 	c, x := liveCard(t, st, 4242)
 	set := domain.DefaultSettings()
-	if _, err := Reconcile(st, fakeProc(t), t0, set); err != nil {
+	if _, err := Reconcile(st, Liveness{ProcRoot: fakeProc(t)}, t0, set); err != nil {
 		t.Fatal(err)
 	}
 	// PID volta: estado de morte some.
-	changed, err := Reconcile(st, fakeProc(t, 4242), t0.Add(5*time.Minute), set)
+	changed, err := Reconcile(st, Liveness{ProcRoot: fakeProc(t, 4242)}, t0.Add(5*time.Minute), set)
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
@@ -161,13 +161,13 @@ func TestReconcileRevivedPIDResetsGrace(t *testing.T) {
 	}
 	// Nova morte em +20 min reinicia a carência: +30 min ainda não encerra, +36 sim.
 	root := fakeProc(t)
-	if _, err := Reconcile(st, root, t0.Add(20*time.Minute), set); err != nil {
+	if _, err := Reconcile(st, Liveness{ProcRoot: root}, t0.Add(20*time.Minute), set); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Reconcile(st, root, t0.Add(30*time.Minute), set); err != nil || column(t, st, c.Key) != domain.EmAndamento {
+	if _, err := Reconcile(st, Liveness{ProcRoot: root}, t0.Add(30*time.Minute), set); err != nil || column(t, st, c.Key) != domain.EmAndamento {
 		t.Fatalf("encerrou cedo (err=%v)", err)
 	}
-	if _, err := Reconcile(st, root, t0.Add(36*time.Minute), set); err != nil || column(t, st, c.Key) != domain.Pausado {
+	if _, err := Reconcile(st, Liveness{ProcRoot: root}, t0.Add(36*time.Minute), set); err != nil || column(t, st, c.Key) != domain.Pausado {
 		t.Fatalf("não encerrou (err=%v)", err)
 	}
 }
@@ -183,7 +183,7 @@ func TestReconcileContinuesPastSessionError(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := Reconcile(st, fakeProc(t), t0, domain.DefaultSettings())
+	changed, err := Reconcile(st, Liveness{ProcRoot: fakeProc(t)}, t0, domain.DefaultSettings())
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
@@ -203,14 +203,14 @@ func TestReconcileEndsIdleSessionWithoutPID(t *testing.T) {
 	set := domain.DefaultSettings()
 
 	// Sem PID não há processo para vigiar: até 2 h sem eventos, segue aberta.
-	changed, err := Reconcile(st, root, t0.Add(2*time.Hour), set)
+	changed, err := Reconcile(st, Liveness{ProcRoot: root}, t0.Add(2*time.Hour), set)
 	if err != nil || changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
 	if got, _ := st.GetSession(x.ID); got.EndedAt != nil || got.PIDDeadAt != nil {
 		t.Fatalf("sessão = %+v", got)
 	}
-	changed, err = Reconcile(st, root, t0.Add(2*time.Hour+time.Minute), set)
+	changed, err = Reconcile(st, Liveness{ProcRoot: root}, t0.Add(2*time.Hour+time.Minute), set)
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
@@ -229,14 +229,67 @@ func TestReconcilerMarksIncompleteOnDeadProcess(t *testing.T) {
 	c, _ := liveCard(t, st, 4242)
 	set, _ := st.GetSettings()
 	root := fakeProc(t)
-	if _, err := Reconcile(st, root, t0, set); err != nil {
+	if _, err := Reconcile(st, Liveness{ProcRoot: root}, t0, set); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Reconcile(st, root, t0.Add(16*time.Minute), set); err != nil {
+	if _, err := Reconcile(st, Liveness{ProcRoot: root}, t0.Add(16*time.Minute), set); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := st.GetCard(c.Key)
 	if got.Column != domain.Pausado || !got.HandoffIncomplete {
 		t.Fatalf("card = %+v", got)
+	}
+}
+
+// writeComm grava o nome do processo pid em root (como /proc/<pid>/comm).
+func writeComm(t *testing.T, root string, pid int, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, strconv.Itoa(pid), "comm"), []byte(name+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// PID reaproveitado por outro programa (comm diferente do agente) conta como
+// processo morto; com o nome do agente, segue vivo.
+func TestReconcileRecycledPIDIsDead(t *testing.T) {
+	st := newStore(t)
+	c, x := liveCard(t, st, 4242)
+	root := fakeProc(t, 4242)
+	live := Liveness{ProcRoot: root, Names: map[string][]string{"claude": {"claude"}}}
+	set := domain.DefaultSettings()
+
+	writeComm(t, root, 4242, "claude")
+	if changed, err := Reconcile(st, live, t0, set); err != nil || changed {
+		t.Fatalf("com o agente vivo: changed=%v err=%v", changed, err)
+	}
+
+	writeComm(t, root, 4242, "bash")
+	if _, err := Reconcile(st, live, t0.Add(time.Minute), set); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetSession(x.ID)
+	if got.PIDDeadAt == nil {
+		t.Fatalf("PID reaproveitado não marcou carência: %+v", got)
+	}
+	grace := time.Duration(set.GraceMin)*time.Minute + 2*time.Minute
+	if _, err := Reconcile(st, live, t0.Add(grace), set); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = st.GetSession(x.ID); got.EndedAt == nil || column(t, st, c.Key) != domain.Pausado {
+		t.Fatalf("sessão = %+v card = %s", got, column(t, st, c.Key))
+	}
+}
+
+// Agente fora do mapa de nomes (ou mapa vazio): basta o PID existir.
+func TestReconcileUnknownAgentOnlyNeedsPID(t *testing.T) {
+	st := newStore(t)
+	_, x := liveCard(t, st, 4242)
+	root := fakeProc(t, 4242)
+	writeComm(t, root, 4242, "bash")
+	if _, err := Reconcile(st, Liveness{ProcRoot: root, Names: map[string][]string{"codex": {"codex"}}}, t0, domain.DefaultSettings()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.GetSession(x.ID); got.PIDDeadAt != nil {
+		t.Fatalf("sessão marcada como morta: %+v", got)
 	}
 }

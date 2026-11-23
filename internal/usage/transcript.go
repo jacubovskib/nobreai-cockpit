@@ -35,6 +35,14 @@ type transcriptLine struct {
 // do arquivo, para os tokens não se perderem. Mensagens sem nenhum token ficam
 // de fora.
 func ParseClaudeTranscript(path string, offset int64) ([]domain.UsageRow, int64, error) {
+	return ParseClaudeTranscriptUntil(path, offset, -1)
+}
+
+// ParseClaudeTranscriptUntil é ParseClaudeTranscript lendo só até o byte limit
+// (exclusivo; limit < 0 = até o fim): a atribuição por janela lê o uso só até
+// onde a leitura de contexto já atribuiu. limit menor ou igual ao offset (depois
+// do recomeço por truncamento) não lê nada.
+func ParseClaudeTranscriptUntil(path string, offset, limit int64) ([]domain.UsageRow, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, offset, err
@@ -50,7 +58,14 @@ func ParseClaudeTranscript(path string, offset int64) ([]domain.UsageRow, int64,
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return nil, offset, err
 	}
-	data, err := io.ReadAll(f)
+	var src io.Reader = f
+	if limit >= 0 {
+		if limit <= offset {
+			return nil, offset, nil
+		}
+		src = io.LimitReader(f, limit-offset)
+	}
+	data, err := io.ReadAll(src)
 	if err != nil {
 		return nil, offset, err
 	}

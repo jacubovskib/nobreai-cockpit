@@ -192,11 +192,17 @@ func run(dbPath string, seedDemo bool) error {
 	// sessões quando o ctx termina; o Wait do adaptador espera).
 	claudeAdapter.StartBackfill(ctx)
 
-	// Reconciliação a cada 30 s: encerra sessões de processos que morreram.
+	// Reconciliação a cada 30 s: encerra sessões de processos que morreram (ou
+	// cujo PID passou para outro programa). A demonstração usa o PID do próprio
+	// nobred nas sessões vivas: lá basta o PID existir.
+	live := board.Liveness{ProcRoot: "/proc"}
+	if !seedDemo {
+		live.Names = map[string][]string{claudeAdapter.Name(): claudeAdapter.ProcessNames()}
+	}
 	recDone := make(chan struct{})
 	go func() {
 		defer close(recDone)
-		board.RunReconciler(ctx, st, "/proc", 30*time.Second, time.Now,
+		board.RunReconciler(ctx, st, live, 30*time.Second, time.Now,
 			func() { hub.Publish("cards"); hub.Publish("sessions") }, log.Printf)
 	}()
 	// Em qualquer retorno (inclusive falha precoce do servidor) o reconciliador

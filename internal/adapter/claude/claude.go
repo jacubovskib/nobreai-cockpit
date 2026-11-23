@@ -25,6 +25,10 @@ type Adapter struct {
 	// sessão, valor: *sync.Mutex); wg acompanha as leituras em andamento.
 	ingest sync.Map
 	wg     sync.WaitGroup
+	// readerMu: leituras de transcript (readLocked) tomam RLock; a troca de
+	// versão do leitor toma Lock, para nenhuma leitura em andamento gravar um
+	// cursor antigo por cima do cursor que voltou ao começo.
+	readerMu sync.RWMutex
 	// repoRoots guarda o topo do repositório de cada diretório de projeto
 	// (chave e valor: string), para traduzir caminhos de worktrees.
 	repoRoots sync.Map
@@ -33,10 +37,6 @@ type Adapter struct {
 	// branch que a sessão tinha antes. Só em memória: perder a marca num
 	// restart só deixa o card onde estava.
 	outsideSwitch sync.Map
-	// childUnwarned guarda as sessões filhas criadas fora do SessionStart que
-	// ainda não receberam a linha da filha (chave: ID da sessão). Só em
-	// memória: perder a marca num restart só deixa de mandar a linha.
-	childUnwarned sync.Map
 	// alive diz se o processo do agente com esse PID ainda existe (decide
 	// entre sessão filha e retomada); padrão: /proc, com o nome do processo
 	// do Claude (um PID reaproveitado por outro programa não conta).

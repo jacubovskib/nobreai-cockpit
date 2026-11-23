@@ -242,11 +242,12 @@ func (s *Store) ProjectsSessionsSince(projectIDs []int64, since time.Time) ([]do
 
 // SessionsForCard lista as sessões do card, da mais antiga para a mais nova:
 // as ligadas a ele agora e as que deixaram uso ou eventos nele (histórico de
-// uma sessão que trocou de card ou foi deslocada).
+// uma sessão que trocou de card ou foi deslocada). O uso conta para a janela
+// dona (a filha grava o uso com o id da principal).
 func (s *Store) SessionsForCard(cardID int64) ([]domain.Session, error) {
 	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions
 		WHERE card_id=?
-			OR id IN (SELECT session_id FROM usage WHERE card_id=?)
+			OR id IN (SELECT COALESCE(NULLIF(window_session_id,''), session_id) FROM usage WHERE card_id=?)
 			OR id IN (SELECT session_id FROM events WHERE card_id=?)
 		ORDER BY julianday(started_at), id`, cardID, cardID, cardID)
 }
@@ -362,11 +363,14 @@ func attachSessionTx(tx *sql.Tx, sessionID, cardKey string, force bool) error {
 		}
 	}
 	// Só os eventos e o uso ainda sem card vêm junto: o que a sessão fez num
-	// card anterior continua no histórico (e no custo) dele.
+	// card anterior continua no histórico (e no custo) dele. O uso é o da
+	// janela: a filha grava o uso com o id da principal (window_session_id =
+	// filha), e o da principal é o seu sem janela filha.
 	if _, err := tx.Exec(`UPDATE events SET card_id=? WHERE session_id=? AND card_id IS NULL`, cardID, sessionID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE usage SET card_id=? WHERE session_id=? AND card_id IS NULL`, cardID, sessionID); err != nil {
+	if _, err := tx.Exec(`UPDATE usage SET card_id=? WHERE card_id IS NULL
+		AND ((session_id=? AND window_session_id='') OR window_session_id=?)`, cardID, sessionID, sessionID); err != nil {
 		return err
 	}
 	if err := moveCardTx(tx, cardID, domain.SessionAttached); err != nil {
@@ -683,4 +687,39 @@ func (s *Store) AdoptSession(id string, projectID int64) error {
 		return err
 	}
 	return requireAffected(res)
+}
+
+// DetachSessionCard desliga o card da sessão (card_id NULL; a sessão segue
+// viva, sem card) e, se o card fica sem outro dono vivo, aplica a regra de
+// sessão encerrada (em_andamento vira pausado), tudo numa transação. Não mexe
+// nos demais campos do card. ErrNotFound se a sessão não existe; sem card é
+// no-op.
+func (s *Store) DetachSessionCard(sessionID string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var card sql.NullInt64
+	if err := tx.QueryRow(`SELECT card_id FROM sessions WHERE id=?`, sessionID).Scan(&card); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if !card.Valid {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE sessions SET card_id=NULL WHERE id=?`, sessionID); err != nil {
+		return err
+	}
+	var live int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE card_id=? AND `+liveCond, card.Int64).Scan(&live); err != nil {
+		return err
+	}
+	if live == 0 {
+		if err := moveCardTx(tx, card.Int64, domain.SessionEnded); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

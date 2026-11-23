@@ -22,7 +22,7 @@ const RULES: [string, string][] = [
 ]
 const NAV = [
   ['agentes', 'Agentes e setup'], ['limites', 'Limites de custo'], ['cards', 'Criação de cards'],
-  ['handoff', 'Pronto para handoff'], ['projetos', 'Projetos'], ['precos', 'Preços e moeda'], ['historico', 'Histórico'],
+  ['handoff', 'Pronto para handoff'], ['contexto', 'Monitor de contexto'], ['projetos', 'Projetos'], ['precos', 'Preços e moeda'], ['historico', 'Histórico'],
 ]
 
 const th: CSSProperties = { padding: '8px 12px', fontWeight: 500 }
@@ -569,6 +569,100 @@ function PriceRow({ model, price, unpriced }: { model: string; price?: Price; un
   )
 }
 
+// ---- Monitor de contexto ----
+// Mesmas regras do servidor (validateContextSettings).
+function ContextMonitor({ settings }: { settings: Settings }) {
+  const save = useSaveSettings(settings)
+  const pcts = settings.context_warn_pcts ?? [60, 80]
+  const [p1, setP1] = useState(String(pcts[0] ?? ''))
+  const [p2, setP2] = useState(String(pcts[1] ?? ''))
+  const [big, setBig] = useState(String(settings.big_output_tokens ?? 15000))
+  const [max, setMax] = useState(String(settings.big_output_max ?? 3))
+  const [warn, setWarn] = useState(settings.agent_context_warnings ?? true)
+  const [bad, setBad] = useState<Error | null>(null)
+  const submit = () => {
+    const a = parseNum(p1)
+    const b = parseNum(p2)
+    const bg = parseNum(big)
+    const mx = parseNum(max)
+    const ok = (n: number) => Number.isInteger(n)
+    if (![a, b].every((n) => ok(n) && n >= 1 && n <= 99) || a >= b) return setBad(new Error('As faixas devem ficar entre 1 e 99, em ordem crescente.'))
+    if (!ok(bg) || bg < 1000) return setBad(new Error('A saída grande deve ter pelo menos 1000 tokens.'))
+    if (!ok(mx) || mx < 0 || mx > 20) return setBad(new Error('O máximo de avisos deve ficar entre 0 e 20.'))
+    setBad(null)
+    save.mutate({ context_warn_pcts: [a, b], big_output_tokens: bg, big_output_max: mx, agent_context_warnings: warn })
+  }
+  return (
+    <Section id="contexto" title="Monitor de contexto" hint="Avisos ao agente quando o contexto da sessão enche ou uma saída de ferramenta fica grande. Nada aqui chama modelo.">
+      <label style={check}>
+        <input type="checkbox" checked={warn} onChange={(e) => setWarn(e.target.checked)} />
+        <span>Avisar o agente</span>
+      </label>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
+        <label style={field}>Primeira faixa (% da janela)
+          <input style={small} inputMode="numeric" value={p1} onChange={(e) => setP1(e.target.value)} />
+        </label>
+        <label style={field}>Segunda faixa (% da janela)
+          <input style={small} inputMode="numeric" value={p2} onChange={(e) => setP2(e.target.value)} />
+        </label>
+        <label style={field}>Saída grande (tokens)
+          <input style={small} inputMode="numeric" value={big} onChange={(e) => setBig(e.target.value)} />
+        </label>
+        <label style={field}>Máximo de avisos de saída por sessão
+          <input style={small} inputMode="numeric" value={max} onChange={(e) => setMax(e.target.value)} />
+        </label>
+      </div>
+      <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} label="Salvar" onSave={submit} />
+    </Section>
+  )
+}
+
+interface WindowRow { model: string; tokens: string }
+
+// Janela de contexto por modelo: o que não está na tabela usa 200 mil (e [1m] no nome, 1 milhão).
+function ModelWindows({ settings }: { settings: Settings }) {
+  const save = useSaveSettings(settings)
+  const [rows, setRows] = useState<WindowRow[]>(() =>
+    Object.entries(settings.model_windows ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([model, n]) => ({ model, tokens: String(n) })),
+  )
+  const [bad, setBad] = useState<Error | null>(null)
+  const edit = (i: number, patch: Partial<WindowRow>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)))
+  const submit = () => {
+    const map: Record<string, number> = {}
+    for (const r of rows) {
+      const m = r.model.trim()
+      const n = parseNum(r.tokens)
+      if (m === '') return setBad(new Error('Informe o nome do modelo em todas as linhas.'))
+      if (m in map) return setBad(new Error(`O modelo ${m} aparece mais de uma vez.`))
+      if (!Number.isInteger(n) || n < 1000) return setBad(new Error(`A janela de ${m} deve ser de pelo menos 1000 tokens.`))
+      map[m] = n
+    }
+    setBad(null)
+    save.mutate({ model_windows: map })
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <h3 style={h2}>Janela de contexto por modelo</h3>
+      <p style={{ ...muted, margin: 0 }}>Tamanho da janela em tokens. Modelo fora da tabela usa 200.000 (ou 1.000.000 com [1m] no nome) e aparece como “janela estimada”.</p>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <label style={field}>Modelo
+            <input style={{ ...input, fontFamily: 'var(--mono)' }} value={r.model} onChange={(e) => edit(i, { model: e.target.value })} />
+          </label>
+          <label style={field}>Janela (tokens)
+            <input style={small} inputMode="numeric" value={r.tokens} onChange={(e) => edit(i, { tokens: e.target.value })} />
+          </label>
+          <button type="button" style={btn} aria-label={`Remover janela de ${r.model || 'modelo novo'}`} onClick={() => setRows((x) => x.filter((_, j) => j !== i))}>Remover</button>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" style={btn} onClick={() => setRows((x) => [...x, { model: '', tokens: '200000' }])}>Adicionar janela</button>
+      </div>
+      <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} label="Salvar janelas" onSave={submit} />
+    </div>
+  )
+}
+
 function Prices({ settings }: { settings: Settings }) {
   const save = useSaveSettings(settings)
   const prices = usePrices().data ?? []
@@ -632,6 +726,7 @@ function Prices({ settings }: { settings: Settings }) {
         </label>
         <button type="submit" style={btn} disabled={newModel.trim() === ''}>Adicionar à tabela</button>
       </form>
+      <ModelWindows settings={settings} />
     </Section>
   )
 }
@@ -660,6 +755,7 @@ export function Config() {
       {limits.data && <Limits limits={limits.data} />}
       {settings.data && <CardCreation settings={settings.data} />}
       {settings.data && <Handoff settings={settings.data} />}
+      {settings.data && <ContextMonitor settings={settings.data} />}
       {projects.data && <Projects projects={projects.data} />}
       {settings.data && <Prices settings={settings.data} />}
       <ConfigLog />

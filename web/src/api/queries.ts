@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { get, post } from './client'
-import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits, ContextTop, ContextDetail, RtkStatus, RtkApplied, RtkSavings, Memory, MemoryPreview } from './types'
+import type { AgentDetection, CardDetail, CardSummary, Limit, Price, Project, Prompt, Health, Overview, ProjectWorktrees, PromptEvent, WorktreeDetail, Settings, SessionWithUsage, Total, PlanLimits, ContextTop, ContextDetail, ContextLive, LiveContextSummary, RtkStatus, RtkApplied, RtkSavings, Memory, MemoryPreview } from './types'
 
 export const useHealth = () =>
   useQuery({ queryKey: ['health'], queryFn: () => get<Health>('/api/health'), refetchInterval: 15000, retry: false })
@@ -139,4 +139,16 @@ export const useMemoryPreview = (projectId: number | null) =>
     queryKey: ['memories', 'preview', projectId],
     enabled: projectId !== null,
     queryFn: () => get<MemoryPreview>(`/api/memories/preview?project=${projectId}`),
+  })
+
+// Sessão parada não manda evento: a cada 30 s o medidor refaz a consulta
+// para o tempo parado e o "parada além do cache" andarem.
+export const useContextLive = () =>
+  useQuery({ queryKey: ['context-live'], queryFn: () => get<LiveContextSummary[]>('/api/context/live'), refetchInterval: 30_000 })
+
+export const useSessionContext = (id: string) =>
+  useQuery({
+    queryKey: ['session-context', id],
+    queryFn: () => get<ContextLive>(`/api/sessions/${encodeURIComponent(id)}/context`),
+    refetchInterval: 30_000,
   })

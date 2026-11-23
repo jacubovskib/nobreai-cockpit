@@ -1,9 +1,11 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -392,5 +394,74 @@ func TestPatchAppBaseBranchIsRefusedUnlessUnchanged(t *testing.T) {
 	}
 	if rec := a.do(t, "PATCH", url, map[string]any{"name": "web2", "path": "/r/loja/web", "capture": true, "base_branch": app.BaseBranch}, 0); rec.Code != http.StatusOK {
 		t.Fatalf("base igual = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPutSettingsContextMonitor(t *testing.T) {
+	a := newTestAPI(t)
+	got := decode[domain.Settings](t, a.do(t, "GET", "/api/settings", nil, 0))
+	if !slices.Equal(got.ContextWarnPcts, []int{60, 80}) || got.BigOutputTokens != 15000 || got.BigOutputMax != 3 ||
+		!got.AgentContextWarnings || got.ModelWindows["claude-opus-5-5"] != 1000000 {
+		t.Fatalf("padrões = %+v", got)
+	}
+	bad := []map[string]any{
+		{"context_warn_pcts": []int{80, 60}},
+		{"context_warn_pcts": []int{60, 60}},
+		{"context_warn_pcts": []int{0}},
+		{"context_warn_pcts": []int{100}},
+		{"big_output_tokens": 999},
+		{"big_output_max": 21},
+		{"big_output_max": -1},
+		{"model_windows": map[string]int{"m": 999}},
+	}
+	for _, b := range bad {
+		if rec := a.do(t, "PUT", "/api/settings", b, 0); rec.Code != http.StatusBadRequest {
+			t.Errorf("%v = %d, quer 400", b, rec.Code)
+		}
+	}
+	ok := map[string]any{"context_warn_pcts": []int{50, 90}, "big_output_tokens": 1000, "big_output_max": 0,
+		"model_windows": map[string]int{"outro": 500000}}
+	rec := a.do(t, "PUT", "/api/settings", ok, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	got = decode[domain.Settings](t, a.do(t, "GET", "/api/settings", nil, 0))
+	if !slices.Equal(got.ContextWarnPcts, []int{50, 90}) || got.BigOutputMax != 0 || len(got.ModelWindows) != 1 || got.ModelWindows["outro"] != 500000 {
+		t.Fatalf("depois = %+v", got)
+	}
+}
+
+func TestPutSettingsLogsContextPctsChange(t *testing.T) {
+	a := newTestAPI(t)
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"context_warn_pcts": []int{50, 90}}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	es, err := a.st.RecentConfigLog(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range es {
+		var d map[string]json.RawMessage
+		if json.Unmarshal(e.Data, &d) == nil && string(d["key"]) == `"context_warn_pcts"` {
+			found = true
+			if string(d["from"]) != "[60,80]" || string(d["to"]) != "[50,90]" {
+				t.Errorf("log = %s", e.Data)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("mudança não registrada")
+	}
+}
+
+func TestPutSettingsOmittedModelWindowsKeepsDefaults(t *testing.T) {
+	a := newTestAPI(t)
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"big_output_max": 5}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d", rec.Code)
+	}
+	got := decode[domain.Settings](t, a.do(t, "GET", "/api/settings", nil, 0))
+	if got.ModelWindows["claude-opus-5-5"] != 1000000 || len(got.ContextWarnPcts) != 2 {
+		t.Fatalf("%+v", got)
 	}
 }

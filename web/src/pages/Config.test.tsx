@@ -225,3 +225,57 @@ describe('Config sessões avisadas e histórico', () => {
     expect(await screen.findByText('Nenhuma mudança registrada.')).toBeInTheDocument()
   })
 })
+
+describe('Config monitor de contexto', () => {
+  const withCtx = { ...settings, context_warn_pcts: [60, 80], big_output_tokens: 15000, big_output_max: 3, agent_context_warnings: true, model_windows: { 'claude-opus-5-5': 1000000 } }
+
+  it('salva as faixas, a saída grande, o máximo e o aviso', async () => {
+    const fn = mock(routes(withCtx))
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Monitor de contexto' })
+    expect(within(sec).getByLabelText('Primeira faixa (% da janela)')).toHaveValue('60')
+    expect(within(sec).getByLabelText('Avisar o agente')).toBeChecked()
+    fireEvent.change(within(sec).getByLabelText('Primeira faixa (% da janela)'), { target: { value: '50' } })
+    fireEvent.change(within(sec).getByLabelText('Saída grande (tokens)'), { target: { value: '20000' } })
+    fireEvent.change(within(sec).getByLabelText(/Máximo de avisos/), { target: { value: '5' } })
+    fireEvent.click(within(sec).getByLabelText('Avisar o agente'))
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
+    expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ context_warn_pcts: [50, 80], big_output_tokens: 20000, big_output_max: 5, agent_context_warnings: false })
+  })
+
+  it.each([
+    ['Primeira faixa (% da janela)', '80', /em ordem crescente/],
+    ['Segunda faixa (% da janela)', '100', /entre 1 e 99/],
+    ['Saída grande (tokens)', '999', /pelo menos 1000/],
+    [/Máximo de avisos/, '21', /entre 0 e 20/],
+  ])('valida %s=%s sem enviar', async (label, value, msg) => {
+    const fn = mock(routes(withCtx))
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Monitor de contexto' })
+    fireEvent.change(within(sec).getByLabelText(label), { target: { value } })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    expect(await within(sec).findByText(msg)).toBeInTheDocument()
+    expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(0)
+  })
+
+  it('edita a tabela de janelas por modelo: adiciona, remove e valida', async () => {
+    const fn = mock(routes(withCtx))
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Preços e moeda' })
+    expect(within(sec).getByDisplayValue('claude-opus-5-5')).toBeInTheDocument()
+    fireEvent.click(within(sec).getByRole('button', { name: 'Adicionar janela' }))
+    const models = within(sec).getAllByLabelText('Modelo')
+    fireEvent.change(models[models.length - 1], { target: { value: 'outro' } })
+    const wins = within(sec).getAllByLabelText('Janela (tokens)')
+    fireEvent.change(wins[wins.length - 1], { target: { value: '500' } })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar janelas' }))
+    expect(await within(sec).findByText(/pelo menos 1000/)).toBeInTheDocument()
+    expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(0)
+    fireEvent.change(wins[wins.length - 1], { target: { value: '128.000' } })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Remover janela de claude-opus-5-5' }))
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar janelas' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
+    expect(calls(fn, 'PUT', '/api/settings')[0].model_windows).toEqual({ outro: 128000 })
+  })
+})

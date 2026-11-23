@@ -27,15 +27,10 @@ func configNotice(seen *domain.SeenConfig, fullCapture bool, set domain.Settings
 	return "", nu
 }
 
-// noticeReply avisa o agente principal, uma vez, de que a configuração mudou
-// desde o que a sessão viu. O swap compara e troca o registro, então hooks
-// simultâneos geram um único aviso. Falhas só impedem o aviso.
-func (a *Adapter) noticeReply(sess domain.Session, p payload, event string, now time.Time) (adapter.HookReply, bool) {
-	return contextReply(event, a.noticeText(sess, p, now))
-}
-
-// noticeText é o texto do aviso de configuração ("" sem nada a dizer); ver
-// noticeReply.
+// noticeText é o texto do aviso ao agente principal, uma vez, de que a
+// configuração mudou desde o que a sessão viu ("" sem nada a dizer). O swap
+// compara e troca o registro, então hooks simultâneos geram um único aviso.
+// Falhas só impedem o aviso.
 func (a *Adapter) noticeText(sess domain.Session, p payload, now time.Time) string {
 	if p.AgentID != "" {
 		return ""

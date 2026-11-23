@@ -164,6 +164,9 @@ type UsageRow struct {
 	CacheWrite int64     `json:"cache_write"`
 	CacheRead  int64     `json:"cache_read"`
 	At         time.Time `json:"at"`
+	// WindowSessionID é a janela dona do uso quando não é a sessão SessionID
+	// (a filha que divide o transcript com a principal); vazio = SessionID.
+	WindowSessionID string `json:"window_session_id,omitempty"`
 }
 
 // Price é o preço de um modelo em USD por milhão de tokens. Os preços de cache

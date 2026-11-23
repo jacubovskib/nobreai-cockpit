@@ -97,11 +97,21 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 	case "SessionStart":
 		return a.sessionStart(sess, p, h.Env, now)
 	case "UserPromptSubmit":
-		var child string
-		if _, pending := a.childUnwarned.LoadAndDelete(sess.ID); pending {
-			child = childPhrase // a filha nasceu fora do SessionStart
+		// Registro para a atribuição por janela (só o resumo do texto, em
+		// toda sessão: o uso de cada janela depende dele). Falha só vai para
+		// o log.
+		if err := a.st.AddWindowPrompt(sess.ID, promptKey(p.Prompt), now); err != nil {
+			log.Printf("hook claude: prompt da janela %s: %v", sess.ID, err)
 		}
-		notice, noticed := contextReply(event, child, a.noticeText(sess, p, now))
+		var child string
+		if sess.ParentSessionID != "" {
+			if pending, err := a.st.ClaimChildNotice(sess.ID); err != nil {
+				log.Printf("hook claude: aviso da filha %s: %v", sess.ID, err)
+			} else if pending {
+				child = childPhrase // a filha nasceu fora do SessionStart
+			}
+		}
+		notice, noticed := contextReply(event, child, a.noticeText(sess, p, now), a.contextWarning(sess, p))
 		if sess.FullCapture {
 			a.event(sess.ID, domain.EvPrompt, map[string]any{"text": p.Prompt}, now)
 		} else {
@@ -113,7 +123,7 @@ func (a *Adapter) HandleHook(_ context.Context, h adapter.HookCall) (adapter.Hoo
 	case "PreToolUse":
 		return a.preToolUse(sess, p, now)
 	case "PostToolUse":
-		notice, _ := a.noticeReply(sess, p, event, now)
+		notice, _ := contextReply(event, a.noticeText(sess, p, now), a.bigOutputWarning(sess, p))
 		if sess.FullCapture {
 			return notice, a.postToolUse(sess, p, now)
 		}
@@ -244,6 +254,13 @@ func (a *Adapter) createChild(main domain.Session, p payload, pid int, event str
 		PID: pid, ProjectID: main.ProjectID, FullCapture: main.FullCapture, Cwd: main.Cwd, Branch: main.Branch,
 		GitHead: main.GitHead, Worktree: main.Worktree, WorktreeLinked: main.WorktreeLinked, TranscriptPath: tp,
 		StartedAt: now, LastEventAt: now}
+	// A outra janela pode estar noutro diretório (outro worktree): a filha
+	// nasce no cwd do próprio hook, como uma sessão nova. Hook de subagente
+	// manda o cwd do worktree dele e não conta. O projeto é o da principal.
+	if p.AgentID == "" && p.Cwd != "" && p.Cwd != main.Cwd {
+		l := a.locate(p.Cwd)
+		x.Cwd, x.Branch, x.GitHead, x.Worktree, x.WorktreeLinked = l.Cwd, l.Branch, l.GitHead, l.Worktree, l.WorktreeLinked
+	}
 	// Dois hooks simultâneos do mesmo processo: o segundo é ignorado e a
 	// releitura devolve a que ficou.
 	if err := a.st.StartSession(x); err != nil {
@@ -252,14 +269,15 @@ func (a *Adapter) createChild(main domain.Session, p payload, pid int, event str
 	if event != "SessionStart" {
 		// Sem SessionStart (o daemon foi instalado ou voltou com a conversa
 		// aberta): a linha da filha vai no próximo prompt.
-		a.childUnwarned.Store(id, true)
+		if err := a.st.MarkChildNoticePending(id); err != nil {
+			log.Printf("hook claude: aviso da filha %s: %v", id, err)
+		}
 	}
 	a.publish("sessions")
 	sess, err := a.st.GetSession(id)
 	if err != nil {
 		return sess, err
 	}
-	// A outra janela pode estar noutro diretório (outro worktree).
 	return a.followMain(sess, p, event)
 }
 
