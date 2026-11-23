@@ -3,6 +3,8 @@ import type { CardSummary, Project, Total } from '../api/types'
 export interface ProjectRow {
   project: Project | null
   costUsd: number
+  // credits: gasto em créditos (Kiro), à parte do costUsd.
+  credits: number
   unpriced: boolean
   current: CardSummary | null
   stale: { count: number; oldest: string | null }
@@ -42,6 +44,7 @@ function row(project: Project | null, cards: CardSummary[], total: Total | undef
   return {
     project,
     costUsd: total?.cost_usd ?? 0,
+    credits: total?.credits ?? 0,
     unpriced: total?.unpriced ?? false,
     current,
     stale: signalSummary(cards, 'parado'),
@@ -64,6 +67,7 @@ function familyRow(parent: Project, kids: Project[], cards: CardSummary[], byKey
   return {
     ...all,
     costUsd: sumUsd(parts.map((r) => r.costUsd)),
+    credits: sumUsd(parts.map((r) => r.credits)),
     unpriced: parts.some((r) => r.unpriced),
     children,
     general,
@@ -82,7 +86,7 @@ export function buildRows(projects: Project[], cards: CardSummary[], totals: Tot
       return kids.length === 0 ? row(p, cards.filter((c) => c.project_id === p.id), byKey.get(String(p.id))) : familyRow(p, kids, cards, byKey)
     })
   const none = byKey.get('')
-  if (none && none.cost_usd > 0) rows.push(row(null, [], none))
+  if (none && (none.cost_usd > 0 || none.credits > 0)) rows.push(row(null, [], none))
   return rows
 }
 

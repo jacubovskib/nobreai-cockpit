@@ -1,7 +1,7 @@
 import type { CardDetail } from '../../api/types'
 import { AgentSwatch } from '../../ui/AgentSwatch'
 import { OtherWindowTag } from '../../ui/OtherWindowTag'
-import { Money } from '../../ui/Money'
+import { Credits, Money } from '../../ui/Money'
 import { Tokens } from '../../ui/Tokens'
 import { WorktreeTag } from '../../ui/WorktreeTag'
 import { minutesSince } from '../board'
@@ -58,7 +58,7 @@ export function Sessions({ card, currency, rate }: { card: CardDetail; currency?
                     <td style={num}><Tokens n={s.usage.input} /></td>
                     <td style={num}><Tokens n={s.usage.output} /></td>
                     <td style={num}><Tokens n={s.usage.cache_write + s.usage.cache_read} /></td>
-                    <td style={num}><Money usd={s.usage.cost_usd} unpriced={s.unpriced} currency={currency} rate={rate} /></td>
+                    <td style={num}><Money usd={s.usage.cost_usd} unpriced={s.unpriced} currency={currency} rate={rate} /><Credits credits={s.usage.credits} /></td>
                   </tr>
                 )
               })}
@@ -69,7 +69,7 @@ export function Sessions({ card, currency, rate }: { card: CardDetail; currency?
                 <td style={num}><Tokens n={t.input} /></td>
                 <td style={num}><Tokens n={t.output} /></td>
                 <td style={num}><Tokens n={t.cache_write + t.cache_read} /></td>
-                <td style={num}><Money usd={t.cost_usd} unpriced={t.unpriced} currency={currency} rate={rate} /></td>
+                <td style={num}><Money usd={t.cost_usd} unpriced={t.unpriced} currency={currency} rate={rate} /><Credits credits={t.credits} /></td>
               </tr>
             </tfoot>
           </table>

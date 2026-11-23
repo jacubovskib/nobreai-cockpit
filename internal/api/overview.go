@@ -61,8 +61,10 @@ type TodayTotals struct {
 	CardsInProgress  int `json:"cards_in_progress"`
 	CardsWithoutLive int `json:"cards_without_live_session"`
 	// CostUSD soma só o uso com preço; CostUnpriced avisa que há uso sem preço.
-	CostUSD          float64      `json:"cost_usd"`
-	CostUnpriced     bool         `json:"cost_unpriced"`
+	CostUSD      float64 `json:"cost_usd"`
+	CostUnpriced bool    `json:"cost_unpriced"`
+	// Credits soma o gasto em créditos (Kiro), à parte do CostUSD.
+	Credits          float64      `json:"credits"`
 	DailyLimitUSD    float64      `json:"daily_limit_usd"`
 	TokensInput      int64        `json:"tokens_input"`
 	TokensOutput     int64        `json:"tokens_output"`
@@ -258,6 +260,7 @@ func (s *server) buildOverview() (Overview, error) {
 		spent[ta.Key] = ta
 		t.CostUSD += ta.CostUSD
 		t.CostUnpriced = t.CostUnpriced || ta.Unpriced
+		t.Credits += ta.Credits
 		t.TokensInput += ta.Input
 		t.TokensOutput += ta.Output
 		t.TokensCacheWrite += ta.CacheWrite

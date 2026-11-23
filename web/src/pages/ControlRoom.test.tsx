@@ -11,7 +11,7 @@ const total = { key: '', agent: '', day: '', sessions: 0, input: 0, output: 0, c
 const overview: Overview = {
   active: [],
   today: {
-    active_agents: 0, cards_in_progress: 1, cards_without_live_session: 1, cost_usd: 1.5, cost_unpriced: false,
+    active_agents: 0, cards_in_progress: 1, cards_without_live_session: 1, cost_usd: 1.5, cost_unpriced: false, credits: 0,
     daily_limit_usd: 33, tokens_input: 1000, tokens_output: 500, tokens_cache_write: 0, tokens_cache_read: 0, per_agent: [],
   },
   alerts: [{ kind: 'stale', card_key: 'NAC-38', agent: 'claude', text: 'NAC-38 está em “Em andamento” sem sessão viva há 12 min.' }],

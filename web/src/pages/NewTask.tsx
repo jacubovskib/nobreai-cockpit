@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useProjects } from '../api/queries'
+import { useAgents, useProjects } from '../api/queries'
 import { post } from '../api/client'
+import { agentInfo } from '../ui/agents'
 import { displayName, isGroup, useProjectFilter } from '../app/project'
 
 const field: React.CSSProperties = { minHeight: 40, padding: '0 10px', borderRadius: 8, border: '1px solid #2E333E', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' }
@@ -14,15 +15,19 @@ export function NewTask() {
   const [title, setTitle] = useState('')
   const [goal, setGoal] = useState('')
   const [project, setProject] = useState('')
+  const [agent, setAgent] = useState('')
   const [error, setError] = useState('')
   const qc = useQueryClient()
   const projects = useProjects().data
+  // Seletor entre os agentes instalados; padrão = o primeiro; some com um só.
+  const installed = (useAgents().data ?? []).filter((a) => a.detection.found).map((a) => a.agent)
+  const chosenAgent = installed.includes(agent) ? agent : installed[0] ?? ''
   const { projectId } = useProjectFilter()
   const repos = (projects ?? []).filter((p) => !isGroup(p) || p.path !== '')
   const chosen = project || String(repos.find((p) => p.id === projectId)?.id ?? repos[0]?.id ?? '')
   const create = useMutation({
     mutationFn: () =>
-      post('/api/cards', { title: title.trim(), goal: goal.trim(), project_id: Number(chosen) }),
+      post('/api/cards', { title: title.trim(), goal: goal.trim(), project_id: Number(chosen), ...(chosenAgent ? { agent: chosenAgent } : {}) }),
     onSuccess: () => {
       setOpen(false); setTitle(''); setGoal(''); setError('')
       qc.invalidateQueries({ queryKey: ['cards'] }); qc.invalidateQueries({ queryKey: ['overview'] })
@@ -64,6 +69,14 @@ export function NewTask() {
           {(projects ?? []).filter((p) => !isGroup(p) || p.path !== '').map((p) => <option key={p.id} value={p.id}>{displayName(p, projects ?? [])}</option>)}
         </select>
       </label>
+      {installed.length > 1 && (
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-2)' }}>
+          Agente
+          <select value={chosenAgent} onChange={(e) => setAgent(e.target.value)} style={field}>
+            {installed.map((a) => <option key={a} value={a}>{agentInfo(a).name}</option>)}
+          </select>
+        </label>
+      )}
       <button type="submit" style={{ ...btn, background: '#2A2F3A', color: '#fff' }} disabled={create.isPending || !title.trim()}>Criar tarefa</button>
       <button type="button" style={btn} onClick={() => { setOpen(false); setError('') }}>Cancelar</button>
       {error && <span role="alert" style={{ color: 'var(--err)', fontSize: 13, flexBasis: '100%' }}>{error}</span>}

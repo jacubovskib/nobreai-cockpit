@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useCards, useProjects } from '../api/queries'
 import { AgentSwatch } from '../ui/AgentSwatch'
-import { Money } from '../ui/Money'
+import { Credits, Money } from '../ui/Money'
 import { StatusBadge } from '../ui/StatusBadge'
 import { ProjectTag } from '../ui/ProjectTag'
 import { useProjectFilter, useWithProject } from '../app/project'
@@ -59,7 +59,7 @@ export function CardsList() {
                   <td style={{ padding: '10px 12px' }}><ProjectTag project={projects.find((p) => p.id === c.project_id) ?? null} projects={projects} /></td>
                   <td style={{ padding: '10px 12px' }}><StatusBadge column={c.column} live={c.live} /></td>
                   <td style={{ padding: '10px 12px' }}>{c.agent ? <AgentSwatch agent={c.agent} /> : '—'}</td>
-                  <td style={{ padding: '10px 12px' }}><Money usd={c.totals.cost_usd} unpriced={c.totals.unpriced} /></td>
+                  <td style={{ padding: '10px 12px' }}><Money usd={c.totals.cost_usd} unpriced={c.totals.unpriced} /><Credits credits={c.totals.credits} /></td>
                 </tr>
               ))}
             </tbody>

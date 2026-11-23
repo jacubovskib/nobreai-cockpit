@@ -4,7 +4,7 @@ import { useWithProject } from '../app/project'
 import { useWorktreeDetail } from '../api/queries'
 import type { GitDetail, ProcDetail, WorktreeDetail, WorktreeResources, WorktreeSessionDetail } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
-import { Money } from '../ui/Money'
+import { Credits, Money } from '../ui/Money'
 import { StatusBadge } from '../ui/StatusBadge'
 import { Tokens } from '../ui/Tokens'
 import { formatBytes, formatPct } from '../ui/bytes'
@@ -170,7 +170,7 @@ function Sessions({ sessions }: { sessions: WorktreeSessionDetail[] }) {
                   <td style={{ ...cell, whiteSpace: 'normal' }}>{new Date(s.started_at).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
                   <td style={cell}>{duration(s.started_at, s.ended_at ?? s.last_event_at)}</td>
                   <td style={num}><Tokens n={s.usage.input + s.usage.output + s.usage.cache_write + s.usage.cache_read} /></td>
-                  <td style={num}><Money usd={s.usage.cost_usd} unpriced={s.unpriced} /></td>
+                  <td style={num}><Money usd={s.usage.cost_usd} unpriced={s.unpriced} /><Credits credits={s.usage.credits} /></td>
                 </tr>
               ))}
             </tbody>

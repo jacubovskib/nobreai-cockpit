@@ -5,7 +5,7 @@ import { patch } from '../api/client'
 import { useCard, useLimits, useProjects, useSettings } from '../api/queries'
 import { ApiError } from '../api/client'
 import { agentInfo } from '../ui/agents'
-import { Money } from '../ui/Money'
+import { Credits, Money } from '../ui/Money'
 import { StatusBadge } from '../ui/StatusBadge'
 import { formatTokens } from '../ui/Tokens'
 import { WorktreeTag } from '../ui/WorktreeTag'
@@ -65,6 +65,7 @@ export function CardPage() {
   const project = projects.data?.find((p) => p.id === c.project_id)
   const family = project ? familyIds(projects.data ?? [], project.parent_id ?? project.id) : []
   const agents = new Set(c.sessions.map((s) => s.agent)).size
+  const lastAgent = [...c.sessions].sort((a, b) => Date.parse(b.last_event_at) - Date.parse(a.last_event_at))[0]?.agent
   const t = c.totals
   const tokens = t.input + t.output + t.cache_write + t.cache_read
   // Sessão dona cujo processo sumiu (carência antes de encerrar): não é viva.
@@ -102,7 +103,7 @@ export function CardPage() {
           {where && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>Worktree <WorktreeTag path={where.worktree} linked={where.worktree_linked} /></span>}
           <span>{plural(c.sessions.length, 'sessão', 'sessões')} · {plural(agents, 'agente', 'agentes')}</span>
           <span>{formatTokens(tokens)} tokens</span>
-          <span><Money usd={t.cost_usd} unpriced={t.unpriced} currency={currency} rate={rate} /> no total</span>
+          <span><Money usd={t.cost_usd} unpriced={t.unpriced} currency={currency} rate={rate} /><Credits credits={t.credits} /> no total</span>
         </div>
         <BlockedBy key={`${c.key}:${c.blocked_by}`} card={c} />
         {c.column === 'revisao' && (
@@ -128,7 +129,7 @@ export function CardPage() {
           <Questions card={c} />
         </div>
         <aside aria-label="Handoff" style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <ContinuePanel cardKey={c.key} enabled onTerminal={setFocusTerminal} />
+          <ContinuePanel cardKey={c.key} enabled onTerminal={setFocusTerminal} lastAgent={lastAgent} />
           <CliPanel cardKey={c.key} previewOpen={preview} onTogglePreview={() => setPreview(!preview)} />
           <ReadinessPanel readiness={c.readiness} />
           <LimitPanel card={c} limits={limits.data ?? []} currency={currency} rate={rate} />

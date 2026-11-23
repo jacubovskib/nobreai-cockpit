@@ -5,7 +5,7 @@ import { useCards, useProjects } from '../api/queries'
 import { patch } from '../api/client'
 import type { CardSummary, Column } from '../api/types'
 import { AgentSwatch } from '../ui/AgentSwatch'
-import { Money } from '../ui/Money'
+import { Credits, Money } from '../ui/Money'
 import { ReadinessPips } from '../ui/ReadinessPips'
 import { ProjectTag } from '../ui/ProjectTag'
 import { useProjectFilter, useWithProject } from '../app/project'
@@ -75,7 +75,7 @@ function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (ke
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 12px', fontSize: 12, color: 'var(--text-2)', paddingTop: 6, borderTop: '1px solid var(--border)' }}>
         {card.agent && <span style={{ color: '#C3C8D2' }}><AgentSwatch agent={card.agent} /></span>}
         <span>{plural(card.session_count, 'sessão', 'sessões')}</span>
-        <span style={{ color: 'var(--text)' }}><Money usd={card.totals.cost_usd} unpriced={card.totals.unpriced} /></span>
+        <span style={{ color: 'var(--text)' }}><Money usd={card.totals.cost_usd} unpriced={card.totals.unpriced} /><Credits credits={card.totals.credits} /></span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-2)' }}>
         <ReadinessPips met={card.readiness.met} total={card.readiness.total} />

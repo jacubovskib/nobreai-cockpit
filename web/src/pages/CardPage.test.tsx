@@ -44,7 +44,7 @@ const prompts = [
   { slug: 'a', name: 'Revisar', is_default_handoff: false },
   { slug: 'retomar', name: 'Retomar card', is_default_handoff: true },
 ]
-const base = { '/api/settings': { currency: 'USD', brl_rate: 0 }, '/api/limits': [{ agent: 'claude', card_usd: 12, daily_usd: 0, warn_pct: 80, action: 'warn' }], '/api/projects': [{ id: 1, name: 'portal-api' }], '/api/prompts': prompts }
+const base = { '/api/agents': [{ agent: 'claude', installable: true, status_line: true, detection: { found: true, path: '/usr/bin/claude', version: '2', checks: [] } }], '/api/settings': { currency: 'USD', brl_rate: 0 }, '/api/limits': [{ agent: 'claude', card_usd: 12, daily_usd: 0, warn_pct: 80, action: 'warn' }], '/api/projects': [{ id: 1, name: 'portal-api' }], '/api/prompts': prompts }
 function wrap(ui: React.ReactNode, path = '/cards/NAC-42') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(

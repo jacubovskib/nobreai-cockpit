@@ -15,16 +15,18 @@ interface MeterProps {
   estimated?: boolean
   rewrite?: boolean
   idleOverTTL?: boolean
+  pctOnly?: boolean
 }
 
 // Barra de uso da janela, com o texto "62% · 620 mil / 1 milhão" e os destaques.
-export function ContextMeter({ tokens, windowTokens, pct, estimated, rewrite, idleOverTTL }: MeterProps) {
+export function ContextMeter({ tokens, windowTokens, pct, estimated, rewrite, idleOverTTL, pctOnly }: MeterProps) {
   const over = pct > OVER
-  const text = `${pctText(pct)} · ${formatTokensPt(tokens)} / ${formatTokensPt(windowTokens)}`
+  const text = pctOnly ? pctText(pct) : `${pctText(pct)} · ${formatTokensPt(tokens)} / ${formatTokensPt(windowTokens)}`
   return (
     <div data-testid="context-meter" data-over={over ? 'true' : 'false'} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 13 }}>
         <strong style={{ fontWeight: 500, color: over ? 'var(--err)' : 'var(--text)' }}>{text}</strong>
+        {pctOnly && <span style={muted}>janela informada pelo agente</span>}
         {estimated && <span style={muted}>janela estimada</span>}
         {rewrite && <span style={chip}>regravação recente</span>}
         {idleOverTTL && <span style={chip}>parada além do cache</span>}
@@ -37,21 +39,26 @@ export function ContextMeter({ tokens, windowTokens, pct, estimated, rewrite, id
 }
 
 export function MeterOf({ c }: { c: ContextLive }) {
-  return <ContextMeter tokens={c.tokens} windowTokens={c.window_tokens} pct={c.pct} estimated={c.window_estimated} rewrite={!!c.recent_rewrite} idleOverTTL={c.idle_over_ttl} />
+  return <ContextMeter tokens={c.tokens} windowTokens={c.window_tokens} pct={c.pct} pctOnly={c.pct_only} estimated={c.window_estimated} rewrite={!!c.recent_rewrite} idleOverTTL={c.idle_over_ttl} />
 }
 
 const minutes = (sec: number) => (sec < 60 ? 'menos de 1 min' : `${Math.round(sec / 60)} min`)
 
 // Detalhe do medidor: crescimento, turnos até o limite, compactações, cache, parada e maiores saídas.
 export function ContextInfo({ c }: { c: ContextLive }) {
-  const rows: [string, string][] = [
-    ['Crescimento por turno', c.growth_per_turn > 0 ? `${formatTokensPt(c.growth_per_turn)} tokens` : 'ainda sem dados'],
-    ['Turnos até o limite', c.at_limit ? 'no limite' : c.turns_to_limit > 0 ? String(c.turns_to_limit) : 'sem crescimento'],
-    ['Compactações', String(c.compactions)],
-    ['Turnos desde a última compactação', String(c.turns_since_compact)],
-    ['Cache aproveitado', `${Math.round(c.cache_hit_pct)}%`],
-    ['Parada', `${minutes(c.idle_sec)} (cache de ${c.ttl === '1h' ? '1 h' : '5 min'})${c.idle_over_ttl ? ' · além do cache' : ''}`],
-  ]
+  const rows: [string, string][] = c.pct_only
+    ? [
+        ['Compactações', String(c.compactions)],
+        ['Turnos desde a última compactação', String(c.turns_since_compact)],
+      ]
+    : [
+        ['Crescimento por turno', c.growth_per_turn > 0 ? `${formatTokensPt(c.growth_per_turn)} tokens` : 'ainda sem dados'],
+        ['Turnos até o limite', c.at_limit ? 'no limite' : c.turns_to_limit > 0 ? String(c.turns_to_limit) : 'sem crescimento'],
+        ['Compactações', String(c.compactions)],
+        ['Turnos desde a última compactação', String(c.turns_since_compact)],
+        ['Cache aproveitado', `${Math.round(c.cache_hit_pct)}%`],
+        ['Parada', `${minutes(c.idle_sec)} (cache de ${c.ttl === '1h' ? '1 h' : '5 min'})${c.idle_over_ttl ? ' · além do cache' : ''}`],
+      ]
   if (c.recent_rewrite) rows.push(['Regravação recente', `${formatTokensPt(c.recent_rewrite.tokens)} tokens`])
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -60,7 +67,7 @@ export function ContextInfo({ c }: { c: ContextLive }) {
           <div key={k}><dt style={muted}>{k}</dt><dd style={{ margin: 0 }}>{v}</dd></div>
         ))}
       </dl>
-      <div>
+      {!c.pct_only && <div>
         <span style={muted}>Maiores saídas na janela</span>
         {c.top_outputs.length === 0 ? (
           <p style={{ ...muted, margin: '4px 0 0' }}>Nenhuma saída grande.</p>
@@ -74,18 +81,18 @@ export function ContextInfo({ c }: { c: ContextLive }) {
             ))}
           </ol>
         )}
-      </div>
+      </div>}
     </div>
   )
 }
 
 // Carrega o medidor da sessão; `expanded` abre o detalhe. Usado na sala de controle e no card.
-export function SessionContext({ id, summary, expanded }: { id: string; summary?: { tokens: number; window_tokens: number; pct: number; rewrite: boolean; idle_over_ttl: boolean }; expanded: boolean }) {
+export function SessionContext({ id, summary, expanded }: { id: string; summary?: { tokens: number; window_tokens: number; pct: number; pct_only?: boolean; rewrite: boolean; idle_over_ttl: boolean }; expanded: boolean }) {
   const q = useSessionContext(id)
   const c = q.data
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {c ? <MeterOf c={c} /> : summary ? <ContextMeter tokens={summary.tokens} windowTokens={summary.window_tokens} pct={summary.pct} rewrite={summary.rewrite} idleOverTTL={summary.idle_over_ttl} /> : <span style={muted}>Carregando contexto…</span>}
+      {c ? <MeterOf c={c} /> : summary ? <ContextMeter tokens={summary.tokens} windowTokens={summary.window_tokens} pct={summary.pct} pctOnly={summary.pct_only} rewrite={summary.rewrite} idleOverTTL={summary.idle_over_ttl} /> : <span style={muted}>Carregando contexto…</span>}
       {expanded && c && <ContextInfo c={c} />}
       {expanded && q.isError && <span role="alert" style={{ ...muted, color: 'var(--err)' }}>Não foi possível ler o contexto.</span>}
     </div>

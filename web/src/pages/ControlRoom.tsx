@@ -11,7 +11,7 @@ import { ProjectTag } from '../ui/ProjectTag'
 import type { Project } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { AgentSwatch } from '../ui/AgentSwatch'
-import { Money } from '../ui/Money'
+import { Credits, Money } from '../ui/Money'
 import { formatMoney, useCurrency, type CurrencyPref } from '../ui/money'
 import { Tokens, formatTokens } from '../ui/Tokens'
 import { WorktreeTag } from '../ui/WorktreeTag'
@@ -162,8 +162,8 @@ function ActiveCard({ s, terminalId, projects }: { s: ActiveSession; terminalId?
       )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 24px', fontSize: 13, color: 'var(--text-2)' }}>
         <span>Sessão <strong style={{ color: 'var(--text)', fontWeight: 500 }}><Tokens n={totalTokens(s.session_usage)} /></strong> tokens</span>
-        <span>Custo da sessão <strong style={{ color: 'var(--text)', fontWeight: 500 }}><Money usd={s.session_usage.cost_usd} unpriced={s.session_usage.unpriced} /></strong></span>
-        {s.card && <span>Card acumulado <strong style={{ color: 'var(--text)', fontWeight: 500 }}><Money usd={s.card_totals.cost_usd} unpriced={s.card_totals.unpriced} /></strong></span>}
+        <span>Custo da sessão <strong style={{ color: 'var(--text)', fontWeight: 500 }}><Money usd={s.session_usage.cost_usd} unpriced={s.session_usage.unpriced} /><Credits credits={s.session_usage.credits} /></strong></span>
+        {s.card && <span>Card acumulado <strong style={{ color: 'var(--text)', fontWeight: 500 }}><Money usd={s.card_totals.cost_usd} unpriced={s.card_totals.unpriced} /><Credits credits={s.card_totals.credits} /></strong></span>}
         {s.readiness && <span>Handoff <strong style={{ color: 'var(--text)', fontWeight: 500 }}>{s.readiness.met} de {s.readiness.total} itens</strong></span>}
       </div>
     </article>
@@ -211,7 +211,7 @@ function NoCardRow({ s, projects }: { s: SessionWithUsage; projects: Project[] }
           `${minutesSince(s.started_at)} min`
         )}{' '}
         ·{' '}
-        <Money usd={s.usage.cost_usd} unpriced={s.usage.unpriced} />
+        <Money usd={s.usage.cost_usd} unpriced={s.usage.unpriced} /><Credits credits={s.usage.credits} />
       </span>
       <ProjectTag project={projects.find((p) => p.id === s.project_id) ?? null} projects={projects} />
       {open ? (
@@ -360,7 +360,7 @@ export function ControlRoom() {
         />
         <Metric
           label="Custo hoje"
-          value={<Money usd={today.cost_usd} unpriced={today.cost_unpriced && today.cost_usd === 0} {...cur} />}
+          value={<><Money usd={today.cost_usd} unpriced={today.cost_unpriced && today.cost_usd === 0} {...cur} /><Credits credits={today.credits} /></>}
           sub={<>de <Money usd={today.daily_limit_usd} {...cur} /> somando os limites diários{today.cost_unpriced ? ' · há uso sem preço' : ''}</>}
         />
         <Metric
