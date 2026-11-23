@@ -249,8 +249,10 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 		t.CacheWrite += r.CacheWrite
 		t.CacheRead += r.CacheRead
 		t.Credits += r.Credits
-		if r.Credits > 0 && r.Input+r.Output+r.CacheWrite+r.CacheRead == 0 {
-			continue // gasto só em créditos: não há o que precificar nem ficar "sem preço"
+		if r.Input+r.Output+r.CacheWrite+r.CacheRead == 0 {
+			// Sem tokens (gasto só em créditos, ou turno sem gasto): o custo é
+			// zero com qualquer preço, nada fica "sem preço".
+			continue
 		}
 		if usd, priced := usage.Cost(r, pm[r.Model]); priced {
 			t.CostUSD += usd

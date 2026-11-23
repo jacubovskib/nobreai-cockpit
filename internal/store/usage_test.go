@@ -214,6 +214,8 @@ func TestTotalsCredits(t *testing.T) {
 		{SessionID: "claude:1", MessageID: "m1", Model: "priced", Input: 1_000_000, At: at},
 		{SessionID: "claude:1", MessageID: "k1", Model: "auto", Credits: 0.25, At: at},
 		{SessionID: "claude:1", MessageID: "k2", Model: "auto", Credits: 0.5, At: at},
+		// Turno do Kiro que não gastou nada: sem tokens nem créditos.
+		{SessionID: "claude:1", MessageID: "k3", Model: "auto", Credits: 0, At: at},
 	}
 	if err := s.UpsertUsage(rows); err != nil {
 		t.Fatal(err)
