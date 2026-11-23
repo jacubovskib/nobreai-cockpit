@@ -112,7 +112,7 @@ func (a *Adapter) readTranscripts(sessionID, mainPath string, now time.Time) (bo
 }
 
 // parseContext é o leitor de contexto (trocado nos testes para simular falha).
-var parseContext = usage.ParseContext
+var parseContext = usage.ParseContextKnown
 
 // readContextSafe roda readContext e transforma erro ou pânico em log com
 // end=-1 (o uso é lido até o fim, com a principal): a medição de contexto
@@ -145,7 +145,17 @@ func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins ma
 	if err != nil {
 		return 0, nil, 0, err
 	}
-	outs, turns, prompts, lines, next, newSt, reset, err := parseContext(path, off, st)
+	// Do começo (primeira leitura ou releitura depois de
+	// ResetContextCursors), a numeração é refeita do zero: os turnos e as
+	// saídas já gravados do path são apagados na mesma transação da
+	// regravação (Rewrite) e não são consultados. Dali em diante, o turno de um
+	// message.id já gravado vem do banco (blocos da mesma mensagem em leituras
+	// diferentes).
+	var savedTurn usage.KnownTurn
+	if off > 0 {
+		savedTurn = func(id string) (int, bool, error) { return a.st.TurnOfMessage(sessionID, path, id) }
+	}
+	outs, turns, prompts, lines, next, newSt, reset, err := parseContext(path, off, st, savedTurn)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil, -1, nil
 	}
@@ -178,7 +188,7 @@ func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins ma
 	}
 	byUUID, roots, used := assignWindows(sessionID, lines, prompts, known, open)
 	w := store.ContextWindows{ByUUID: byUUID, MainRoots: roots, UsedPrompts: used,
-		Compactions: compactionWindows(sessionID, lines, byUUID, known), Default: def}
+		Compactions: compactionWindows(sessionID, lines, byUUID, known), Default: def, Rewrite: off == 0 && !reset}
 	if main {
 		w.Subagents = subagentWindows(path, lines, byUUID)
 	}
@@ -223,13 +233,21 @@ func subagentWindows(mainPath string, lines []usage.LineRef, byUUID map[string]s
 // das configurações. Subir a versão faz a próxima passada do histórico refazer
 // toda a medição de contexto uma vez. Versão 2: detalhe de cache e TTL por
 // turno (NAC-40). Versão 3: janela de cada compactação (context_compactions).
+// Versão 4: um turno por message.id (blocos intercalados com a outra janela
+// não abrem turno novo); a numeração muda, então a releitura apaga os turnos e
+// as saídas de cada arquivo relido antes de regravar (ver readContext). Ela
+// também mapeia os subagentes de resultados do Agent lidos antes do
+// mapeamento: o principal é relido antes dos arquivos dos subagentes
+// (readTranscripts), e a regravação de um arquivo é na mesma transação do
+// apagar, então os turnos do subagente existem quando o mapeamento nasce.
 const (
-	contextReaderVersion    = 3
+	contextReaderVersion    = 4
 	contextReaderVersionKey = "context_reader_version"
 )
 
 // upgradeReader volta os cursores de contexto ao começo quando a versão
-// gravada é menor que a atual (sem apagar nada: a releitura faz upsert) e diz
+// gravada é menor que a atual (sem apagar nada aqui: cada arquivo relido do
+// começo tem os turnos e as saídas regravados; o uso fica) e diz
 // se a passada que vem precisa gravar a versão no fim. A versão só é gravada
 // depois de uma passada inteira (sem ctx cancelado): se o daemon cair no meio,
 // a próxima subida volta os cursores e relê de novo, sem pular ninguém.

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/usage"
 )
 
@@ -203,7 +204,7 @@ func TestResetContextCursors(t *testing.T) {
 	if err := s.ResetContextCursors(); err != nil {
 		t.Fatal(err)
 	}
-	// Nada é apagado: a releitura faz upsert por cima.
+	// Nada é apagado aqui (a releitura do começo regrava o path: ver Rewrite).
 	var o2, tu int
 	s.DB.QueryRow(`SELECT COUNT(*) FROM tool_outputs`).Scan(&o2)
 	s.DB.QueryRow(`SELECT COUNT(*) FROM context_turns`).Scan(&tu)
@@ -289,5 +290,77 @@ func TestSaveContext_SubagentWindowFirstWins(t *testing.T) {
 	save(map[string]string{sub: ""})
 	if w, ok, err := s.SubagentWindow("claude:1", sub); err != nil || !ok || w != "claude:1@200" {
 		t.Fatalf("janela = %q ok=%v err=%v", w, ok, err)
+	}
+}
+
+// Rewrite (releitura do começo) apaga turnos e saídas do path antes de
+// regravar, na mesma transação; window_lines, compactações, o uso e os outros
+// paths ficam.
+func TestSaveContext_Rewrite(t *testing.T) {
+	s := usageFixture(t)
+	st := usage.ContextState{LastTurn: 2, LastMessageID: "m1"}
+	old := []usage.ContextTurn{{Turn: 0, MessageID: "m1", At: ctxAt, Tokens: 3}, {Turn: 1, MessageID: "c1", At: ctxAt, Tokens: 6},
+		{Turn: 2, MessageID: "m1", At: ctxAt, Tokens: 60}}
+	stale := usage.ToolOutput{ItemID: "velho", Tool: "Bash", Key: "x", Bytes: 4, Tokens: 1, Turn: 2, At: ctxAt, Result: true}
+	w := ContextWindows{ByUUID: map[string]string{"u1": "claude:1@200"}, Compactions: map[int]string{1: ""}}
+	for _, p := range []string{"/a", "/b"} {
+		if err := s.SaveContextWindows("claude:1", p, false, []usage.ToolOutput{stale}, old, 10, st, w); err != nil {
+			t.Fatal(err)
+		}
+		stale.ItemID = "velho-b"
+	}
+	if err := s.UpsertUsage([]domain.UsageRow{{SessionID: "claude:1", MessageID: "m1", Model: "x", Input: 5, At: ctxAt}}); err != nil {
+		t.Fatal(err)
+	}
+	fresh := []usage.ContextTurn{{Turn: 0, MessageID: "m1", At: ctxAt, Tokens: 60}, {Turn: 1, MessageID: "c1", At: ctxAt, Tokens: 6}}
+	out := usage.ToolOutput{ItemID: "t1", Tool: "Bash", Key: "ls", Bytes: 4, Tokens: 1, Turn: 0, At: ctxAt, Result: true}
+	if err := s.SaveContextWindows("claude:1", "/a", false, []usage.ToolOutput{out}, fresh, 10, usage.ContextState{LastTurn: 1, LastMessageID: "c1"},
+		ContextWindows{Rewrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := s.ContextTurnsOf("claude:1", "/a")
+	if err != nil || len(turns) != 2 || turns[0].MessageID != "m1" || turns[1].MessageID != "c1" {
+		t.Fatalf("turnos /a = %+v %v", turns, err)
+	}
+	count := func(q string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := s.DB.QueryRow(q, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := count(`SELECT COUNT(*) FROM tool_outputs WHERE path='/a' AND item_id='velho'`); n != 0 {
+		t.Fatal("saída velha ficou")
+	}
+	for q, want := range map[string]int{
+		`SELECT COUNT(*) FROM tool_outputs WHERE path='/a'`:        1,
+		`SELECT COUNT(*) FROM context_turns WHERE path='/b'`:       3,
+		`SELECT COUNT(*) FROM tool_outputs WHERE path='/b'`:        1,
+		`SELECT COUNT(*) FROM window_lines WHERE path='/a'`:        1,
+		`SELECT COUNT(*) FROM context_compactions WHERE path='/a'`: 1,
+		`SELECT COUNT(*) FROM usage`:                               1,
+	} {
+		if n := count(q); n != want {
+			t.Errorf("%s = %d, quer %d", q, n, want)
+		}
+	}
+}
+
+// TurnOfMessage devolve o turno gravado de um message.id do path.
+func TestTurnOfMessage(t *testing.T) {
+	s := usageFixture(t)
+	turns := []usage.ContextTurn{{Turn: 0, MessageID: "m1", At: ctxAt, Tokens: 1}, {Turn: 1, MessageID: "c1", At: ctxAt, Tokens: 1}}
+	if err := s.SaveContext("claude:1", "/a", false, nil, turns, 10, usage.ContextState{LastTurn: 1, LastMessageID: "c1"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, ok, err := s.TurnOfMessage("claude:1", "/a", "c1"); err != nil || !ok || n != 1 {
+		t.Fatalf("c1: %d %v %v", n, ok, err)
+	}
+	if _, ok, err := s.TurnOfMessage("claude:1", "/b", "c1"); err != nil || ok {
+		t.Fatalf("outro path: %v %v", ok, err)
+	}
+	if _, ok, err := s.TurnOfMessage("claude:1", "/a", "x"); err != nil || ok {
+		t.Fatalf("inexistente: %v %v", ok, err)
 	}
 }

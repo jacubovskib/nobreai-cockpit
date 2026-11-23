@@ -62,7 +62,8 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 // janela é sempre a da leitura mais recente (é determinística: a raiz do galho
 // fica em window_lines). As compactações (w.Compactions) vão para
 // context_compactions por (session_id, path, segment). reset=true apaga
-// também as window_lines e as compactações do path. Saídas e turnos fora de
+// também as window_lines e as compactações do path; w.Rewrite apaga só os
+// turnos e as saídas do path (releitura do começo). Saídas e turnos fora de
 // w.ByUUID ficam com w.Default. Os subagentes (w.Subagents) entram em
 // subagent_windows na mesma transação (ver ContextWindows).
 func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []usage.ToolOutput, turns []usage.ContextTurn, next int64, st usage.ContextState, w ContextWindows) error {
@@ -71,13 +72,15 @@ func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []us
 		return err
 	}
 	defer tx.Rollback()
-	if reset {
+	if reset || w.Rewrite {
 		if _, err := tx.Exec(`DELETE FROM tool_outputs WHERE session_id=? AND path=?`, sessionID, path); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`DELETE FROM context_turns WHERE session_id=? AND path=?`, sessionID, path); err != nil {
 			return err
 		}
+	}
+	if reset {
 		if _, err := tx.Exec(`DELETE FROM window_lines WHERE session_id=? AND path=?`, sessionID, path); err != nil {
 			return err
 		}
@@ -194,10 +197,10 @@ func saveSubagentWindowTx(tx *sql.Tx, sessionID, sub, win string) error {
 
 // ResetContextCursors volta o cursor de contexto de todos os transcripts ao
 // começo (tool_offset e segment 0) para a próxima leitura refazer a medição.
-// Nada é apagado: a releitura faz upsert nas mesmas chaves (turnos por
-// session_id,path,turn, com a numeração determinística do leitor; saídas por
-// session_id,item_id) e preenche as colunas novas. Linhas de transcript que
-// não existe mais ficam como estão. O offset de uso não muda.
+// Nada é apagado aqui: a leitura do Claude que recomeça do zero apaga os
+// turnos e as saídas daquele path na mesma transação em que os regrava
+// (ContextWindows.Rewrite); window_lines, compactações e uso ficam. Linhas de
+// transcript que não existe mais ficam como estão. O offset de uso não muda.
 func (s *Store) ResetContextCursors() error {
 	_, err := s.DB.Exec(`UPDATE transcript_offsets SET tool_offset=0, segment=0`)
 	return err

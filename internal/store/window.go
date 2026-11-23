@@ -101,6 +101,17 @@ func (s *Store) TurnWindow(sessionID, path, messageID string) (window string, ok
 	return window, err == nil, err
 }
 
+// TurnOfMessage devolve o turno já gravado do message.id no transcript path
+// (índice idx_context_turns_message); ok=false se não há (ver usage.KnownTurn).
+func (s *Store) TurnOfMessage(sessionID, path, messageID string) (turn int, ok bool, err error) {
+	err = s.DB.QueryRow(`SELECT turn FROM context_turns WHERE session_id=? AND path=? AND message_id=? ORDER BY turn LIMIT 1`,
+		sessionID, path, messageID).Scan(&turn)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return turn, err == nil, err
+}
+
 // SubagentWindow devolve a janela dona do arquivo de subagente path do
 // transcript lido por sessionID ("" = principal; ver ContextWindows.Subagents);
 // ok=false se ainda não se sabe (a linha do resultado do Agent não foi lida).
@@ -135,4 +146,8 @@ type ContextWindows struct {
 	Compactions map[int]string
 	Default     string
 	Subagents   map[string]string
+	// Rewrite apaga os turnos e as saídas já gravados do path antes de gravar
+	// os desta leitura (releitura do começo, com numeração que pode ter
+	// mudado). Diferente de reset, window_lines, compactações e uso ficam.
+	Rewrite bool
 }

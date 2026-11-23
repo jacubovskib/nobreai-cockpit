@@ -435,7 +435,7 @@ func TestWindow_ContextFailureStillReadsUsage(t *testing.T) {
 			e.prompt(t, 200, "revise o readme", time.Minute)
 			orig := parseContext
 			t.Cleanup(func() { parseContext = orig })
-			parseContext = func(path string, off int64, st usage.ContextState) ([]usage.ToolOutput, []usage.ContextTurn, []usage.Prompt, []usage.LineRef, int64, usage.ContextState, bool, error) {
+			parseContext = func(path string, off int64, st usage.ContextState, _ usage.KnownTurn) ([]usage.ToolOutput, []usage.ContextTurn, []usage.Prompt, []usage.LineRef, int64, usage.ContextState, bool, error) {
 				if mode == "pânico" {
 					panic("leitor quebrado")
 				}
@@ -722,13 +722,63 @@ func TestWindow_SubagentContextFailureUsesFileWindow(t *testing.T) {
 	p := e.writeSub(t, "ab1", time.Minute+10*time.Second)
 	orig := parseContext
 	t.Cleanup(func() { parseContext = orig })
-	parseContext = func(path string, off int64, st usage.ContextState) ([]usage.ToolOutput, []usage.ContextTurn, []usage.Prompt, []usage.LineRef, int64, usage.ContextState, bool, error) {
+	parseContext = func(path string, off int64, st usage.ContextState, known usage.KnownTurn) ([]usage.ToolOutput, []usage.ContextTurn, []usage.Prompt, []usage.LineRef, int64, usage.ContextState, bool, error) {
 		if path == p {
 			return nil, nil, nil, nil, off, st, false, errors.New("leitor quebrado")
 		}
-		return orig(path, off, st)
+		return orig(path, off, st, known)
 	}
 	e.read(t)
 	wantWindows(t, "uso", e.usageWindows(t), map[string]string{"s1": childID(200), "s2": childID(200)})
 	wantWindows(t, "card do uso", e.usageCards(t), map[string]string{"s1": cc.Key, "s2": cc.Key})
+}
+
+// Histórico antigo (Ruling 2): a filha chamou o Agent e tudo foi lido pelo
+// leitor de antes do mapeamento de subagentes (sem agentId: nenhuma linha em
+// subagent_windows, uso do subagente no card da principal). A subida para o
+// leitor v4 relê o principal antes do arquivo do subagente: o mapeamento nasce
+// com os turnos do subagente ainda gravados e o uso passa para a filha e o
+// card dela, sem duplicar nem mudar os totais.
+func TestWindow_OldChildSubagentFixedByV4(t *testing.T) {
+	e, mc, cc := childAgentCall(t, true)
+	p := e.writeSub(t, "ab1", time.Minute+10*time.Second)
+	orig := parseContext
+	parseContext = func(path string, off int64, st usage.ContextState, known usage.KnownTurn) ([]usage.ToolOutput, []usage.ContextTurn, []usage.Prompt, []usage.LineRef, int64, usage.ContextState, bool, error) {
+		outs, turns, prompts, lines, next, st, reset, err := orig(path, off, st, known)
+		for i := range lines {
+			lines[i].AgentID = "" // leitor antigo: não conhecia o agentId
+		}
+		return outs, turns, prompts, lines, next, st, reset, err
+	}
+	e.read(t)
+	parseContext = orig
+	wantWindows(t, "uso (leitor antigo)", e.usageWindows(t), map[string]string{"s1": "", "s2": ""})
+	wantWindows(t, "card do uso (leitor antigo)", e.usageCards(t), map[string]string{"s1": mc.Key, "s2": mc.Key})
+	if _, ok, err := e.st.SubagentWindow(sessID, p); err != nil || ok {
+		t.Fatalf("pré-condição: subagent_windows já tem %s (ok=%v err=%v)", p, ok, err)
+	}
+	type usageSum struct{ n, in, out int64 }
+	sum := func() (u usageSum) {
+		t.Helper()
+		if err := e.st.DB.QueryRow(`SELECT COUNT(*), SUM(input), SUM(output) FROM usage`).Scan(&u.n, &u.in, &u.out); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	before := sum()
+	if err := e.st.PutKV(contextReaderVersionKey, 3); err != nil {
+		t.Fatal(err)
+	}
+	e.a.Wait()
+	e.a.BackfillContext(t.Context())
+	if v := readerVersion(t, e); v != contextReaderVersion {
+		t.Fatalf("versão = %d", v)
+	}
+	wantSubOnChild(t, e, p, mc, cc)
+	if after := sum(); after != before || after.n != 4 {
+		t.Fatalf("uso mudou: %+v -> %+v (quer 4 linhas)", before, after)
+	}
+	if n := len(e.pairs(t, `SELECT message_id, turn FROM context_turns WHERE session_id=? AND path=?`, sessID, p)); n != 2 {
+		t.Fatalf("turnos do subagente = %d, quer 2", n)
+	}
 }
