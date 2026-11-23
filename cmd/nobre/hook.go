@@ -71,5 +71,8 @@ func (c *cli) hook(args []string) (code int) {
 		return 0
 	}
 	io.WriteString(c.out, reply.Stdout)
+	if reply.Stderr != "" {
+		io.WriteString(c.err, reply.Stderr)
+	}
 	return reply.Exit
 }

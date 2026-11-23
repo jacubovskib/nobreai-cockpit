@@ -46,9 +46,11 @@ type HookCall struct {
 	Env      map[string]string `json:"env"`
 }
 
-// HookReply é o que o `nobre hook` imprime e o código com que sai.
+// HookReply é o que o `nobre hook` imprime (Stdout no stdout, Stderr no
+// stderr) e o código com que sai.
 type HookReply struct {
 	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr,omitempty"`
 	Exit   int    `json:"exit"`
 }
 
