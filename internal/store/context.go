@@ -58,7 +58,9 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 // e as raízes da principal (w.MainRoots, com o id da principal) vão para
 // window_lines e os prompts casados ficam marcados como usados. A
 // janela é sempre a da leitura mais recente (é determinística: a raiz do galho
-// fica em window_lines). reset=true apaga também as window_lines do path.
+// fica em window_lines). As compactações (w.Compactions) vão para
+// context_compactions por (session_id, path, segment). reset=true apaga
+// também as window_lines e as compactações do path.
 func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []usage.ToolOutput, turns []usage.ContextTurn, next int64, st usage.ContextState, w ContextWindows) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -73,6 +75,16 @@ func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []us
 			return err
 		}
 		if _, err := tx.Exec(`DELETE FROM window_lines WHERE session_id=? AND path=?`, sessionID, path); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM context_compactions WHERE session_id=? AND path=?`, sessionID, path); err != nil {
+			return err
+		}
+	}
+	for seg, win := range w.Compactions {
+		if _, err := tx.Exec(`INSERT INTO context_compactions (session_id, path, segment, window_session_id) VALUES (?,?,?,?)
+			ON CONFLICT(session_id, path, segment) DO UPDATE SET window_session_id=excluded.window_session_id`,
+			sessionID, path, seg, win); err != nil {
 			return err
 		}
 	}

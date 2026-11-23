@@ -451,3 +451,107 @@ func TestWindow_ContextFailureStillReadsUsage(t *testing.T) {
 		})
 	}
 }
+
+// wCompact é a compactação de uma janela: a linha compact_boundary (sem pai,
+// com logicalParentUuid na última linha da janela) e o resumo pendurado nela.
+func wCompact(uuid, logicalParent, summary string, at time.Duration) string {
+	return `{"type":"system","subtype":"compact_boundary",` + parentField("") + `,"logicalParentUuid":"` + logicalParent +
+		`","uuid":"` + uuid + `","timestamp":"` + ts(at) + `"}` + "\n" +
+		`{"type":"user",` + parentField(uuid) + `,"uuid":"` + summary + `","isCompactSummary":true,"timestamp":"` + ts(at) +
+		`","message":{"role":"user","content":"resumo"}}` + "\n"
+}
+
+// warnOf é o aviso de contexto do próximo prompt da sessão id ("" sem aviso).
+func (e *env) warnOf(t *testing.T, id string) string {
+	t.Helper()
+	sess, err := e.st.GetSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e.a.contextWarning(sess, payload{})
+}
+
+func (e *env) liveOf(t *testing.T, id string) store.ContextLive {
+	t.Helper()
+	c, err := e.st.SessionContextAt(id, e.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// windowsWarned abre as duas janelas, com um turno de cada (100% da janela),
+// e consome o aviso de contexto das duas.
+func windowsWarned(t *testing.T) *env {
+	t.Helper()
+	e, _ := windowEnv(t)
+	e.prompt(t, 100, "investigue o login", time.Minute)
+	e.prompt(t, 200, "revise o readme", time.Minute+5*time.Second)
+	e.childCard(t, 200, "README")
+	appendFile(t, e.transcript, wPrompt("mu1", "", "investigue o login", time.Minute)+
+		wAssistant("ma1", "mu1", "m1", "", time.Minute+7*time.Second)+
+		wPrompt("cu1", "", "revise o readme", time.Minute+5*time.Second)+
+		wAssistant("ca1", "cu1", "c1", "", time.Minute+8*time.Second))
+	e.read(t)
+	for _, id := range []string{sessID, childID(200)} {
+		if e.warnOf(t, id) == "" {
+			t.Fatalf("%s sem o primeiro aviso", id)
+		}
+		if got := e.warnOf(t, id); got != "" {
+			t.Fatalf("%s avisou de novo: %q", id, got)
+		}
+	}
+	return e
+}
+
+// A compactação é da janela que compactou (logicalParentUuid): a da principal
+// não conta para a filha, que segue sem compactação e sem aviso repetido; a
+// principal volta a ser avisada.
+func TestWindow_MainCompactionIsNotChilds(t *testing.T) {
+	e := windowsWarned(t)
+	appendFile(t, e.transcript, wCompact("b1", "ma1", "s1", 2*time.Minute)+
+		wAssistant("ma2", "s1", "m2", "", 2*time.Minute+5*time.Second)+
+		wAssistant("ca2", "ca1", "c2", "", 2*time.Minute+6*time.Second))
+	e.read(t)
+	child := e.liveOf(t, childID(200))
+	if child.Compactions != 0 || child.TurnsSinceCompact != 2 {
+		t.Fatalf("filha: compactações %d, turnos desde %d", child.Compactions, child.TurnsSinceCompact)
+	}
+	if got := e.warnOf(t, childID(200)); got != "" {
+		t.Fatalf("filha avisada de novo: %q", got)
+	}
+	main := e.liveOf(t, sessID)
+	if main.Compactions != 1 || main.TurnsSinceCompact != 1 {
+		t.Fatalf("principal: compactações %d, turnos desde %d", main.Compactions, main.TurnsSinceCompact)
+	}
+	if e.warnOf(t, sessID) == "" {
+		t.Fatal("principal compactou e não foi avisada de novo")
+	}
+}
+
+// O espelho: a filha compacta (o pai lógico da compactação está numa leitura
+// anterior e a compactação fica no fim da leitura); a principal não conta.
+func TestWindow_ChildCompactionIsNotMains(t *testing.T) {
+	e := windowsWarned(t)
+	appendFile(t, e.transcript, wCompact("b1", "ca1", "s1", 2*time.Minute))
+	e.read(t)
+	e.prompt(t, 200, "continue", 3*time.Minute)
+	appendFile(t, e.transcript, wAssistant("ma2", "ma1", "m2", "", 2*time.Minute+5*time.Second)+
+		wPrompt("cu2", "s1", "continue", 3*time.Minute)+
+		wAssistant("ca2", "cu2", "c2", "", 3*time.Minute+2*time.Second))
+	e.read(t)
+	main := e.liveOf(t, sessID)
+	if main.Compactions != 0 || main.TurnsSinceCompact != 2 {
+		t.Fatalf("principal: compactações %d, turnos desde %d", main.Compactions, main.TurnsSinceCompact)
+	}
+	if got := e.warnOf(t, sessID); got != "" {
+		t.Fatalf("principal avisada de novo: %q", got)
+	}
+	child := e.liveOf(t, childID(200))
+	if child.Compactions != 1 || child.TurnsSinceCompact != 1 {
+		t.Fatalf("filha: compactações %d, turnos desde %d", child.Compactions, child.TurnsSinceCompact)
+	}
+	if e.warnOf(t, childID(200)) == "" {
+		t.Fatal("filha compactou e não foi avisada de novo")
+	}
+}

@@ -95,6 +95,33 @@ func assignWindows(mainID string, lines []usage.LineRef, prompts []usage.Prompt,
 	return byUUID, mainRoots, used
 }
 
+// compactionWindows devolve a janela de cada compactação desta leitura
+// (segmento → janela, "" = principal): a do pai lógico (logicalParentUuid),
+// atribuído nesta leitura (byUUID) ou numa anterior (known), senão a
+// principal. A linha da compactação em si continua sem pai (o resumo e o que
+// vem depois ficam com a principal, ver assignWindows): só a contagem de
+// compactações de cada janela usa isto.
+func compactionWindows(mainID string, lines []usage.LineRef, byUUID, known map[string]string) map[int]string {
+	var out map[int]string
+	for _, l := range lines {
+		if l.Compact == 0 {
+			continue
+		}
+		win, ok := byUUID[l.LogicalParentUUID]
+		if !ok {
+			win = known[l.LogicalParentUUID]
+		}
+		if win == mainID {
+			win = ""
+		}
+		if out == nil {
+			out = map[int]string{}
+		}
+		out[l.Compact] = win
+	}
+	return out
+}
+
 // nearestPrompt devolve o índice do prompt aberto (não tomado) com o resumo
 // key mais próximo de at dentro da tolerância; -1 se nenhum.
 func nearestPrompt(open []store.WindowPrompt, taken map[int64]bool, key string, at time.Time) int {

@@ -53,8 +53,9 @@ func contextBand(pcts []int, pct float64) int {
 
 // contextWarning é o aviso de faixa de contexto do prompt ("" sem nada a
 // dizer): só sessão com captura completa e avisos ligados. Avisa uma vez por
-// faixa por segmento de compactação; um segmento novo reinicia as faixas e
-// avisa a mais alta já cruzada. Falhas do banco só vão para o log.
+// faixa por segmento de compactação da janela (a compactação de outra janela
+// da conversa não conta, ver ContextLive.Segment); um segmento novo reinicia
+// as faixas e avisa a mais alta já cruzada. Falhas do banco só vão para o log.
 func (a *Adapter) contextWarning(sess domain.Session, p payload) string {
 	if !sess.FullCapture || p.AgentID != "" {
 		return ""

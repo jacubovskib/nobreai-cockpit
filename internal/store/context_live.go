@@ -54,7 +54,10 @@ type ContextLive struct {
 	IdleSec           int64               `json:"idle_sec"`
 	IdleOverTTL       bool                `json:"idle_over_ttl"` // parada além do cache, com contexto > 200.000
 	TopOutputs        []ContextLiveOutput `json:"top_outputs"`
-	Segment           int                 `json:"-"` // segmento de compactação do último turno (só com Tokens > 0)
+	// Segment é o segmento (do arquivo) do primeiro turno depois da última
+	// compactação da janela (só com Tokens > 0): só muda numa compactação da
+	// própria janela.
+	Segment int `json:"-"`
 }
 
 // liveRow é um turno lido para o cálculo do medidor.
@@ -131,6 +134,26 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 		return out, err
 	}
 
+	// Compactações das outras janelas: não contam para esta.
+	foreign := map[int]bool{}
+	crows, err := s.DB.Query(`SELECT segment FROM context_compactions WHERE session_id=? AND path=? AND NOT (`+where+`)`,
+		append([]any{owner, mainPath}, args...)...)
+	if err != nil {
+		return out, err
+	}
+	for crows.Next() {
+		var seg int
+		if err := crows.Scan(&seg); err != nil {
+			crows.Close()
+			return out, err
+		}
+		foreign[seg] = true
+	}
+	crows.Close()
+	if err := crows.Err(); err != nil {
+		return out, err
+	}
+
 	var maxTokens int64
 	for _, t := range turns {
 		maxTokens = max(maxTokens, t.tokens)
@@ -139,7 +162,6 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 	if n := len(turns); n > 0 {
 		last := turns[n-1]
 		out.Tokens = last.tokens
-		out.Segment = last.segment
 		// TTL do cache: o gravado mais recentemente (um turno só de leitura não o muda).
 		for i := n - 1; i >= 0; i-- {
 			if turns[i].ttl != "" {
@@ -148,7 +170,7 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 			}
 		}
 		out.Pct = float64(last.tokens) * 100 / float64(out.WindowTokens)
-		fillTurnStats(&out, turns, now)
+		fillTurnStats(&out, turns, foreign, now)
 	}
 	if t, err := time.Parse(time.RFC3339Nano, lastEvent); err == nil {
 		out.IdleSec = max(0, int64(now.Sub(t).Seconds()))
@@ -193,16 +215,19 @@ func fillWindow(out *ContextLive, set domain.Settings, maxTokens int64) {
 	}
 }
 
-// fillTurnStats calcula crescimento, compactações, cache e regravação (turns não vazio).
-func fillTurnStats(out *ContextLive, turns []liveRow, now time.Time) {
-	// Compactação = salto de segmento entre turnos consecutivos.
+// fillTurnStats calcula crescimento, compactações, cache e regravação (turns
+// não vazio). foreign são os segmentos abertos por compactação de outra janela.
+func fillTurnStats(out *ContextLive, turns []liveRow, foreign map[int]bool, now time.Time) {
+	// Compactação = salto de segmento entre turnos consecutivos com alguma
+	// compactação que não é de outra janela no meio.
 	from := 0
 	for i := 1; i < len(turns); i++ {
-		if turns[i].segment != turns[i-1].segment {
+		if ownCompaction(turns[i-1].segment, turns[i].segment, foreign) {
 			out.Compactions++
 			from = i
 		}
 	}
+	out.Segment = turns[from].segment
 	seg := turns[from:]
 	out.TurnsSinceCompact = len(seg)
 	if len(seg) >= 3 {
@@ -229,4 +254,19 @@ func fillTurnStats(out *ContextLive, turns []liveRow, now time.Time) {
 			out.RecentRewrite = &ContextRewrite{Tokens: t.write, At: t.at}
 		}
 	}
+}
+
+// ownCompaction diz se entre um turno do segmento prev e o seguinte, do
+// segmento cur, houve compactação da janela: algum segmento em (prev, cur]
+// que não foi aberto por outra janela (sem registro conta como da janela).
+func ownCompaction(prev, cur int, foreign map[int]bool) bool {
+	if cur < prev {
+		return true
+	}
+	for k := prev + 1; k <= cur; k++ {
+		if !foreign[k] {
+			return true
+		}
+	}
+	return false
 }

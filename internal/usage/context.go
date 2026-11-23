@@ -82,10 +82,16 @@ type Prompt struct {
 // user de prompt ou tool_result, attachment, system, resumo de compactação),
 // só com os uuids e o tipo da linha, sem conteúdo. Serve para seguir o galho
 // de parentUuid (atribuição por janela).
+//
+// Numa linha compact_boundary, Compact é o número da compactação (o Segment
+// depois dela) e LogicalParentUUID a última linha antes dela (o parentUuid
+// da compactação é nulo): dá a janela que compactou. Nas outras, 0 e "".
 type LineRef struct {
-	UUID       string
-	ParentUUID string
-	Kind       string // o type da linha
+	UUID              string
+	ParentUUID        string
+	Kind              string // o type da linha
+	Compact           int
+	LogicalParentUUID string
 }
 
 // ContextState é o estado que atravessa leituras incrementais do mesmo arquivo.
@@ -116,6 +122,7 @@ type ctxLine struct {
 	Subtype          string `json:"subtype"`
 	UUID             string `json:"uuid"`
 	ParentUUID       string `json:"parentUuid"`
+	LogicalParent    string `json:"logicalParentUuid"`
 	IsMeta           bool   `json:"isMeta"`
 	IsCompactSummary bool   `json:"isCompactSummary"`
 	Timestamp        string `json:"timestamp"`
@@ -195,6 +202,9 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 		case "system":
 			if l.Subtype == "compact_boundary" {
 				st.Segment++
+				if l.UUID != "" {
+					lines[len(lines)-1].Compact, lines[len(lines)-1].LogicalParentUUID = st.Segment, l.LogicalParent
+				}
 			}
 		case "assistant":
 			if l.Message == nil {

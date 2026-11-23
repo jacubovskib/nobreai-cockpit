@@ -288,3 +288,49 @@ func TestGetSettingsNullModelWindowsKeepsDefaults(t *testing.T) {
 		t.Fatalf("%+v %v", st.ModelWindows, err)
 	}
 }
+
+// Cada janela só conta as próprias compactações (context_compactions); o
+// segmento do medidor é o do primeiro turno depois da última delas. reset
+// apaga as compactações do path.
+func TestSessionContextCompactionsPerWindow(t *testing.T) {
+	s := newTestStore(t)
+	liveSession(t, s, "claude:p", "claude-sonnet-x", time.Minute)
+	child := newSession("claude:p@2", 2)
+	child.ParentSessionID = "claude:p"
+	child.LastEventAt = liveNow.Add(-time.Minute)
+	if err := s.StartSession(child); err != nil {
+		t.Fatal(err)
+	}
+	turns := []usage.ContextTurn{
+		liveTurn(0, 0, 9*time.Minute, 1000, 0, 0, "", "m0"),
+		liveTurn(1, 0, 8*time.Minute, 2000, 0, 0, "", "c0"),
+		// compactação 1: da principal
+		liveTurn(2, 1, 7*time.Minute, 1100, 0, 0, "", "m1"),
+		liveTurn(3, 1, 6*time.Minute, 2100, 0, 0, "", "c1"),
+		// compactação 2: da filha
+		liveTurn(4, 2, 5*time.Minute, 300, 0, 0, "", "c2"),
+		liveTurn(5, 2, 4*time.Minute, 1200, 0, 0, "", "m2"),
+	}
+	w := ContextWindows{
+		ByUUID:      map[string]string{"c0": "claude:p@2", "c1": "claude:p@2", "c2": "claude:p@2"},
+		Compactions: map[int]string{1: "", 2: "claude:p@2"},
+	}
+	if err := s.SaveContextWindows("claude:p", "/main", false, nil, turns, 1, usage.ContextState{LastTurn: 5, Segment: 2}, w); err != nil {
+		t.Fatal(err)
+	}
+	main := liveCtx(t, s, "claude:p")
+	if main.Compactions != 1 || main.TurnsSinceCompact != 2 || main.Segment != 1 {
+		t.Fatalf("principal: compactações %d, turnos desde %d, segmento %d", main.Compactions, main.TurnsSinceCompact, main.Segment)
+	}
+	ch := liveCtx(t, s, "claude:p@2")
+	if ch.Compactions != 1 || ch.TurnsSinceCompact != 1 || ch.Segment != 2 {
+		t.Fatalf("filha: compactações %d, turnos desde %d, segmento %d", ch.Compactions, ch.TurnsSinceCompact, ch.Segment)
+	}
+	if err := s.SaveContextWindows("claude:p", "/main", true, nil, nil, 0, usage.ContextState{LastTurn: -1}, ContextWindows{}); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM context_compactions`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("reset deixou %d compactações (%v)", n, err)
+	}
+}

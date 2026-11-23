@@ -433,7 +433,7 @@ func TestParseContext_Lines(t *testing.T) {
 		line("assistant", "a2", "a1", asstMsg("m1", u, toolUse("t1", "Bash", `{"command":"ls"}`))),
 		line("user", "r1", "a2", `"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"abcd"}]}`),
 		line("attachment", "h1", "r1", `"attachment":{"type":"hook_success","hookEvent":"PostToolUse","command":"x","stdout":""}`),
-		`{"type":"system","subtype":"compact_boundary","uuid":"c1","parentUuid":null,"timestamp":"2026-11-18T10:00:03Z"}`,
+		`{"type":"system","subtype":"compact_boundary","uuid":"c1","parentUuid":null,"logicalParentUuid":"h1","timestamp":"2026-11-18T10:00:03Z"}`,
 		line("user", "s1", "c1", `"isCompactSummary":true,"message":{"role":"user","content":"resumo"}`),
 		`{"type":"summary","summary":"sem uuid"}`,
 	)
@@ -447,7 +447,7 @@ func TestParseContext_Lines(t *testing.T) {
 		{UUID: "a2", ParentUUID: "a1", Kind: "assistant"},
 		{UUID: "r1", ParentUUID: "a2", Kind: "user"},
 		{UUID: "h1", ParentUUID: "r1", Kind: "attachment"},
-		{UUID: "c1", ParentUUID: "", Kind: "system"},
+		{UUID: "c1", ParentUUID: "", Kind: "system", Compact: 1, LogicalParentUUID: "h1"},
 		{UUID: "s1", ParentUUID: "c1", Kind: "user"},
 	}
 	if len(lines) != len(want) {

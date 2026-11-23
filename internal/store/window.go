@@ -106,9 +106,12 @@ func (s *Store) TurnWindow(sessionID, path, messageID string) (window string, ok
 // id da janela); as demais são da principal. MainRoots são prompts casados com
 // a principal cujo pai é de uma filha (vão para window_lines com o id da
 // principal, para a releitura não os passar à filha). UsedPrompts são os
-// prompts de window_prompts casados nesta leitura.
+// prompts de window_prompts casados nesta leitura. Compactions são as
+// compactações desta leitura (segmento → janela que compactou, "" =
+// principal), gravadas em context_compactions.
 type ContextWindows struct {
 	ByUUID      map[string]string
 	MainRoots   []string
 	UsedPrompts []int64
+	Compactions map[int]string
 }

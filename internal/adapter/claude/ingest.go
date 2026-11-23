@@ -170,7 +170,8 @@ func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins ma
 		}
 	}
 	byUUID, roots, used := assignWindows(sessionID, lines, prompts, known, open)
-	w := store.ContextWindows{ByUUID: byUUID, MainRoots: roots, UsedPrompts: used}
+	w := store.ContextWindows{ByUUID: byUUID, MainRoots: roots, UsedPrompts: used,
+		Compactions: compactionWindows(sessionID, lines, byUUID, known)}
 	if err := a.st.SaveContextWindows(sessionID, path, reset, outs, turns, next, newSt, w); err != nil {
 		return 0, nil, 0, err
 	}
@@ -184,9 +185,9 @@ func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins ma
 // Versão do leitor de contexto, guardada na chave livre contextReaderVersionKey
 // das configurações. Subir a versão faz a próxima passada do histórico refazer
 // toda a medição de contexto uma vez. Versão 2: detalhe de cache e TTL por
-// turno (NAC-40).
+// turno (NAC-40). Versão 3: janela de cada compactação (context_compactions).
 const (
-	contextReaderVersion    = 2
+	contextReaderVersion    = 3
 	contextReaderVersionKey = "context_reader_version"
 )
 
