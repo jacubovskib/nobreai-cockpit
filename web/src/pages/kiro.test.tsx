@@ -81,6 +81,31 @@ describe('medidor pct_only', () => {
     expect(screen.queryByText('Cache aproveitado')).not.toBeInTheDocument()
     expect(screen.queryByText('Parada')).not.toBeInTheDocument()
   })
+  const pctLive = (o: Partial<ContextLive>) => ({ tokens: 0, model: '', window_tokens: 0, window_estimated: false, pct: 60, pct_only: true, growth_per_turn: 0, turns_to_limit: 0, at_limit: false, turns_since_compact: 4, compactions: 0, cache_hit_pct: 0, recent_rewrite: null, ttl: '', idle_sec: 900, idle_over_ttl: false, top_outputs: [], ...o }) as ContextLive
+  const row = (label: string) => screen.getByText(label).closest('div')!
+  it('detalhe pct_only mostra crescimento em pp, turnos até o limite e maiores saídas', () => {
+    render(<ContextInfo c={pctLive({ growth_per_turn: 7, turns_to_limit: 5, top_outputs: [{ tool: 'shell', key: 'npm test', tokens: 12000, at: '2026-11-23T12:00:00Z' }] })} />)
+    expect(row('Crescimento por turno')).toHaveTextContent('7 pp')
+    expect(row('Turnos até o limite')).toHaveTextContent('5')
+    expect(screen.getByText('Maiores saídas na janela')).toBeInTheDocument()
+    expect(screen.getByText('npm test')).toBeInTheDocument()
+    expect(screen.getByText(/12 mil tokens/)).toBeInTheDocument()
+    expect(screen.queryByText(/cache/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('Parada')).not.toBeInTheDocument()
+  })
+  it('detalhe pct_only: crescimento abaixo de 1 pp, sem dados e no limite', () => {
+    const { unmount } = render(<ContextInfo c={pctLive({ growth_per_turn: 0, turns_to_limit: 80 })} />)
+    expect(row('Crescimento por turno')).toHaveTextContent('menos de 1 pp')
+    expect(row('Turnos até o limite')).toHaveTextContent('80')
+    expect(screen.getByText('Nenhuma saída grande.')).toBeInTheDocument()
+    unmount()
+    const r2 = render(<ContextInfo c={pctLive({})} />)
+    expect(row('Crescimento por turno')).toHaveTextContent('ainda sem dados')
+    expect(row('Turnos até o limite')).toHaveTextContent('sem crescimento')
+    r2.unmount()
+    render(<ContextInfo c={pctLive({ pct: 96, at_limit: true })} />)
+    expect(row('Turnos até o limite')).toHaveTextContent('no limite')
+  })
 })
 
 describe('Configuração por capacidade', () => {

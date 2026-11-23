@@ -44,16 +44,32 @@ export function MeterOf({ c }: { c: ContextLive }) {
 
 const minutes = (sec: number) => (sec < 60 ? 'menos de 1 min' : `${Math.round(sec / 60)} min`)
 
+// growthText: o crescimento por turno em tokens ou, com pct_only, em pontos
+// percentuais. Na % o valor vem arredondado: 0 com turnos até o limite é um
+// crescimento abaixo de 1 pp, não falta de dados.
+function growthText(c: ContextLive): string {
+  if (c.pct_only) {
+    if (c.growth_per_turn > 0) return `${c.growth_per_turn} pp`
+    return c.turns_to_limit > 0 ? 'menos de 1 pp' : 'ainda sem dados'
+  }
+  return c.growth_per_turn > 0 ? `${formatTokensPt(c.growth_per_turn)} tokens` : 'ainda sem dados'
+}
+
 // Detalhe do medidor: crescimento, turnos até o limite, compactações, cache, parada e maiores saídas.
+// Com pct_only (só a % é conhecida) não há cache nem parada.
 export function ContextInfo({ c }: { c: ContextLive }) {
+  const head: [string, string][] = [
+    ['Crescimento por turno', growthText(c)],
+    ['Turnos até o limite', c.at_limit ? 'no limite' : c.turns_to_limit > 0 ? String(c.turns_to_limit) : 'sem crescimento'],
+  ]
   const rows: [string, string][] = c.pct_only
     ? [
+        ...head,
         ['Compactações', String(c.compactions)],
         ['Turnos desde a última compactação', String(c.turns_since_compact)],
       ]
     : [
-        ['Crescimento por turno', c.growth_per_turn > 0 ? `${formatTokensPt(c.growth_per_turn)} tokens` : 'ainda sem dados'],
-        ['Turnos até o limite', c.at_limit ? 'no limite' : c.turns_to_limit > 0 ? String(c.turns_to_limit) : 'sem crescimento'],
+        ...head,
         ['Compactações', String(c.compactions)],
         ['Turnos desde a última compactação', String(c.turns_since_compact)],
         ['Cache aproveitado', `${Math.round(c.cache_hit_pct)}%`],
@@ -67,7 +83,7 @@ export function ContextInfo({ c }: { c: ContextLive }) {
           <div key={k}><dt style={muted}>{k}</dt><dd style={{ margin: 0 }}>{v}</dd></div>
         ))}
       </dl>
-      {!c.pct_only && <div>
+      <div>
         <span style={muted}>Maiores saídas na janela</span>
         {c.top_outputs.length === 0 ? (
           <p style={{ ...muted, margin: '4px 0 0' }}>Nenhuma saída grande.</p>
@@ -81,7 +97,7 @@ export function ContextInfo({ c }: { c: ContextLive }) {
             ))}
           </ol>
         )}
-      </div>}
+      </div>
     </div>
   )
 }
