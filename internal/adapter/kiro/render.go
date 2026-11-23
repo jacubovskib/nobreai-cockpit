@@ -15,8 +15,6 @@ import (
 // (conferido ao vivo com o kiro-cli 3.5.0). Nada a dizer é saída vazia.
 func (a *Adapter) Render(ev agentcore.Event, r agentcore.Reply) (adapter.HookReply, error) {
 	switch {
-	case r.Raw != nil:
-		return *r.Raw, nil
 	case r.Block != nil:
 		return adapter.HookReply{Stderr: r.Block.Reason, Exit: 2}, nil
 	case r.HoldTurn != nil:

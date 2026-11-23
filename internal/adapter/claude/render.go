@@ -23,8 +23,6 @@ func init() {
 // não vazios como additionalContext do evento; nada a dizer é saída vazia.
 func (a *Adapter) Render(ev agentcore.Event, r agentcore.Reply) (adapter.HookReply, error) {
 	switch {
-	case r.Raw != nil:
-		return *r.Raw, nil
 	case r.Block != nil:
 		return jsonReply(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName":            "PreToolUse",

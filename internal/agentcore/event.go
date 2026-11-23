@@ -10,8 +10,6 @@ package agentcore
 import (
 	"encoding/json"
 	"time"
-
-	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 )
 
 // Kind é o tipo de um evento normalizado.
@@ -111,8 +109,6 @@ type Reply struct {
 	Block *Decision
 	// HoldTurn segura o fim do turno (TurnEnd).
 	HoldTurn *Decision
-	// Raw é a saída pronta, quando a resposta não cabe nos campos acima.
-	Raw *adapter.HookReply
 }
 
 // Decision é um bloqueio com o motivo que o agente lê.

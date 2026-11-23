@@ -45,10 +45,4 @@ func TestRender(t *testing.T) {
 	if err := json.Unmarshal([]byte(got.Stdout), &m); err != nil || m["decision"] != "block" {
 		t.Fatalf("segurar não é JSON: %v", err)
 	}
-
-	// Saída pronta passa direto.
-	raw := adapter.HookReply{Stdout: "x", Exit: 1}
-	if got := render(agentcore.Reply{Raw: &raw, Context: []string{"y"}}); got != raw {
-		t.Fatalf("raw = %+v", got)
-	}
 }
