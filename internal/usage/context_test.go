@@ -459,3 +459,44 @@ func TestParseContext_Lines(t *testing.T) {
 		}
 	}
 }
+
+// A linha user com o tool_result do Agent traz toolUseResult.agentId (o id do
+// arquivo subagents/agent-<id>.jsonl): sai em LineRef.AgentID. toolUseResult
+// que não é objeto (texto de erro) ou id fora do padrão não quebram a linha.
+func TestParseContext_AgentID(t *testing.T) {
+	res := `"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}`
+	p := writeLines(t,
+		line("user", "r1", "a1", res+`,"toolUseResult":{"status":"completed","agentId":"a72765c5809310a83","content":[]}`),
+		line("user", "r2", "r1", res+`,"toolUseResult":"Error: agente falhou"`),
+		line("user", "r3", "r2", res+`,"toolUseResult":{"status":"async_launched","agentId":"../../etc/x"}`),
+		line("user", "r4", "r3", res+`,"toolUseResult":{"stdout":"x"}`),
+		line("assistant", "a2", "r4", `"toolUseResult":{"agentId":"a1"},"message":{"id":"m1","content":[]}`),
+	)
+	_, _, _, lines, _, _, _, err := ParseContext(p, 0, zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []LineRef{
+		{UUID: "r1", ParentUUID: "a1", Kind: "user", AgentID: "a72765c5809310a83"},
+		{UUID: "r2", ParentUUID: "r1", Kind: "user"},
+		{UUID: "r3", ParentUUID: "r2", Kind: "user"},
+		{UUID: "r4", ParentUUID: "r3", Kind: "user"},
+		{UUID: "a2", ParentUUID: "r4", Kind: "assistant"},
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("lines %+v", lines)
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Fatalf("linha %d: %+v, quer %+v", i, lines[i], w)
+		}
+	}
+}
+
+func TestSubagentTranscript(t *testing.T) {
+	main := filepath.Join("x", "proj", "abc.jsonl")
+	got := SubagentTranscript(main, "a7")
+	if want := filepath.Join("x", "proj", "abc", "subagents", "agent-a7.jsonl"); got != want {
+		t.Fatalf("SubagentTranscript = %q, quer %q", got, want)
+	}
+}

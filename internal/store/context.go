@@ -62,7 +62,9 @@ func (s *Store) SaveContext(sessionID, path string, reset bool, outs []usage.Too
 // janela é sempre a da leitura mais recente (é determinística: a raiz do galho
 // fica em window_lines). As compactações (w.Compactions) vão para
 // context_compactions por (session_id, path, segment). reset=true apaga
-// também as window_lines e as compactações do path.
+// também as window_lines e as compactações do path. Saídas e turnos fora de
+// w.ByUUID ficam com w.Default. Os subagentes (w.Subagents) entram em
+// subagent_windows na mesma transação (ver ContextWindows).
 func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []usage.ToolOutput, turns []usage.ContextTurn, next int64, st usage.ContextState, w ContextWindows) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -104,6 +106,17 @@ func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []us
 			return err
 		}
 	}
+	for sub, win := range w.Subagents {
+		if err := saveSubagentWindowTx(tx, sessionID, sub, win); err != nil {
+			return err
+		}
+	}
+	winOf := func(uuid string) string {
+		if win, ok := w.ByUUID[uuid]; ok {
+			return win
+		}
+		return w.Default
+	}
 	for _, id := range w.UsedPrompts {
 		if _, err := tx.Exec(`UPDATE window_prompts SET used=1 WHERE id=?`, id); err != nil {
 			return err
@@ -124,7 +137,7 @@ func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []us
 			  bytes = CASE WHEN ?=1 THEN ? ELSE tool_outputs.bytes END,
 			  tokens = CASE WHEN ?=1 THEN ? ELSE tool_outputs.tokens END,
 			  is_error = CASE WHEN ?=1 THEN ? ELSE tool_outputs.is_error END`,
-			sessionID, path, o.ItemID, o.Tool, o.Key, o.Bytes, o.Tokens, o.InTokens, o.Turn, o.Segment, fmtTime(o.At), o.IsError, w.ByUUID[o.UUID],
+			sessionID, path, o.ItemID, o.Tool, o.Key, o.Bytes, o.Tokens, o.InTokens, o.Turn, o.Segment, fmtTime(o.At), o.IsError, winOf(o.UUID),
 			o.Tool, o.Key,
 			o.InTokens, o.InTokens,
 			res, o.Bytes,
@@ -140,7 +153,7 @@ func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []us
 			  message_id=excluded.message_id, at=excluded.at, tokens=excluded.tokens,
 			  input=excluded.input, cache_read=excluded.cache_read, cache_write=excluded.cache_write, ttl=excluded.ttl,
 			  window_session_id=excluded.window_session_id, pct=excluded.pct`,
-			sessionID, path, t.Turn, t.Segment, t.MessageID, fmtTime(t.At), t.Tokens, t.Input, t.CacheRead, t.CacheWrite, t.TTL, w.ByUUID[t.UUID], t.Pct); err != nil {
+			sessionID, path, t.Turn, t.Segment, t.MessageID, fmtTime(t.At), t.Tokens, t.Input, t.CacheRead, t.CacheWrite, t.TTL, winOf(t.UUID), t.Pct); err != nil {
 			return err
 		}
 	}
@@ -151,6 +164,32 @@ func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []us
 		return err
 	}
 	return tx.Commit()
+}
+
+// saveSubagentWindowTx grava a janela win do arquivo de subagente sub se ele
+// ainda não tem uma (a primeira vale) e, sendo filha, passa para ela os
+// turnos, as saídas e o uso já gravados do arquivo com a principal; o uso vai
+// também para o card atual da filha (única troca de card de uso já gravado). O uso não tem caminho: as linhas são as dos message_id
+// dos turnos do arquivo.
+func saveSubagentWindowTx(tx *sql.Tx, sessionID, sub, win string) error {
+	res, err := tx.Exec(`INSERT INTO subagent_windows (session_id, path, window_session_id) VALUES (?,?,?)
+		ON CONFLICT(session_id, path) DO NOTHING`, sessionID, sub, win)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 || win == "" {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE usage SET window_session_id=?, card_id=(SELECT card_id FROM sessions WHERE id=?)
+		WHERE session_id=? AND window_session_id='' AND message_id IN (SELECT message_id FROM context_turns WHERE session_id=? AND path=?)`,
+		win, win, sessionID, sessionID, sub); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE context_turns SET window_session_id=? WHERE session_id=? AND path=? AND window_session_id=''`, win, sessionID, sub); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`UPDATE tool_outputs SET window_session_id=? WHERE session_id=? AND path=? AND window_session_id=''`, win, sessionID, sub)
+	return err
 }
 
 // ResetContextCursors volta o cursor de contexto de todos os transcripts ao

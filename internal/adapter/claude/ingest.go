@@ -136,7 +136,8 @@ func (a *Adapter) readContextSafe(sessionID, path string, main bool) (n int, win
 // contexto), com cursor próprio (tool_offset), atribuídos às janelas da
 // conversa (assignWindows). Só o transcript principal (main) casa prompts do
 // hook: o prompt de um subagente é escrito pelo modelo, nunca digitado numa
-// janela. Devolve quantos registros leu, a janela de cada turno lido
+// janela. O arquivo de um subagente fica inteiro com a janela que rodou o
+// Agent (subagent_windows, vinda da leitura do principal), senão a principal. Devolve quantos registros leu, a janela de cada turno lido
 // (message.id → janela, "" = principal) e até onde leu (end; -1 se o arquivo
 // não existe). Arquivo inexistente é ignorado.
 func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins map[string]string, end int64, err error) {
@@ -157,8 +158,9 @@ func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins ma
 	}
 	// reset (arquivo truncado ou trocado) apaga as linhas do path: nada de
 	// antes vale, e o contexto relido volta para a principal até um prompt
-	// novo casar. O uso já gravado mantém a janela e o card (nunca são
-	// reescritos).
+	// novo casar. O uso já gravado mantém a janela e o card (só são
+	// reescritos uma vez, do subagente lido antes do resultado do Agent de uma
+	// filha: ver store.ContextWindows.Subagents).
 	var known map[string]string
 	if !reset {
 		if known, err = a.st.WindowLines(sessionID, path); err != nil {
@@ -166,22 +168,50 @@ func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins ma
 		}
 	}
 	var open []store.WindowPrompt
+	var def string
 	if main {
 		if open, err = a.st.OpenWindowPrompts(sessionID); err != nil {
 			return 0, nil, 0, err
 		}
+	} else if def, _, err = a.st.SubagentWindow(sessionID, path); err != nil {
+		return 0, nil, 0, err
 	}
 	byUUID, roots, used := assignWindows(sessionID, lines, prompts, known, open)
 	w := store.ContextWindows{ByUUID: byUUID, MainRoots: roots, UsedPrompts: used,
-		Compactions: compactionWindows(sessionID, lines, byUUID, known)}
+		Compactions: compactionWindows(sessionID, lines, byUUID, known), Default: def}
+	if main {
+		w.Subagents = subagentWindows(path, lines, byUUID)
+	}
 	if err := a.st.SaveContextWindows(sessionID, path, reset, outs, turns, next, newSt, w); err != nil {
 		return 0, nil, 0, err
 	}
 	wins = make(map[string]string, len(turns))
 	for _, t := range turns {
-		wins[t.MessageID] = byUUID[t.UUID]
+		win, ok := byUUID[t.UUID]
+		if !ok {
+			win = def
+		}
+		wins[t.MessageID] = win
 	}
 	return n, wins, next, nil
+}
+
+// subagentWindows devolve a janela de cada subagente cujo Agent teve o
+// resultado nesta leitura do transcript principal mainPath (arquivo do
+// subagente → janela da linha do resultado, "" = principal; ver
+// usage.LineRef.AgentID). O arquivo do subagente fica com essa janela.
+func subagentWindows(mainPath string, lines []usage.LineRef, byUUID map[string]string) map[string]string {
+	var out map[string]string
+	for _, l := range lines {
+		if l.AgentID == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[usage.SubagentTranscript(mainPath, l.AgentID)] = byUUID[l.UUID]
+	}
+	return out
 }
 
 // Versão do leitor de contexto, guardada na chave livre contextReaderVersionKey
@@ -273,7 +303,8 @@ func (a *Adapter) BackfillContext(ctx context.Context) {
 // readFile grava o uso novo do transcript path, de off até end (end < 0 =
 // até o fim). A janela de cada mensagem vem de wins (a leitura de contexto que
 // acabou de rodar) ou, se o turno foi atribuído numa leitura anterior, de
-// context_turns; sem nenhum dos dois, a principal.
+// context_turns; sem nenhum dos dois, a do arquivo de subagente
+// (subagent_windows), senão a principal.
 func (a *Adapter) readFile(sessionID, path string, off, end int64, wins map[string]string) ([]domain.UsageRow, int64, error) {
 	rows, next, err := usage.ParseClaudeTranscriptUntil(path, off, end)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -286,7 +317,14 @@ func (a *Adapter) readFile(sessionID, path string, off, end int64, wins map[stri
 		rows[i].SessionID = sessionID
 		win, ok := wins[rows[i].MessageID]
 		if !ok {
-			if win, _, err = a.st.TurnWindow(sessionID, path, rows[i].MessageID); err != nil {
+			if win, ok, err = a.st.TurnWindow(sessionID, path, rows[i].MessageID); err != nil {
+				return nil, off, err
+			}
+		}
+		if !ok {
+			// Sem turno (a leitura de contexto falhou): a janela do arquivo
+			// do subagente, se houver.
+			if win, _, err = a.st.SubagentWindow(sessionID, path); err != nil {
 				return nil, off, err
 			}
 		}

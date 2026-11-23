@@ -110,6 +110,12 @@ func ParseClaudeTranscriptUntil(path string, offset, limit int64) ([]domain.Usag
 	return out, offset + int64(len(data)), nil
 }
 
+// SubagentTranscript é o arquivo do subagente agentID do transcript
+// principal mainPath: <main sem .jsonl>/subagents/agent-<agentID>.jsonl.
+func SubagentTranscript(mainPath, agentID string) string {
+	return filepath.Join(strings.TrimSuffix(mainPath, ".jsonl"), "subagents", "agent-"+agentID+".jsonl")
+}
+
 // SubagentTranscripts lista <main sem .jsonl>/subagents/agent-*.jsonl.
 func SubagentTranscripts(mainPath string) []string {
 	m, _ := filepath.Glob(filepath.Join(strings.TrimSuffix(mainPath, ".jsonl"), "subagents", "agent-*.jsonl"))

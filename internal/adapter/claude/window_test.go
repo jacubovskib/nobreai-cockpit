@@ -558,3 +558,145 @@ func TestWindow_ChildCompactionIsNotMains(t *testing.T) {
 		t.Fatal("filha compactou e não foi avisada de novo")
 	}
 }
+
+// Subagente lançado por uma janela (I3). A linha user com o tool_result do
+// Agent traz toolUseResult.agentId, o id do arquivo subagents/agent-<id>.jsonl:
+// o arquivo do subagente fica com a janela dessa linha.
+
+// wAgentResult é o tool_result do Agent toolID com toolUseResult.agentId.
+func wAgentResult(uuid, parent, toolID, agentID string, at time.Duration) string {
+	return `{"type":"user",` + parentField(parent) + `,"uuid":"` + uuid + `","timestamp":"` + ts(at) +
+		`","message":{"content":[{"type":"tool_result","tool_use_id":"` + toolID + `","content":"feito"}]},` +
+		`"toolUseResult":{"status":"completed","agentId":"` + agentID + `","content":[]}}` + "\n"
+}
+
+// subPath é o arquivo do subagente id da conversa.
+func (e *env) subPath(id string) string {
+	return usage.SubagentTranscript(e.transcript, id)
+}
+
+// writeSub escreve o arquivo do subagente id com dois turnos (s1 com o
+// tool_use st1 e o resultado, s2).
+func (e *env) writeSub(t *testing.T, id string, at time.Duration) string {
+	t.Helper()
+	p := e.subPath(id)
+	if err := os.MkdirAll(strings.TrimSuffix(p, "/agent-"+id+".jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, p, wPrompt("su", "", "procure o handler", at)+
+		wAssistant("sa1", "su", "s1", "st1", at+time.Second)+
+		wResult("sr1", "sa1", "st1", at+2*time.Second)+
+		wAssistant("sa2", "sr1", "s2", "", at+3*time.Second))
+	return p
+}
+
+// subWindows devolve as janelas de turnos e saídas gravados do arquivo p.
+func (e *env) subWindows(t *testing.T, p string) (turns, outs map[string]string) {
+	t.Helper()
+	turns = e.pairs(t, `SELECT message_id, window_session_id FROM context_turns WHERE session_id=? AND path=?`, sessID, p)
+	outs = e.pairs(t, `SELECT item_id, window_session_id FROM tool_outputs WHERE session_id=? AND path=?`, sessID, p)
+	return turns, outs
+}
+
+// childAgentCall: a principal pergunta do login, a filha (PID 200, card
+// README) chama o Agent tc1. withResult escreve também a linha do resultado
+// (agentId "ab1").
+func childAgentCall(t *testing.T, withResult bool) (e *env, mc, cc domain.Card) {
+	t.Helper()
+	e, mc = windowEnv(t)
+	e.prompt(t, 100, "investigue o login", time.Minute)
+	e.prompt(t, 200, "revise o readme", time.Minute+5*time.Second)
+	cc = e.childCard(t, 200, "README")
+	lines := wPrompt("mu1", "", "investigue o login", time.Minute) +
+		wPrompt("cu1", "mu1", "revise o readme", time.Minute+5*time.Second) +
+		wAssistant("ma1", "mu1", "m1", "", time.Minute+7*time.Second) +
+		wAssistant("ca1", "cu1", "c1", "tc1", time.Minute+8*time.Second)
+	if withResult {
+		lines += wAgentResult("cr1", "ca1", "tc1", "ab1", time.Minute+30*time.Second)
+	}
+	appendFile(t, e.transcript, lines)
+	return e, mc, cc
+}
+
+// wantSubOnChild confere que o uso, os turnos e as saídas do subagente são da
+// filha e que o custo dele está no card da filha (e não no da principal).
+func wantSubOnChild(t *testing.T, e *env, p string, mc, cc domain.Card) {
+	t.Helper()
+	child := childID(200)
+	turns, outs := e.subWindows(t, p)
+	wantWindows(t, "turno do subagente", turns, map[string]string{"s1": child, "s2": child})
+	wantWindows(t, "saída do subagente", outs, map[string]string{"st1": child})
+	wantWindows(t, "uso", e.usageWindows(t), map[string]string{"m1": "", "c1": child, "s1": child, "s2": child})
+	wantWindows(t, "card do uso", e.usageCards(t), map[string]string{"m1": mc.Key, "c1": cc.Key, "s1": cc.Key, "s2": cc.Key})
+	zero := 0.0
+	if err := e.st.PutPrice(domain.Price{Model: "claude-opus-5-5", InputPerM: 1, CacheWritePerM: &zero, CacheReadPerM: &zero}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		card  domain.Card
+		input int64
+	}{{mc, 1_000_000}, {cc, 3_000_000}} {
+		ts, err := e.st.Totals(store.TotalsFilter{GroupBy: "card", CardID: &c.card.ID})
+		if err != nil || len(ts) != 1 || ts[0].Input != c.input {
+			t.Errorf("total do card %s = %+v %v (quer input %d)", c.card.Key, ts, err, c.input)
+		}
+	}
+}
+
+// A filha chama o Agent: o uso do arquivo do subagente fica com a filha e o
+// custo no card dela. Releitura do começo não duplica nem troca nada.
+func TestWindow_ChildSubagentUsageOnChildCard(t *testing.T) {
+	e, mc, cc := childAgentCall(t, true)
+	p := e.writeSub(t, "ab1", time.Minute+10*time.Second)
+	e.read(t)
+	wantSubOnChild(t, e, p, mc, cc)
+	if err := e.st.ResetContextCursors(); err != nil {
+		t.Fatal(err)
+	}
+	e.read(t)
+	wantSubOnChild(t, e, p, mc, cc)
+	var n int
+	if err := e.st.DB.QueryRow(`SELECT COUNT(*) FROM usage`).Scan(&n); err != nil || n != 4 {
+		t.Fatalf("uso = %d linhas %v, quer 4", n, err)
+	}
+	// O arquivo do subagente não ganha linhas em window_lines (a janela é a
+	// do arquivo inteiro).
+	if wl := e.pairs(t, `SELECT uuid, window_session_id FROM window_lines WHERE session_id=? AND path=?`, sessID, p); len(wl) != 0 {
+		t.Fatalf("window_lines do subagente = %v", wl)
+	}
+}
+
+// O arquivo do subagente é lido antes da linha do resultado (o Agent ainda
+// rodava): o uso fica com a principal até o resultado aparecer; na leitura
+// seguinte (o arquivo do subagente sem nada novo) é corrigido para a filha e
+// o card dela. O que o subagente escreve depois já nasce na filha.
+func TestWindow_ChildSubagentReadBeforeResultIsFixed(t *testing.T) {
+	e, mc, cc := childAgentCall(t, false)
+	p := e.writeSub(t, "ab1", time.Minute+10*time.Second)
+	e.read(t)
+	wantWindows(t, "uso (antes do resultado)", e.usageWindows(t), map[string]string{"s1": "", "s2": ""})
+	wantWindows(t, "card do uso (antes do resultado)", e.usageCards(t), map[string]string{"s1": mc.Key, "s2": mc.Key})
+	appendFile(t, e.transcript, wAgentResult("cr1", "ca1", "tc1", "ab1", time.Minute+30*time.Second))
+	e.read(t)
+	wantSubOnChild(t, e, p, mc, cc)
+	appendFile(t, p, wAssistant("sa3", "sa2", "s3", "", time.Minute+40*time.Second))
+	e.read(t)
+	wantWindows(t, "uso (depois)", e.usageWindows(t), map[string]string{"s3": childID(200)})
+	wantWindows(t, "card do uso (depois)", e.usageCards(t), map[string]string{"s3": cc.Key})
+	turns, _ := e.subWindows(t, p)
+	wantWindows(t, "turno do subagente (depois)", turns, map[string]string{"s3": childID(200)})
+}
+
+// A principal chama o Agent: nada muda, o subagente fica com a principal.
+func TestWindow_MainSubagentStaysOnMain(t *testing.T) {
+	e, mc, _ := childAgentCall(t, false)
+	appendFile(t, e.transcript, wAssistant("ma2", "ma1", "m2", "tm2", time.Minute+9*time.Second)+
+		wAgentResult("mr2", "ma2", "tm2", "ab1", time.Minute+30*time.Second))
+	p := e.writeSub(t, "ab1", time.Minute+10*time.Second)
+	e.read(t)
+	turns, outs := e.subWindows(t, p)
+	wantWindows(t, "turno do subagente", turns, map[string]string{"s1": "", "s2": ""})
+	wantWindows(t, "saída do subagente", outs, map[string]string{"st1": ""})
+	wantWindows(t, "uso", e.usageWindows(t), map[string]string{"m2": "", "s1": "", "s2": "", "c1": childID(200)})
+	wantWindows(t, "card do uso", e.usageCards(t), map[string]string{"m2": mc.Key, "s1": mc.Key, "s2": mc.Key})
+}

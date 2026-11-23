@@ -89,12 +89,18 @@ type Prompt struct {
 // Numa linha compact_boundary, Compact é o número da compactação (o Segment
 // depois dela) e LogicalParentUUID a última linha antes dela (o parentUuid
 // da compactação é nulo): dá a janela que compactou. Nas outras, 0 e "".
+//
+// Numa linha user com o tool_result do Agent, AgentID é o
+// toolUseResult.agentId: o id do arquivo subagents/agent-<id>.jsonl do
+// subagente que o Agent rodou (a janela da linha é a do subagente). Id fora
+// do padrão (letras, números, _ e -) fica vazio.
 type LineRef struct {
 	UUID              string
 	ParentUUID        string
 	Kind              string // o type da linha
 	Compact           int
 	LogicalParentUUID string
+	AgentID           string
 }
 
 // ContextState é o estado que atravessa leituras incrementais do mesmo arquivo.
@@ -129,7 +135,10 @@ type ctxLine struct {
 	IsMeta           bool   `json:"isMeta"`
 	IsCompactSummary bool   `json:"isCompactSummary"`
 	Timestamp        string `json:"timestamp"`
-	Attachment       *struct {
+	// toolUseResult pode ser objeto ou texto (erro): só o agentId é lido
+	// (agentID), sem quebrar a linha quando não é objeto.
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Attachment    *struct {
 		Type          string          `json:"type"`
 		HookEvent     string          `json:"hookEvent"`
 		Command       string          `json:"command"`
@@ -195,7 +204,11 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 			continue
 		}
 		if l.UUID != "" {
-			lines = append(lines, LineRef{UUID: l.UUID, ParentUUID: l.ParentUUID, Kind: l.Type})
+			ref := LineRef{UUID: l.UUID, ParentUUID: l.ParentUUID, Kind: l.Type}
+			if l.Type == "user" {
+				ref.AgentID = agentID(l.ToolUseResult)
+			}
+			lines = append(lines, ref)
 		}
 		at, perr := time.Parse(time.RFC3339Nano, l.Timestamp)
 		if perr != nil {
@@ -278,6 +291,24 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 		}
 	}
 	return outs, turns, prompts, lines, next, st, reset, nil
+}
+
+var reAgentID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// agentID devolve o toolUseResult.agentId de uma linha user ("" se o
+// toolUseResult não é objeto, não tem agentId ou o id foge do padrão: ele vira
+// nome de arquivo).
+func agentID(raw json.RawMessage) string {
+	if len(raw) == 0 || raw[0] != '{' {
+		return ""
+	}
+	var r struct {
+		AgentID string `json:"agentId"`
+	}
+	if json.Unmarshal(raw, &r) != nil || !reAgentID.MatchString(r.AgentID) {
+		return ""
+	}
+	return r.AgentID
 }
 
 // promptText devolve o texto de um prompt do usuário (regra em Prompt):

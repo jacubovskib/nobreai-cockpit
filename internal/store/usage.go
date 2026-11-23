@@ -17,6 +17,8 @@ import (
 // momento da ingestão e nunca é sobrescrito por uma reingestão: o custo fica no
 // card em que foi gasto. A janela também fica a da primeira gravação, junto
 // com o card (uso gravado antes da atribuição por janela fica na principal).
+// Exceção: o uso de um subagente lido antes do resultado do Agent de uma filha
+// passa para a filha e o card dela (ver ContextWindows.Subagents).
 func (s *Store) UpsertUsage(rows []domain.UsageRow) error {
 	tx, err := s.DB.Begin()
 	if err != nil {

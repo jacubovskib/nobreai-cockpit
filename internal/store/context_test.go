@@ -268,3 +268,26 @@ func TestMigration018_Schema(t *testing.T) {
 		t.Fatal("chave de context_compactions não é (session_id, path, segment)")
 	}
 }
+
+// A janela de um subagente: a primeira gravação vale (uma releitura do
+// principal com a linha do resultado na principal não devolve o subagente da
+// filha para a principal), e só a janela filha corrige o que já foi gravado.
+func TestSaveContext_SubagentWindowFirstWins(t *testing.T) {
+	s := usageFixture(t)
+	sub := "/p/subagents/agent-a1.jsonl"
+	if _, ok, err := s.SubagentWindow("claude:1", sub); err != nil || ok {
+		t.Fatalf("antes: ok=%v err=%v", ok, err)
+	}
+	save := func(subs map[string]string) {
+		t.Helper()
+		if err := s.SaveContextWindows("claude:1", "/p.jsonl", false, nil, nil, 10, usage.ContextState{LastTurn: -1},
+			ContextWindows{Subagents: subs}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save(map[string]string{sub: "claude:1@200"})
+	save(map[string]string{sub: ""})
+	if w, ok, err := s.SubagentWindow("claude:1", sub); err != nil || !ok || w != "claude:1@200" {
+		t.Fatalf("janela = %q ok=%v err=%v", w, ok, err)
+	}
+}
