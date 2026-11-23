@@ -6,7 +6,8 @@ package kiro
 
 import (
 	"context"
-	"errors"
+	"sync"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/agentcore"
@@ -18,6 +19,10 @@ type Adapter struct {
 	st *store.Store
 	// core aplica as regras de sessão aos hooks traduzidos por este driver.
 	core *agentcore.Core
+	// paths são os arquivos e comandos que o instalador e a saúde usam.
+	now     func() time.Time
+	paths   Paths
+	nobreMu sync.Mutex
 }
 
 var (
@@ -31,7 +36,10 @@ var (
 // nil. Com st nil (só os nomes de processo, no `nobre`) nenhum hook pode ser
 // tratado.
 func New(st *store.Store, deps adapter.Deps) *Adapter {
-	a := &Adapter{st: st}
+	a := &Adapter{st: st, paths: DefaultPaths(), now: deps.Now}
+	if a.now == nil {
+		a.now = time.Now
+	}
 	a.core = agentcore.New(st, deps, a)
 	return a
 }
@@ -57,25 +65,6 @@ func (a *Adapter) SpendsCredits() bool { return true }
 // GuideName: as instruções do nobre ficam no steering do Kiro
 // (agentcore.Guide).
 func (a *Adapter) GuideName() string { return "as instruções do Cockpit no steering do Kiro" }
-
-// Os quatro métodos abaixo são provisórios: a instalação, a saúde e a busca
-// do binário chegam com o instalador do Kiro.
-
-var errNoInstall = errors.New("a instalação do Kiro ainda não está disponível nesta versão do Cockpit")
-
-// Detect ainda não procura o kiro-cli: o Kiro aparece como não encontrado.
-func (a *Adapter) Detect() adapter.Detection {
-	return adapter.Detection{Checks: []adapter.Check{}}
-}
-
-// Install ainda não instala nada.
-func (a *Adapter) Install() (adapter.InstallReport, error) {
-	return adapter.InstallReport{}, errNoInstall
-}
-
-// Binary ainda não procura o kiro-cli: sem binário, o Cockpit não lança o
-// Kiro.
-func (a *Adapter) Binary() string { return "" }
 
 // LaunchCommand abre uma conversa nova no harness V3 com o prompt inicial.
 func (a *Adapter) LaunchCommand(bin, initialPrompt string) []string {

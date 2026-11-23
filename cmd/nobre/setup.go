@@ -14,6 +14,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/adapter/kiro"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -25,6 +26,7 @@ type setupDeps struct {
 	SkillsDir    string        // ~/.claude/skills
 	UnitDir      string        // ~/.config/systemd/user
 	NobreBin     string        // caminho absoluto do nobre (vai nos hooks)
+	Kiro         *kiro.Adapter // instalador do Kiro; nil = não mexer no Kiro
 	NobredBin    string        // caminho absoluto do nobred; vazio = não encontrado
 	DaemonWait   time.Duration // quanto esperar o nobred responder antes de cadastrar o projeto
 	Run          func(name string, args ...string) error
@@ -47,6 +49,7 @@ func defaultSetupDeps() (*setupDeps, error) {
 		SkillsDir:    filepath.Join(home, ".claude", "skills"),
 		UnitDir:      filepath.Join(home, ".config", "systemd", "user"),
 		NobreBin:     exe,
+		Kiro:         newKiro(exe),
 		DaemonWait:   10 * time.Second,
 		Run: func(name string, args ...string) error {
 			out, err := exec.Command(name, args...).CombinedOutput()
@@ -64,6 +67,15 @@ func defaultSetupDeps() (*setupDeps, error) {
 		}
 	}
 	return d, nil
+}
+
+// newKiro monta o instalador do Kiro com o nobre que está rodando.
+func newKiro(nobre string) *kiro.Adapter {
+	a := kiro.New(nil, adapter.Deps{})
+	p := kiro.DefaultPaths()
+	p.NobreBin = nobre
+	a.SetPaths(p)
+	return a
 }
 
 func isFile(p string) bool {
@@ -140,7 +152,8 @@ func (l *checklist) bad(format string, a ...any) {
 	fmt.Fprintf(l.c.out, "! "+format+"\n", a...)
 }
 
-// setup instala hooks, status line e skill do Claude Code, grava e ativa o serviço do
+// setup instala hooks, status line e skill do Claude Code (e hooks e steering
+// do Kiro, se houver kiro-cli), grava e ativa o serviço do
 // daemon e oferece cadastrar o repositório atual como projeto. Com
 // --remover-statusline só desfaz a integração da status line.
 func (c *cli) setup(args []string) error {
@@ -206,16 +219,47 @@ func (c *cli) setup(args []string) error {
 		l.ok("Skill do Cockpit instalada em %s", claude.SkillFile(d.SkillsDir))
 	}
 
-	// 3. Serviço do daemon.
+	// 3. Kiro (só se o kiro-cli existir).
+	c.setupKiro(d, *dry, l)
+
+	// 4. Serviço do daemon.
 	c.setupService(d, *dry, l)
 
-	// 4. Projeto atual.
+	// 5. Projeto atual.
 	c.setupProject(d, *dry, l)
 
 	if l.warn {
 		return errors.New("Setup terminou com pendências (itens com !).")
 	}
 	return nil
+}
+
+// setupKiro instala hooks e steering do Kiro quando o kiro-cli existe; sem
+// ele, avisa numa linha e segue.
+func (c *cli) setupKiro(d *setupDeps, dry bool, l *checklist) {
+	if d.Kiro == nil {
+		return
+	}
+	if d.Kiro.Binary() == "" {
+		l.ok("Kiro não encontrado (kiro-cli fora do PATH e de ~/.local/bin); pulei")
+		return
+	}
+	prefix := ""
+	var rep adapter.InstallReport
+	var err error
+	if dry {
+		prefix = "[dry-run] "
+		rep, err = d.Kiro.PlanInstall()
+	} else {
+		rep, err = d.Kiro.Install()
+	}
+	if err != nil {
+		l.bad("Kiro: %v", err)
+		return
+	}
+	for _, m := range rep.Messages {
+		l.ok("%s%s", prefix, m)
+	}
 }
 
 // removeStatusLine é o "nobre setup --remover-statusline": só desfaz a
@@ -285,6 +329,16 @@ func (c *cli) removeAll(d *setupDeps, dry bool, l *checklist) error {
 			l.bad("Skill do Cockpit: %v", err)
 		} else {
 			l.ok("Skill removida: %s", skill)
+		}
+	}
+
+	if d.Kiro != nil {
+		rep, err := d.Kiro.Uninstall(dry)
+		if err != nil {
+			l.bad("Kiro: %v", err)
+		}
+		for _, m := range rep.Messages {
+			l.ok("%s%s", prefix, m)
 		}
 	}
 
