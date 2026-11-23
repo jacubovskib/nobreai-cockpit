@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"net/http"
 	"sort"
 	"strings"
@@ -97,14 +98,7 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, o)
 }
 
-var agentNames = map[string]string{"claude": "Claude Code", "codex": "Codex", "kiro": "Kiro"}
-
-func agentName(id string) string {
-	if n, ok := agentNames[id]; ok {
-		return n
-	}
-	return id
-}
+func agentName(id string) string { return agents.DisplayName(id) }
 
 // usd formata em pt-BR: "US$ 8,20".
 func usd(v float64) string {

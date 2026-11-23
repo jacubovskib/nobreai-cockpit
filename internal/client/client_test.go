@@ -3,10 +3,16 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 )
 
 func TestClientSendsAgentPID(t *testing.T) {
@@ -52,5 +58,39 @@ func TestClientRenderPromptSendsUse(t *testing.T) {
 	txt, err := New(strings.TrimPrefix(srv.URL, "http://")).RenderPrompt(context.Background(), "handoff", "NAC-1")
 	if err != nil || txt != "oi" || path != "/api/prompts/handoff/render" || !strings.Contains(body, `"use":true`) || !strings.Contains(body, `"card":"NAC-1"`) {
 		t.Fatalf("txt=%q err=%v path=%s body=%s", txt, err, path, body)
+	}
+}
+
+func fakeProc(t *testing.T, root string, pid, ppid int, comm string) {
+	t.Helper()
+	dir := filepath.Join(root, strconv.Itoa(pid))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stat := fmt.Sprintf("%d (%s) S %d 1 1 0 -1 0\n", pid, comm, ppid)
+	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "comm"), []byte(comm+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Os nomes vêm do registro: acrescentar um driver (aqui, o kiro-cli) basta
+// para achar o ancestral pelo mesmo mecanismo.
+func TestFindAgentPIDAchaAncestralDoRegistro(t *testing.T) {
+	root := t.TempDir()
+	fakeProc(t, root, 100, 1, "kiro-cli")
+	fakeProc(t, root, 150, 100, "claude")
+	fakeProc(t, root, 200, 100, "bash")
+	fakeProc(t, root, 300, 200, "nobre")
+	if got := findAgentPID(root, 300, agents.Static()); got != 0 {
+		t.Fatalf("sem driver do kiro compilado, got %d", got)
+	}
+	if got := findAgentPID(root, 300, append(agents.Static(), "kiro-cli")); got != 100 {
+		t.Fatalf("kiro-cli: got %d, want 100", got)
+	}
+	if got := findAgentPID(root, 150, agents.Static()); got != 150 {
+		t.Fatalf("claude: got %d, want 150", got)
 	}
 }

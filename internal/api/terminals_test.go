@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -27,6 +27,7 @@ type binAdapter struct {
 }
 
 func (b *binAdapter) Binary() string { return b.bin }
+func (b *binAdapter) Name() string   { return "claude" }
 
 type termEnv struct {
 	srv *httptest.Server
@@ -51,7 +52,7 @@ func newTermEnvOpts(t *testing.T, bin string, opts pty.Options) *termEnv {
 	mgr := pty.NewManager(opts)
 	t.Cleanup(mgr.Close)
 	srv := httptest.NewServer(New(st, Deps{Hub: hub, Terminals: mgr,
-		Adapters: map[string]adapter.Adapter{"claude": &binAdapter{bin: bin}}}))
+		Agents: agents.New(&binAdapter{bin: bin})}))
 	t.Cleanup(srv.Close)
 	return &termEnv{srv: srv, mgr: mgr, hub: hub}
 }
@@ -376,7 +377,7 @@ func TestCreateTerminalTooMany(t *testing.T) {
 	st, _ := store.Open(t.TempDir() + "/c.db")
 	t.Cleanup(func() { st.Close() })
 	srv := httptest.NewServer(New(st, Deps{Terminals: e.mgr,
-		Adapters: map[string]adapter.Adapter{"claude": &binAdapter{bin: "/bin/cat"}}}))
+		Agents: agents.New(&binAdapter{bin: "/bin/cat"})}))
 	t.Cleanup(srv.Close)
 	e.srv = srv
 	if resp, _ := e.create(t, map[string]any{}); resp.StatusCode != http.StatusCreated {

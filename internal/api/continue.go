@@ -141,10 +141,12 @@ func (s *server) continueKey(w http.ResponseWriter, key string, in continueInput
 func (s *server) prepareContinue(w http.ResponseWriter, key string, in continueInput, checkLive bool) (continuePlan, bool) {
 	var none continuePlan
 	if in.Agent == "" {
-		in.Agent = "claude"
+		if all := s.deps.Agents.All(); len(all) > 0 {
+			in.Agent = all[0].Name()
+		}
 	}
-	ad, ok := s.deps.Adapters[in.Agent]
-	if in.Agent != "claude" || !ok {
+	ad, ok := s.deps.Agents.Get(in.Agent)
+	if !ok {
 		writeError(w, http.StatusBadRequest, msgAgentUnavailable)
 		return none, false
 	}

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nobretech/nobreai-cockpit/internal/adapter"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
@@ -23,11 +23,11 @@ import (
 const Version = "0.1.0"
 
 // Deps são as dependências do servidor. Campos nil recebem padrão em New
-// (Now = time.Now, Hub = NewHub()); Adapters, Launcher e Git podem ficar nil.
+// (Now = time.Now, Hub = NewHub()); Agents, Launcher e Git podem ficar nil.
 type Deps struct {
 	Now      func() time.Time
 	ProcRoot string
-	Adapters map[string]adapter.Adapter
+	Agents   *agents.Registry
 	Launcher launch.Launcher
 	Git      gitinfo.GitInfo
 	// ResolveTerminal resolve o binário do terminal (nil = launch.ResolveBinary).

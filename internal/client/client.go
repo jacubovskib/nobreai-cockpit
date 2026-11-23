@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
-	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/proc"
 	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
@@ -60,11 +60,12 @@ func DetectAgentPID() int {
 			return n
 		}
 	}
-	var names []string
-	for _, a := range []adapter.Adapter{claude.New(nil, adapter.Deps{})} {
-		names = append(names, a.ProcessNames()...)
-	}
-	pid, err := proc.FindAgentAncestor("/proc", os.Getppid(), names)
+	return findAgentPID("/proc", os.Getppid(), agents.Static())
+}
+
+// findAgentPID sobe a árvore de processos de root a partir de start.
+func findAgentPID(root string, start int, names []string) int {
+	pid, err := proc.FindAgentAncestor(root, start, names)
 	if err != nil {
 		return 0
 	}

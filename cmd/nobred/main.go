@@ -17,6 +17,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
 	"github.com/nobretech/nobreai-cockpit/internal/adapter/claude"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"github.com/nobretech/nobreai-cockpit/internal/api"
 	"github.com/nobretech/nobreai-cockpit/internal/board"
 	"github.com/nobretech/nobreai-cockpit/internal/demo"
@@ -118,6 +119,7 @@ func run(dbPath string, seedDemo bool) error {
 	paths.SearchPATH = func() string { return userPATH.Get(time.Minute) }
 	go userPATH.Get(0) // já na partida, sem atrasar o servidor
 	claudeAdapter.SetPaths(paths)
+	registry := agents.New(claudeAdapter)
 	// RTK: comprime a saída dos comandos do Claude Code; o hook mora no mesmo
 	// settings.json. Sem demo o Tool existe, mas o monitor não roda.
 	home, _ := os.UserHomeDir()
@@ -167,7 +169,7 @@ func run(dbPath string, seedDemo bool) error {
 		Git:         git,
 		Launcher:    launch.Exec{},
 		Hub:         hub,
-		Adapters:    map[string]adapter.Adapter{"claude": claudeAdapter},
+		Agents:      registry,
 		UserPATH:    userPATH,
 		Resources:   monitor,
 		Terminals:   terms,
@@ -197,7 +199,7 @@ func run(dbPath string, seedDemo bool) error {
 	// nobred nas sessões vivas: lá basta o PID existir.
 	live := board.Liveness{ProcRoot: "/proc"}
 	if !seedDemo {
-		live.Names = map[string][]string{claudeAdapter.Name(): claudeAdapter.ProcessNames()}
+		live.Names = registry.ProcessNames()
 	}
 	recDone := make(chan struct{})
 	go func() {

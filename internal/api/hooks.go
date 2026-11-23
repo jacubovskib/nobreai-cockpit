@@ -29,7 +29,7 @@ func (s *server) hookRoutes(mux *http.ServeMux) {
 // tamanho, porque o evento se perde.
 func (s *server) hook(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("agent")
-	ad, ok := s.deps.Adapters[name]
+	ad, ok := s.deps.Agents.Get(name)
 	if !ok {
 		writeError(w, http.StatusNotFound, "agente desconhecido")
 		return

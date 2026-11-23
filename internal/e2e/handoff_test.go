@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -82,7 +83,7 @@ func newEnv(t *testing.T) *env {
 	e.ad.SetPaths(claude.Paths{ClaudeBin: e.claudeBin})
 	e.srv = httptest.NewServer(api.New(e.st, api.Deps{
 		Now: e.clock, Hub: hub, ProcRoot: e.procDir,
-		Adapters:    map[string]adapter.Adapter{"claude": e.ad},
+		Agents:      agents.New(e.ad),
 		Launcher:    e.launch,
 		SessionPATH: "/usr/bin:/opt/nobre/bin",
 		ResolveTerminal: func(string) (string, error) {

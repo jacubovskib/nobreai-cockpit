@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -84,7 +85,7 @@ func continueAPIDeps(t *testing.T, g gitinfo.GitInfo, mgr *pty.Manager, tweak fu
 	ad.SetPaths(claude.Paths{ClaudeBin: bin})
 	l := &fakeLauncher{}
 	deps := Deps{Now: func() time.Time { return testNow }, Hub: hub,
-		Adapters: map[string]adapter.Adapter{"claude": ad}, Launcher: l, Git: g, Terminals: mgr, SessionPATH: sessionPATH,
+		Agents: agents.New(ad), Launcher: l, Git: g, Terminals: mgr, SessionPATH: sessionPATH,
 		ResolveTerminal: func(n string) (string, error) {
 			if n == "x-terminal-emulator" {
 				return "/usr/bin/terminator", nil

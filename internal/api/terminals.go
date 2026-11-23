@@ -71,10 +71,12 @@ func (s *server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Agent == "" {
-		in.Agent = "claude"
+		if all := s.deps.Agents.All(); len(all) > 0 {
+			in.Agent = all[0].Name()
+		}
 	}
-	ad, ok := s.deps.Adapters[in.Agent]
-	if in.Agent != "claude" || !ok {
+	ad, ok := s.deps.Agents.Get(in.Agent)
+	if !ok {
 		writeError(w, http.StatusBadRequest, msgAgentUnavailable)
 		return
 	}
