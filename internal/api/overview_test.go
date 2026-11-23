@@ -35,6 +35,7 @@ type overviewResp struct {
 			SpentUSD float64 `json:"spent_usd"`
 			DailyUSD float64 `json:"daily_usd"`
 			Action   string  `json:"action"`
+			Credits  float64 `json:"credits"`
 		} `json:"per_agent"`
 	} `json:"today"`
 	Alerts []struct {
@@ -350,6 +351,9 @@ func TestOverviewTodayCredits(t *testing.T) {
 	}
 	if o.Today.CostUnpriced {
 		t.Fatal("custo de hoje sem preço por turno sem tokens")
+	}
+	if len(o.Today.PerAgent) != 1 || o.Today.PerAgent[0].Agent != "kiro" || o.Today.PerAgent[0].Credits != 0.75 || o.Today.PerAgent[0].SpentUSD != 0 {
+		t.Fatalf("por agente = %+v", o.Today.PerAgent)
 	}
 	for _, al := range o.Alerts {
 		if al.Kind == "unpriced" {

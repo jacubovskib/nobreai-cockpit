@@ -240,6 +240,8 @@ export interface AgentSpend {
   warn_pct: number
   action: 'pause' | 'warn' | ''
   unpriced: boolean
+  // credits: gasto de hoje em créditos, ao lado do US$ (nunca somado).
+  credits: number
 }
 
 export interface TodayTotals {

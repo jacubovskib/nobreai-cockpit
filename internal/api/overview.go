@@ -43,7 +43,8 @@ type ActiveSession struct {
 
 // AgentSpend é o gasto de hoje de um agente frente ao limite diário
 // (DailyUSD 0 = sem limite). Action é a ação do limite em 100% ("pause" ou
-// "warn"; vazio sem limite configurado).
+// "warn"; vazio sem limite configurado). Credits é o gasto em créditos de
+// hoje, à parte do SpentUSD (nunca somado a ele).
 type AgentSpend struct {
 	Agent    string  `json:"agent"`
 	SpentUSD float64 `json:"spent_usd"`
@@ -52,6 +53,7 @@ type AgentSpend struct {
 	WarnPct  int     `json:"warn_pct"`
 	Action   string  `json:"action"`
 	Unpriced bool    `json:"unpriced"`
+	Credits  float64 `json:"credits"`
 }
 
 // TodayTotals são os indicadores do dia local (00:00 até 00:00 seguinte).
@@ -276,7 +278,7 @@ func (s *server) buildOverview() (Overview, error) {
 			return o, err
 		}
 		t.PerAgent = append(t.PerAgent, AgentSpend{Agent: l.Agent, SpentUSD: ls.AgentSpentUSD, DailyUSD: l.DailyUSD,
-			Pct: ls.Pct, WarnPct: l.WarnPct, Action: l.Action, Unpriced: spent[l.Agent].Unpriced})
+			Pct: ls.Pct, WarnPct: l.WarnPct, Action: l.Action, Unpriced: spent[l.Agent].Unpriced, Credits: spent[l.Agent].Credits})
 		if ls.Warn || ls.Over {
 			o.Alerts = append(o.Alerts, Alert{Kind: "limit_warn", Agent: l.Agent,
 				Text: fmt.Sprintf("%s usou %d%% do limite diário (%s de %s).", agentName(l.Agent), ls.Pct, usd(ls.AgentSpentUSD), usd(l.DailyUSD))})
@@ -284,7 +286,7 @@ func (s *server) buildOverview() (Overview, error) {
 	}
 	for _, ta := range todayAgents {
 		if !seen[ta.Key] {
-			t.PerAgent = append(t.PerAgent, AgentSpend{Agent: ta.Key, SpentUSD: ta.CostUSD, Unpriced: ta.Unpriced})
+			t.PerAgent = append(t.PerAgent, AgentSpend{Agent: ta.Key, SpentUSD: ta.CostUSD, Unpriced: ta.Unpriced, Credits: ta.Credits})
 		}
 	}
 	sort.Slice(t.PerAgent, func(i, j int) bool { return t.PerAgent[i].Agent < t.PerAgent[j].Agent })

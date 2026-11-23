@@ -265,7 +265,8 @@ function AgentLimit({ l, cur }: { l: AgentSpend; cur: CurrencyPref }) {
         <AgentSwatch agent={l.agent} />
         <span>
           <strong style={{ fontWeight: 600 }}><Money usd={l.spent_usd} unpriced={l.unpriced && l.spent_usd === 0} {...cur} /></strong>
-          {mixed && <span style={{ color: 'var(--warn)' }}> + sem preço</span>}{' '}
+          {mixed && <span style={{ color: 'var(--warn)' }}> + sem preço</span>}
+          <Credits credits={l.credits} />{' '}
           <span style={{ color: 'var(--text-2)' }}>
             / {limited ? <Money usd={l.daily_usd} {...cur} /> : 'sem limite'}
             {limited && ` · ${l.pct}%${warn ? ' · aviso' : ''}`}

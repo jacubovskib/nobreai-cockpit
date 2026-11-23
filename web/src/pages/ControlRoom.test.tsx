@@ -128,6 +128,18 @@ describe('ControlRoom', () => {
     expect(screen.getByText('+ sem preço')).toBeInTheDocument()
   })
 
+  it('gasto de hoje por agente mostra os créditos ao lado, sem somar', async () => {
+    const per_agent = [
+      { agent: 'claude', spent_usd: 5, daily_usd: 10, pct: 50, warn_pct: 80, action: 'warn', unpriced: false, credits: 0 },
+      { agent: 'kiro', spent_usd: 0, daily_usd: 0, pct: 0, warn_pct: 0, action: '', unpriced: false, credits: 12.5 },
+    ]
+    mock({ '/api/overview': { ...overview, today: { ...overview.today, per_agent } }, '/api/settings': {} })
+    wrap(<ControlRoom />)
+    const kiro = (await screen.findByTitle('Kiro: sem limite diário'))
+    expect(kiro).toHaveTextContent('US$ 0,00 · 12,50 créditos / sem limite')
+    expect(screen.getByTitle(/^Claude Code:/)).not.toHaveTextContent(/créditos/)
+  })
+
   it('sessão sem card encerrada aparece marcada e permite criar card', async () => {
     const ended = { ...noCard, id: 's2', ended_at: new Date(Date.now() - 3600_000).toISOString() }
     mock({ '/api/overview': { ...overview, alerts: [], no_card: [ended] }, '/api/settings': {} })
