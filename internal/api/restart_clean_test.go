@@ -145,3 +145,30 @@ func TestRestartCleanLaunchFailureAfterDetach(t *testing.T) {
 		t.Fatalf("card %v coluna %s", s.CardID, c.Column)
 	}
 }
+
+// Sessão encerrada não recomeça: o card pode já ser de outra sessão viva.
+// Nada muda (nem o "onde parei").
+func TestRestartCleanEndedSessionConflict(t *testing.T) {
+	a, l := continueAPI(t, &fakeGit{branch: "feat/x", clean: true})
+	a.liveSession(t, "claude:s", 4242, "NAC-1")
+	if err := a.st.EndSession("claude:s", "exit", testNow.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/sessions/claude:s/restart-clean", map[string]any{"where_stopped": "no handler"}, 0)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	body := decode[map[string]string](t, rec)
+	if body["code"] != "session_ended" || body["error"] == "" {
+		t.Fatalf("corpo = %v", body)
+	}
+	if len(l.calls) != 0 {
+		t.Fatal("não deveria lançar")
+	}
+	if c, _ := a.st.GetCard("NAC-1"); c.WhereStopped == "no handler" {
+		t.Fatal("gravou onde parei apesar do erro")
+	}
+	if s, _ := a.st.GetSession("claude:s"); s.CardID == nil {
+		t.Fatal("desligou apesar do erro")
+	}
+}

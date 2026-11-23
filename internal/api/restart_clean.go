@@ -17,7 +17,8 @@ func (s *server) restartCleanRoutes(mux *http.ServeMux) {
 }
 
 // restartClean: POST /api/sessions/{id}/restart-clean {where_stopped}
-// garante um "Onde parei" recente, desliga o card da sessão (que segue viva,
+// só com a sessão viva (409 session_ended se já terminou); garante um
+// "Onde parei" recente, desliga o card da sessão (que segue viva,
 // sem card), pausa o card e abre um agente novo pelo mesmo caminho do
 // Continuar (mesmo agente, modo padrão das configurações).
 func (s *server) restartClean(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +40,15 @@ func (s *server) restartClean(w http.ResponseWriter, r *http.Request) {
 	c, err := s.st.GetCardByID(*sess.CardID)
 	if err != nil {
 		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	// Sessão encerrada não recomeça: o card pode já ser de outra sessão viva,
+	// que perderia o card.
+	if !sess.Live() {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "Esta sessão já terminou. Use Continuar no card " + c.Key + ".",
+			"code":  "session_ended",
+		})
 		return
 	}
 	now := s.now()
