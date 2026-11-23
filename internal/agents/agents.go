@@ -74,14 +74,21 @@ func (r *Registry) AllProcessNames() []string {
 	return out
 }
 
-// Static são os nomes de processo de todos os drivers compilados, sem store:
-// o `nobre` os usa para achar o PID do agente. Acrescentar um driver é uma
-// linha aqui.
-func Static() []string {
-	return New(
+// Compiled instancia os drivers compilados no binário, sem store (nenhum
+// hook pode ser tratado): o `nobre` os usa pelos nomes de processo, pela
+// variável de sessão e pela instalação. Cada chamada devolve instâncias
+// novas. Acrescentar um driver é uma linha aqui.
+func Compiled() []adapter.Adapter {
+	return []adapter.Adapter{
 		claude.New(nil, adapter.Deps{}),
 		kiro.New(nil, adapter.Deps{}),
-	).AllProcessNames()
+	}
+}
+
+// Static são os nomes de processo de todos os drivers compilados, sem store:
+// o `nobre` os usa para achar o PID do agente.
+func Static() []string {
+	return New(Compiled()...).AllProcessNames()
 }
 
 // sessionEnver é a capacidade opcional de um driver cujo CLI põe o id da
@@ -93,10 +100,7 @@ type sessionEnver interface{ SessionEnv() string }
 // como alternativa ao PID.
 func SessionEnvs() map[string]string {
 	out := map[string]string{}
-	for _, a := range New(
-		claude.New(nil, adapter.Deps{}),
-		kiro.New(nil, adapter.Deps{}),
-	).All() {
+	for _, a := range Compiled() {
 		if e, ok := a.(sessionEnver); ok && e.SessionEnv() != "" {
 			out[a.Name()] = e.SessionEnv()
 		}

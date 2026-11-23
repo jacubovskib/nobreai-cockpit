@@ -80,3 +80,17 @@ func TestSessionEnvsSoDosDriversQueTem(t *testing.T) {
 		t.Fatalf("SessionEnvs = %v", got)
 	}
 }
+
+func TestCompiledNovosACadaChamada(t *testing.T) {
+	a, b := Compiled(), Compiled()
+	var nomes []string
+	for _, d := range a {
+		nomes = append(nomes, d.Name())
+	}
+	if !reflect.DeepEqual(nomes, []string{"claude", "kiro"}) {
+		t.Fatalf("Compiled = %v", nomes)
+	}
+	if a[0] == b[0] {
+		t.Fatal("Compiled deve instanciar drivers novos (o setup configura os dele)")
+	}
+}
