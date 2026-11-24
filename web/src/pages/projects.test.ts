@@ -1,4 +1,4 @@
-import { buildRows, timeline } from './projects'
+import { buildRows, contextLine, stateLabel, timeline } from './projects'
 import type { CardSummary, Project, Total } from '../api/types'
 
 const T = '2026-11-10T12:00:00Z'
@@ -78,5 +78,36 @@ describe('buildRows com família', () => {
     expect(r.general?.costUsd).toBe(26)
     expect(r.children.reduce((s, c) => s + c.costUsd, 0) + (r.general?.costUsd ?? 0)).toBeCloseTo(r.costUsd, 10)
     expect(r.current?.key).toBe('A')
+  })
+})
+
+describe('contextLine e stateLabel', () => {
+  const task = (n: number, status: string, title = `t${n}`) => ({ n, title, status, session_id: '', updated_at: T })
+  const withPlan = (tasks: ReturnType<typeof task>[], o: Partial<CardSummary> = {}) => card({ column: 'em_andamento', plan: { path: 'docs/plan.md', tasks } as never, ...o })
+  it('concluído mostra a data', () => {
+    expect(contextLine(card({ column: 'concluido', updated_at: '2026-11-03T12:00:00Z' }))).toBe('concluída 03/11')
+  })
+  it('sem plano é vazio', () => {
+    expect(contextLine(card({ column: 'em_andamento', plan: null }))).toBe('')
+  })
+  it('tarefa em andamento ou em revisão', () => {
+    expect(contextLine(withPlan([task(1, 'concluida'), task(2, 'em_revisao', 'filtros no board')]))).toBe('tarefa 2: filtros no board (em revisão)')
+    expect(contextLine(withPlan([task(1, 'concluida'), task(2, 'em_andamento', 'api')]))).toBe('tarefa 2: api')
+  })
+  it('todas a fazer', () => {
+    expect(contextLine(withPlan([task(1, 'a_fazer'), task(2, 'a_fazer')]))).toBe('plano escrito, não iniciado')
+  })
+  it('todas concluídas com o card em andamento', () => {
+    expect(contextLine(withPlan([task(1, 'concluida'), task(2, 'concluida')]))).toBe('tarefas concluídas')
+  })
+  it('próxima tarefa', () => {
+    expect(contextLine(withPlan([task(1, 'concluida'), task(2, 'a_fazer', 'docs'), task(3, 'a_fazer')]))).toBe('próxima: tarefa 2: docs')
+  })
+  it('stateLabel', () => {
+    expect(stateLabel(card({ column: 'concluido' }))).toBe('concluída')
+    expect(stateLabel(card({ column: 'pausado', signal: 'parado', signal_since: iso(50) }))).toMatch(/^parado há/)
+    expect(stateLabel(card({ column: 'revisao', signal: 'aguardando_revisao', signal_since: iso(50) }))).toMatch(/^aguardando revisão há/)
+    expect(stateLabel(card({ column: 'backlog' }))).toBe('backlog')
+    expect(stateLabel(card({ column: 'em_andamento' }))).toBe('em andamento')
   })
 })

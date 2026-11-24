@@ -6,9 +6,9 @@ import { familyIds, useWithProject, withProject } from '../app/project'
 import { Credits, Money } from '../ui/Money'
 import { range } from './analytics/data'
 import { ProjectTag } from '../ui/ProjectTag'
-import { signalText } from './board'
+import { PlanBlocks } from '../ui/PlanBlocks'
 import { btn, h2, muted, panel } from './card/shared'
-import { buildRows, GROUPS, timeline } from './projects'
+import { buildRows, contextLine, GROUPS, stateLabel, timeline } from './projects'
 
 // Cronograma das entregas do projeto da rota (não usa o seletor da barra lateral).
 export function ProjectPage() {
@@ -54,7 +54,9 @@ export function ProjectPage() {
                     <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5, color: 'var(--text-2)' }}>{card.key}</span>
                     <span>{card.title}</span>
                     {isParent && card.project_id !== project.id && <span style={{ ...muted, fontSize: 12.5 }}>{appName(card.project_id, list)}</span>}
-                    {card.signal && <span style={muted}>{signalText(card)}</span>}
+                    <span style={muted}>{stateLabel(card)}</span>
+                    {contextLine(card) && <span style={muted}>{contextLine(card)}</span>}
+                    {card.plan && card.plan.tasks.length > 0 && <PlanBlocks tasks={card.plan.tasks} />}
                   </Link>
                 </li>
               ))}

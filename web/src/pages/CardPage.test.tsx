@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CardPage } from './CardPage'
@@ -304,5 +304,29 @@ describe('CardPage contexto', () => {
     wrap(<CardPage />)
     await screen.findByRole('heading', { name: 'Onde parei' })
     expect(screen.queryByRole('heading', { name: 'Contexto' })).not.toBeInTheDocument()
+  })
+})
+
+describe('CardPage plano', () => {
+  it('mostra a seção Plano com caminho e tarefas', async () => {
+    const plan = { path: 'docs/plan.md', tasks: [
+      { n: 1, title: 'API', status: 'concluida', session_id: 's1', updated_at: '2026-11-03T12:00:00Z' },
+      { n: 2, title: 'Filtros', status: 'em_revisao', session_id: 's1', updated_at: '2026-11-05T12:00:00Z' },
+    ] }
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, content: { ...detail.content, plan } } })
+    wrap(<CardPage />)
+    const sec = await screen.findByRole('region', { name: 'Plano' })
+    const path = within(sec).getByText('docs/plan.md')
+    expect(path).toHaveClass('mono')
+    const row = within(sec).getByText('Filtros').closest('li')!
+    expect(row).toHaveTextContent('2')
+    expect(row).toHaveTextContent('em revisão')
+    expect(row).toHaveTextContent('05/11')
+    expect(within(sec).getByText('API').closest('li')).toHaveTextContent('concluída')
+  })
+  it('sem plano', async () => {
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, content: { ...detail.content, plan: null } } })
+    wrap(<CardPage />)
+    expect(await screen.findByText('Sem plano registrado. O agente registra com nobre plan.')).toBeInTheDocument()
   })
 })

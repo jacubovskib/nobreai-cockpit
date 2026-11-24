@@ -1,4 +1,5 @@
 import type { CardSummary, Project, Total } from '../api/types'
+import { signalText } from './board'
 
 export interface ProjectRow {
   project: Project | null
@@ -111,4 +112,31 @@ export function timeline(cards: CardSummary[]): { group: Group; card: CardSummar
     ...of('paradas', stopped, (a, b) => ms(a.signal_since) - ms(b.signal_since)),
     ...of('backlog', backlog, (a, b) => ms(a.created_at) - ms(b.created_at)),
   ]
+}
+
+// ddmm: "dd/mm" em pt-BR.
+export function ddmm(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+}
+
+// contextLine: o que a entrega está fazendo agora, a partir do plano. Vazio sem plano.
+export function contextLine(c: CardSummary): string {
+  if (c.column === 'concluido') return `concluída ${ddmm(c.updated_at)}`
+  const tasks = c.plan?.tasks ?? []
+  if (tasks.length === 0) return ''
+  const active = tasks.find((t) => t.status === 'em_andamento' || t.status === 'em_revisao')
+  if (active) return `tarefa ${active.n}: ${active.title}${active.status === 'em_revisao' ? ' (em revisão)' : ''}`
+  if (tasks.every((t) => t.status === 'a_fazer')) return 'plano escrito, não iniciado'
+  if (tasks.every((t) => t.status === 'concluida')) return 'tarefas concluídas'
+  const next = tasks.find((t) => t.status === 'a_fazer')
+  return next ? `próxima: tarefa ${next.n}: ${next.title}` : ''
+}
+
+export function stateLabel(c: CardSummary): string {
+  if (c.column === 'concluido') return 'concluída'
+  if (c.signal === 'parado' || c.signal === 'aguardando_revisao') return signalText(c)
+  if (c.column === 'backlog') return 'backlog'
+  return 'em andamento'
 }

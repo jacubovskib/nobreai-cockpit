@@ -1,6 +1,7 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useCards, useProjects, useTotals } from '../api/queries'
+import { PlanBlocks } from '../ui/PlanBlocks'
 import { Credits, Money } from '../ui/Money'
 import { ProjectTag } from '../ui/ProjectTag'
 import { projectColor, useWithProject } from '../app/project'
@@ -64,9 +65,12 @@ function Line({ r, list, max, withP, label, sub, action }: RowProps & { label?: 
       </td>
       <td style={td}>
         {r.current ? (
+          <>
           <Link to={withP(`/cards/${r.current.key}`)} style={{ color: 'inherit' }}>
             <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5 }}>{r.current.key}</span> {r.current.title}
           </Link>
+          {r.current.plan && r.current.plan.tasks.length > 0 && <div style={{ marginTop: 4 }}><PlanBlocks tasks={r.current.plan.tasks} /></div>}
+          </>
         ) : (
           <span style={muted}>nada em andamento</span>
         )}
