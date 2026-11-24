@@ -405,3 +405,46 @@ func TestCLIMemorias(t *testing.T) {
 		t.Fatalf("help = %q", r.stdout)
 	}
 }
+
+func TestCLIPlan(t *testing.T) {
+	var path, body string
+	calls := 0
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bs, _ := json.Marshal(b)
+		path, body = r.URL.Path, string(bs)
+		w.Write([]byte(`{"path":"docs/p.md","tasks":[{"n":1,"title":"A","status":"a_fazer"},{"n":2,"title":"B c","status":"em_revisao"}],"n":2,"status":"em_revisao"}`))
+	})
+	r := runCLI(t, addr, "", nil, "plan", "docs/p.md", "--task", "A", "--task", "B c")
+	if r.code != 0 || path != "/api/me/plan" || body != `{"path":"docs/p.md","tasks":["A","B c"]}` ||
+		!strings.Contains(r.stdout, "Plano registrado: 2 tarefas.") {
+		t.Fatalf("%+v path=%s body=%s", r, path, body)
+	}
+	calls = 0
+	if r := runCLI(t, addr, "", nil, "plan", "docs/p.md"); r.code != 2 || r.err == "" || calls != 0 {
+		t.Fatalf("sem --task: %+v calls=%d", r, calls)
+	}
+	r = runCLI(t, addr, "", nil, "task", "2", "revisao")
+	if r.code != 0 || path != "/api/me/task" || body != `{"n":2,"status":"revisao"}` {
+		t.Fatalf("task: %+v path=%s body=%s", r, path, body)
+	}
+	if r := runCLI(t, addr, "", nil, "task", "x", "revisao"); r.code != 2 || r.err == "" {
+		t.Fatalf("task x: %+v", r)
+	}
+}
+
+func TestStatusListsPlan(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"session":{},"card":{"key":"NAC-7","title":"Login","column":"em_andamento",
+		"readiness":{"met":3,"total":3,"items":[]},
+		"content":{"plan":{"path":"docs/p.md","tasks":[{"n":1,"title":"A","status":"concluida"},{"n":2,"title":"B","status":"em_andamento"}]}}}}`))
+	})
+	r := runCLI(t, addr, "", nil, "status")
+	for _, want := range []string{"Plano:", "docs/p.md · 1 de 2 concluídas", "- 2. B — em andamento"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("falta %q em:\n%s", want, r.stdout)
+		}
+	}
+}

@@ -48,6 +48,8 @@ type CardSummary struct {
 	// domain.StaleAfter. SignalSince é essa atividade.
 	Signal      domain.Signal `json:"signal"`
 	SignalSince *time.Time    `json:"signal_since"`
+	// Plan são as tarefas do plano de implementação (nil sem tarefas).
+	Plan *domain.Plan `json:"plan"`
 }
 
 // cardDetail carrega conteúdo, sessões (com uso), sessão viva e prontidão do card.
@@ -83,7 +85,15 @@ func (s *server) cardDetail(c domain.Card) (CardDetail, error) {
 		return d, err
 	}
 	d.TouchedFiles = touched
-	d.Sessions = withUsage(sessions, bySession)
+	ids := make([]string, len(sessions))
+	for i, x := range sessions {
+		ids[i] = x.ID
+	}
+	projects, err := s.st.SessionProjects(ids)
+	if err != nil {
+		return d, err
+	}
+	d.Sessions = withUsage(sessions, bySession, projects)
 	d.Totals = byCard[c.Key]
 	for i := range sessions {
 		if owns(sessions[i], c.ID) && sessions[i].Live() {
@@ -144,6 +154,7 @@ func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, er
 	if err != nil {
 		return sum, err
 	}
+	sum.Plan = ct.Plan
 	sum.Readiness, err = s.readiness(c, ct, sum.Live)
 	last := c.UpdatedAt
 	if sum.LastActivityAt != nil && sum.LastActivityAt.After(last) {

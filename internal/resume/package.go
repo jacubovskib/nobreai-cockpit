@@ -70,6 +70,7 @@ func BuildIn(c domain.Card, project string, ct domain.Content, sessions []domain
 	}
 	section("Falta", strings.Join(open, "\n"))
 	section("Feito", strings.Join(done, "\n"))
+	section("Plano", PlanSection(ct.Plan))
 
 	var dec []string
 	for _, d := range ct.Decisions {
@@ -158,4 +159,19 @@ func Vars(c domain.Card, ct domain.Content, pkg string, readiness domain.Readine
 		"git.branch":       c.Branch,
 		"handoff.faltando": strings.Join(missing, "; "),
 	}
+}
+
+// PlanSection resume o plano: arquivo e progresso, depois as tarefas em aberto.
+func PlanSection(p *domain.Plan) string {
+	if p == nil || len(p.Tasks) == 0 {
+		return ""
+	}
+	var lines []string
+	lines = append(lines, fmt.Sprintf("%s · %d de %d concluídas", p.Path, len(p.Tasks)-p.Open(), len(p.Tasks)))
+	for _, t := range p.Tasks {
+		if t.Status != domain.TaskDone {
+			lines = append(lines, fmt.Sprintf("- %d. %s — %s", t.N, t.Title, t.Status.Label()))
+		}
+	}
+	return strings.Join(lines, "\n")
 }

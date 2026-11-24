@@ -208,6 +208,43 @@ func Run(t *testing.T, newAdapter func(st *store.Store, deps adapter.Deps) adapt
 		}
 	})
 
+	t.Run("Stop cobra plano escrito sem registro", func(t *testing.T) {
+		if fx.DecodeHold == nil {
+			t.Skip("driver sem como segurar o turno: o núcleo ainda não entrega o texto do lembrete no próximo prompt")
+		}
+		h := setup(t)
+		h.planPatterns(fx.EditPath)
+		at := t0
+		c, err := h.st.CreateCard(domain.Card{ProjectID: h.project.ID, Title: "Migrar OAuth2", Branch: "main",
+			WhereStopped: "lendo o oauth.go", WhereStoppedAt: &at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.call(fx.Events.Start, fx.Start, map[string]string{"NOBRE_RESUME": c.Key})
+		h.now = t0.Add(time.Minute)
+		h.call(fx.Events.EditAfter, fx.EditAfter, nil)
+		h.now = t0.Add(2 * time.Minute)
+		reason, held := fx.DecodeHold(h.call(fx.Events.Stop, fx.Stop, nil))
+		if !held || !strings.Contains(reason, "nobre plan") {
+			t.Fatalf("Stop com plano sem registro: held=%v reason=%q", held, reason)
+		}
+	})
+
+	t.Run("Stop sem card cita o plano", func(t *testing.T) {
+		if fx.DecodeHold == nil {
+			t.Skip("driver sem como segurar o turno: o núcleo ainda não entrega o texto do lembrete no próximo prompt")
+		}
+		h := setup(t)
+		h.planPatterns(fx.EditPath)
+		h.call(fx.Events.Start, fx.Start, nil)
+		h.now = t0.Add(time.Minute)
+		h.call(fx.Events.EditAfter, fx.EditAfter, nil)
+		reason, held := fx.DecodeHold(h.call(fx.Events.Stop, fx.Stop, nil))
+		if !held || !strings.Contains(reason, "nobre plan") {
+			t.Fatalf("Stop sem card com plano: held=%v reason=%q", held, reason)
+		}
+	})
+
 	t.Run("End encerra a sessao", func(t *testing.T) {
 		h := setup(t)
 		h.call(fx.Events.Start, fx.Start, nil)
@@ -221,6 +258,19 @@ func Run(t *testing.T, newAdapter func(st *store.Store, deps adapter.Deps) adapt
 			t.Fatalf("session_end = %d eventos", len(got))
 		}
 	})
+}
+
+// planPatterns grava os padrões de plano nas configurações do banco do cenário.
+func (h *harness) planPatterns(patterns ...string) {
+	h.t.Helper()
+	set, err := h.st.GetSettings()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	set.PlanPatterns = patterns
+	if err := h.st.PutSettings(set); err != nil {
+		h.t.Fatal(err)
+	}
 }
 
 // call manda o hook ao adaptador e devolve a resposta.

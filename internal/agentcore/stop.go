@@ -12,14 +12,19 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
-// turnEnd decide se o fim do turno é segurado. Com card e IncompleteAction
-// "ask_agent", segura quando a sessão editou arquivos do card depois do
+// turnEnd decide se o fim do turno é segurado.
+//
+// Com card, junta (com uma linha em branco entre elas) as partes que valerem:
+// o prompt de handoff, quando IncompleteAction é "ask_agent", a regra
+// "where_stopped" está ligada e a sessão editou arquivos do card depois do
 // último "Onde parei" (o fim de turno vem a cada resposta: os demais itens da
-// regra de handoff só aparecem na UI e no fim da sessão); com a regra
-// "where_stopped" desligada, não segura, pois esse é o único critério por
-// turno. Sem card, lembra uma única vez de criar card quando a sessão já
-// editou ReminderEditThreshold arquivos (só se o agente cria cards por conta
-// própria: AgentCreatesCards).
+// regra de handoff só aparecem na UI e no fim da sessão); e os lembretes de
+// plano e de tarefas (planReminders), que não dependem dessas condições.
+//
+// Sem card, lembra uma única vez de criar card quando a sessão já editou
+// ReminderEditThreshold arquivos ou escreveu um plano (só se o agente cria
+// cards por conta própria: AgentCreatesCards). Se o plano vem depois desse
+// lembrete, sai um lembrete curto, também uma única vez.
 func (c *Core) turnEnd(sess domain.Session, ev Event) (Reply, error) {
 	if ev.StopActive || !sess.FullCapture {
 		return Reply{}, nil
@@ -29,38 +34,164 @@ func (c *Core) turnEnd(sess domain.Session, ev Event) (Reply, error) {
 		return Reply{}, err
 	}
 	if sess.CardID != nil {
-		if set.IncompleteAction != "ask_agent" || !set.Rules["where_stopped"] {
-			return Reply{}, nil
-		}
-		card, err := c.st.GetCardByID(*sess.CardID)
-		if err != nil {
-			return Reply{}, err
-		}
-		edited, err := c.st.SessionEditedAfter(sess.ID, card.ID, card.WhereStoppedAt)
-		if err != nil || !edited {
-			return Reply{}, err
-		}
-		reason, err := c.handoffPrompt(card, sess.ID, set, ev.At)
-		if err != nil {
-			return Reply{}, err
-		}
-		return Reply{HoldTurn: &Decision{Reason: reason}}, nil
+		return c.cardTurnEnd(sess, set, ev)
 	}
 	if set.ReminderEditThreshold <= 0 || !set.AgentCreatesCards {
 		return Reply{}, nil
 	}
-	if reminded, err := c.st.SessionReminded(sess.ID); err != nil || reminded {
+	reminded, err := c.st.SessionReminded(sess.ID)
+	if err != nil {
 		return Reply{}, err
 	}
+	plan, err := c.sessionPlan(sess.ID, set)
+	if err != nil {
+		return Reply{}, err
+	}
+	if reminded {
+		if plan == "" {
+			return Reply{}, nil
+		}
+		if done, err := c.st.SessionPlanReminded(sess.ID); err != nil || done {
+			return Reply{}, err
+		}
+		if err := c.st.MarkPlanReminded(sess.ID); err != nil {
+			return Reply{}, err
+		}
+		return Reply{HoldTurn: &Decision{Reason: fmt.Sprintf(
+			`NobreAI Cockpit: esta sessão escreveu um plano (%s) sem card. Crie o card com nobre start "<título>" e registre as tarefas com nobre plan.`, plan)}}, nil
+	}
 	n, err := c.st.DistinctEditedFiles(sess.ID)
-	if err != nil || n < set.ReminderEditThreshold {
+	if err != nil || (n < set.ReminderEditThreshold && plan == "") {
 		return Reply{}, err
 	}
 	if err := c.st.MarkReminded(sess.ID); err != nil {
 		return Reply{}, err
 	}
-	return Reply{HoldTurn: &Decision{Reason: fmt.Sprintf(
-		`NobreAI Cockpit: esta sessão já editou %d arquivos sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.`, n)}}, nil
+	files := fmt.Sprintf("%d arquivos", n)
+	if n == 1 {
+		files = "1 arquivo"
+	}
+	reason := fmt.Sprintf(`NobreAI Cockpit: esta sessão já editou %s sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.`, files)
+	if plan != "" {
+		if err := c.st.MarkPlanReminded(sess.ID); err != nil {
+			return Reply{}, err
+		}
+		reason += fmt.Sprintf("\n"+`Inclui um plano (%s): crie o card com nobre start "<título>" e registre as tarefas com nobre plan.`, plan)
+	}
+	return Reply{HoldTurn: &Decision{Reason: reason}}, nil
+}
+
+// cardTurnEnd é o fim de turno de uma sessão com card (ver turnEnd).
+func (c *Core) cardTurnEnd(sess domain.Session, set domain.Settings, ev Event) (Reply, error) {
+	card, err := c.st.GetCardByID(*sess.CardID)
+	if err != nil {
+		return Reply{}, err
+	}
+	var parts []string
+	if set.IncompleteAction == "ask_agent" && set.Rules["where_stopped"] {
+		edited, err := c.st.SessionEditedAfter(sess.ID, card.ID, card.WhereStoppedAt)
+		if err != nil {
+			return Reply{}, err
+		}
+		if edited {
+			reason, err := c.handoffPrompt(card, sess.ID, set, ev.At)
+			if err != nil {
+				return Reply{}, err
+			}
+			parts = append(parts, reason)
+		}
+	}
+	ct, err := c.st.CardContent(card.ID)
+	if err != nil {
+		return Reply{}, err
+	}
+	more, err := c.planReminders(sess, card, ct, set)
+	if err != nil {
+		return Reply{}, err
+	}
+	parts = append(parts, more...)
+	if len(parts) == 0 {
+		return Reply{}, nil
+	}
+	return Reply{HoldTurn: &Decision{Reason: strings.Join(parts, "\n\n")}}, nil
+}
+
+// planReminders devolve os lembretes de plano e de tarefas do card, na ordem:
+// plano escrito sem registro (uma vez por sessão) e tarefas para trás (houve
+// commit da sessão desde a última mudança de tarefa; uma vez por mudança).
+func (c *Core) planReminders(sess domain.Session, card domain.Card, ct domain.Content, set domain.Settings) ([]string, error) {
+	var out []string
+	if ct.Plan == nil && len(set.PlanPatterns) > 0 {
+		done, err := c.st.SessionPlanReminded(sess.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !done {
+			plan, err := c.sessionPlan(sess.ID, set)
+			if err != nil {
+				return nil, err
+			}
+			if plan != "" {
+				if err := c.st.MarkPlanReminded(sess.ID); err != nil {
+					return nil, err
+				}
+				out = append(out, fmt.Sprintf(
+					`NobreAI Cockpit: você escreveu um plano (%s) e o card %s ainda não tem as tarefas. Registre com nobre plan %s --task "<tarefa 1>" --task "<tarefa 2>" ...`,
+					plan, card.Key, plan))
+			}
+		}
+	}
+	if ct.Plan.Open() > 0 {
+		last, err := c.st.LastPlanChange(card.ID)
+		if err != nil || last == nil {
+			return out, err
+		}
+		committed, err := c.st.SessionCommittedAfter(sess.ID, *last)
+		if err != nil || !committed {
+			return out, err
+		}
+		mark := store.FmtTime(*last)
+		prev, err := c.st.TaskRemindedFor(sess.ID)
+		if err != nil || prev == mark {
+			return out, err
+		}
+		if err := c.st.SetTaskRemindedFor(sess.ID, mark); err != nil {
+			return nil, err
+		}
+		out = append(out, fmt.Sprintf(
+			"NobreAI Cockpit: houve commit desde a última atualização das tarefas do card %s. Se alguma tarefa mudou de estado, atualize com nobre task <n> andamento|revisao|concluida; se não, só continue.", card.Key))
+	}
+	return out, nil
+}
+
+// stripWorktree tira o prefixo .worktrees/<nome>/ de um caminho relativo: um
+// plano escrito num worktree a partir do checkout principal casa como se fosse
+// do projeto.
+func stripWorktree(p string) string {
+	if rest, ok := strings.CutPrefix(p, ".worktrees/"); ok {
+		if _, tail, ok := strings.Cut(rest, "/"); ok && tail != "" {
+			return tail
+		}
+	}
+	return p
+}
+
+// sessionPlan devolve o primeiro caminho editado pela sessão que casa com um
+// padrão de plano; "" se nenhum (ou sem padrões).
+func (c *Core) sessionPlan(sessionID string, set domain.Settings) (string, error) {
+	if len(set.PlanPatterns) == 0 {
+		return "", nil
+	}
+	paths, err := c.st.SessionEditedPaths(sessionID)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range paths {
+		if domain.MatchPlan(set.PlanPatterns, stripWorktree(p)) {
+			return p, nil
+		}
+	}
+	return "", nil
 }
 
 const handoffSlug = "fechar-handoff"

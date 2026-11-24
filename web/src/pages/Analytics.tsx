@@ -1,7 +1,8 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useCards, useSessions, useSettings, useTotals } from '../api/queries'
-import { useProjectFilter } from '../app/project'
+import { useProjectFilter, useWithProject } from '../app/project'
+import { sessionProject } from './projects'
 import type { Total } from '../api/types'
 import { agentInfo } from '../ui/agents'
 import { OtherWindowTag } from '../ui/OtherWindowTag'
@@ -13,7 +14,6 @@ import { ContextSection } from './analytics/ContextSection'
 import { DailyChart } from './analytics/DailyChart'
 import { buildDays, range, tokens, ymd } from './analytics/data'
 import { btn, h2, muted, num, panel, td, th, thead } from './card/shared'
-import { useWithProject } from '../app/project'
 
 const PERIODS = [
   { id: 1, label: 'Hoje', long: 'hoje' },
@@ -74,7 +74,7 @@ export function Analytics() {
   const titleOf = (key: string) => cards?.find((c) => c.key === key)?.title ?? ''
   const cardKeyOf = (id: number | null) => cards?.find((c) => c.id === id)?.key ?? ''
   const periodSessions = (sessions.data ?? [])
-    .filter((s) => ids === null || (s.project_id !== null && ids.includes(s.project_id)))
+    .filter((s) => { const pid = sessionProject(s); return ids === null || (pid !== null && ids.includes(pid)) })
     .filter((s) => ymd(new Date(s.started_at)) >= from && ymd(new Date(s.started_at)) < to)
     .slice(0, 20)
   const long = PERIODS.find((p) => p.id === period)!.long

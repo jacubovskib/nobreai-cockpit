@@ -7,7 +7,7 @@ import "strings"
 // hook, ui, project e prompt ficam de fora.
 var handoffSubcommands = map[string]bool{
 	"start": true, "card": true, "resume": true, "note": true, "decide": true, "file": true,
-	"todo": true, "ask": true, "answer": true, "branch": true, "app": true, "block": true, "test": true,
+	"todo": true, "ask": true, "answer": true, "branch": true, "app": true, "block": true, "test": true, "plan": true, "task": true,
 	"done": true, "status": true, "help": true,
 }
 

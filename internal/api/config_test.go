@@ -465,3 +465,36 @@ func TestPutSettingsOmittedModelWindowsKeepsDefaults(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestSettingsPlanPatterns(t *testing.T) {
+	a := newTestAPI(t)
+	for _, bad := range []string{"docs/[plan.md", "/abs/*.md", "", " docs/p.md", "docs/**/p.md", "./docs/p.md"} {
+		rec := a.do(t, "PUT", "/api/settings", map[string]any{"plan_patterns": []string{bad}}, 0)
+		if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "padrão de plano inválido: "+bad {
+			t.Fatalf("%q = %d %s", bad, rec.Code, rec.Body)
+		}
+	}
+	if rec := a.do(t, "PUT", "/api/settings", map[string]any{"plan_patterns": []string{"plans/*.md"}}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	for _, body := range []map[string]any{{"grace_min": 20}, {"plan_patterns": nil}} {
+		if rec := a.do(t, "PUT", "/api/settings", body, 0); rec.Code != http.StatusOK {
+			t.Fatalf("PUT %v = %d %s", body, rec.Code, rec.Body)
+		}
+		if st, _ := a.st.GetSettings(); !slices.Equal(st.PlanPatterns, []string{"plans/*.md"}) {
+			t.Fatalf("%v: patterns = %v", body, st.PlanPatterns)
+		}
+	}
+	rec := a.do(t, "PUT", "/api/settings", map[string]any{"plan_patterns": []string{}}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT [] = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "GET", "/api/settings", nil, 0)
+	got := decode[domain.Settings](t, rec)
+	if got.PlanPatterns == nil || len(got.PlanPatterns) != 0 {
+		t.Fatalf("GET = %#v", got.PlanPatterns)
+	}
+	if !strings.Contains(rec.Body.String(), `"plan_patterns":[]`) {
+		t.Fatalf("corpo = %s", rec.Body)
+	}
+}

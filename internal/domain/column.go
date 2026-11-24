@@ -32,6 +32,8 @@ const (
 	EvDone          = "done"        // nobre done: agente marcou o card como pronto para revisão
 	EvHowToTest     = "how_to_test" // nobre test: agente registrou "como testar"
 	EvLimitPause    = "limit_pause" // limite de custo pausou o card
+	EvPlan          = "plan"        // nobre plan: agente registrou as tarefas do plano
+	EvTask          = "task"        // nobre task: agente mudou o estado de uma tarefa do plano
 )
 
 // PauseReasonLimit é o motivo gravado quando o limite de custo pausa o card.

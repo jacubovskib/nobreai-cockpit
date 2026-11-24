@@ -15,6 +15,8 @@ type SessionWithUsage struct {
 	domain.Session
 	Usage    store.Total `json:"usage"`
 	Unpriced bool        `json:"unpriced"`
+	// EffectiveProjectID: o projeto do card da sessão; sem card, o da própria sessão.
+	EffectiveProjectID *int64 `json:"effective_project_id"`
 }
 
 func (s *server) usageRoutes(mux *http.ServeMux) {
@@ -41,11 +43,15 @@ func (s *server) totalsWhere(f store.TotalsFilter) (map[string]store.Total, erro
 	return m, nil
 }
 
-func withUsage(sessions []domain.Session, bySession map[string]store.Total) []SessionWithUsage {
+func withUsage(sessions []domain.Session, bySession map[string]store.Total, projects map[string]*int64) []SessionWithUsage {
 	out := make([]SessionWithUsage, 0, len(sessions))
 	for _, x := range sessions {
 		u := bySession[x.ID]
-		out = append(out, SessionWithUsage{Session: x, Usage: u, Unpriced: u.Unpriced})
+		eff, ok := projects[x.ID]
+		if !ok {
+			eff = x.ProjectID
+		}
+		out = append(out, SessionWithUsage{Session: x, Usage: u, Unpriced: u.Unpriced, EffectiveProjectID: eff})
 	}
 	return out
 }
@@ -145,7 +151,16 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "")
 		return
 	}
-	writeJSON(w, http.StatusOK, withUsage(sessions, bySession))
+	ids := make([]string, len(sessions))
+	for i, x := range sessions {
+		ids[i] = x.ID
+	}
+	projects, err := s.st.SessionProjects(ids)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, withUsage(sessions, bySession, projects))
 }
 
 // listEvents: GET /api/events?kind=&limit= (padrão limit 50, máximo 500),

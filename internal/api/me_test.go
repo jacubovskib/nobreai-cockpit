@@ -907,3 +907,67 @@ func TestMePIDVivoTemPrioridadeSobreCabecalho(t *testing.T) {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestMeTaskWithoutPlan(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/task", map[string]any{"n": 1, "status": "andamento"}, 4242)
+	if rec.Code != http.StatusNotFound || decode[map[string]string](t, rec)["error"] != "o card não tem plano: registre com nobre plan" {
+		t.Fatalf("sem plano = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMePlanAndTask(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	if rec := a.do(t, "POST", "/api/me/plan", map[string]any{"path": "docs/p.md", "tasks": []string{"A", "B"}}, 4242); rec.Code != http.StatusOK {
+		t.Fatalf("plan = %d %s", rec.Code, rec.Body)
+	}
+	rec := a.do(t, "POST", "/api/me/task", map[string]any{"n": 1, "status": "andamento"}, 4242)
+	if rec.Code != http.StatusOK || decode[map[string]any](t, rec)["status"] != "em_andamento" {
+		t.Fatalf("task = %d %s", rec.Code, rec.Body)
+	}
+	cards := decode[[]map[string]any](t, a.do(t, "GET", "/api/cards", nil, 0))
+	plan, _ := cards[0]["plan"].(map[string]any)
+	tasks, _ := plan["tasks"].([]any)
+	if len(tasks) != 2 || tasks[0].(map[string]any)["status"] != "em_andamento" {
+		t.Fatalf("plan = %v", cards[0]["plan"])
+	}
+	evs, _ := a.st.RecentEvents(10)
+	kinds := map[string]bool{}
+	for _, e := range evs {
+		if e.CardID != nil && *e.CardID == c.ID {
+			kinds[e.Kind] = true
+		}
+	}
+	if !kinds[domain.EvPlan] || !kinds[domain.EvTask] {
+		t.Fatalf("eventos = %v", kinds)
+	}
+
+	rec = a.do(t, "POST", "/api/me/task", map[string]any{"n": 9, "status": "concluida"}, 4242)
+	if rec.Code != http.StatusNotFound || decode[map[string]string](t, rec)["error"] != "tarefa 9 não existe no plano do card" {
+		t.Fatalf("n=9 = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/me/task", map[string]any{"n": 1, "status": "feito"}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "estado inválido: use a-fazer, andamento, revisao ou concluida" {
+		t.Fatalf("feito = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/me/plan", map[string]any{"path": "docs/p.md", "tasks": []string{}}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "informe ao menos uma tarefa" {
+		t.Fatalf("vazio = %d %s", rec.Code, rec.Body)
+	}
+
+	rec = a.do(t, "POST", "/api/me/plan", map[string]any{"path": "  ", "tasks": []string{"A"}}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "informe o arquivo do plano" {
+		t.Fatalf("path vazio = %d %s", rec.Code, rec.Body)
+	}
+
+	a.liveSession(t, "claude:n", 4343, "")
+	for _, p := range []string{"/api/me/plan", "/api/me/task"} {
+		if rec := a.do(t, "POST", p, map[string]any{"tasks": []string{"A"}, "n": 1, "status": "concluida"}, 4343); rec.Code != http.StatusConflict {
+			t.Fatalf("%s sem card = %d %s", p, rec.Code, rec.Body)
+		}
+	}
+}

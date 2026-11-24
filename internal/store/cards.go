@@ -36,6 +36,9 @@ func requireAffected(res sql.Result) error {
 
 func fmtTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
+// FmtTime é o formato em que o store grava instantes (UTC, RFC 3339 com nanossegundos).
+func FmtTime(t time.Time) string { return fmtTime(t) }
+
 func scanCard(sc interface{ Scan(...any) error }) (domain.Card, error) {
 	var c domain.Card
 	var stopAt sql.NullString

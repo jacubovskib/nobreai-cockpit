@@ -30,7 +30,7 @@ function wrap(at: string) {
     </QueryClientProvider>,
   )
 }
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
 const ago = (h: number) => new Date(Date.now() - h * 3600000).toISOString()
 const card = (o: object) => ({
@@ -54,6 +54,8 @@ const routes = {
 
 describe('página Projetos', () => {
   it('mostra a tabela comparativa e pede os totais dos 7 dias', async () => {
+    // Congela o relógio: range(7) não pode virar o dia entre o teste e a tela.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date() })
     mock(routes)
     wrap('/projetos')
     expect(await screen.findByRole('columnheader', { name: 'Projeto' })).toBeInTheDocument()
@@ -99,6 +101,17 @@ describe('família em Projetos', () => {
     expect(btn).toHaveAttribute('aria-expanded', 'true')
     for (const n of ['web', 'api', 'geral']) expect(screen.getByText(n)).toBeInTheDocument()
   })
+  it('sessões vivas usam o projeto efetivo (o do card) quando há', async () => {
+    const live = (id: string, project_id: number, effective_project_id: number) => ({ id, project_id, effective_project_id, ended_at: null, pid_dead_at: null })
+    mock({ ...fam, '/api/sessions': [live('a', 1, 3), live('b', 2, 2), live('c', 1, 1)] })
+    wrap('/projetos/1')
+    await screen.findByRole('heading', { name: 'Por app' })
+    const rowOf = (n: string) => screen.getAllByText(n, { selector: 'td' })[0].closest('tr')!
+    const last = (n: string) => [...rowOf(n).querySelectorAll('td')].pop()!.textContent
+    expect(last('api')).toBe('1')
+    expect(last('web')).toBe('1')
+    expect(last('geral')).toBe('1')
+  })
   it('página do pai tem o quadro Por app, a do filho o link', async () => {
     mock(fam)
     const { unmount } = wrap('/projetos/1')
@@ -115,6 +128,55 @@ describe('família em Projetos', () => {
     wrap('/projetos/2')
     expect(await screen.findByText('parte de')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'loja' })).toHaveAttribute('href', '/projetos/1')
+  })
+})
+
+describe('plano nas telas de projeto', () => {
+  const tasks = [
+    { n: 1, title: 'a', status: 'concluida', session_id: '', updated_at: ago(5) },
+    { n: 2, title: 'b', status: 'em_andamento', session_id: '', updated_at: ago(4) },
+    { n: 3, title: 'c', status: 'em_revisao', session_id: '', updated_at: ago(3) },
+    { n: 4, title: 'd', status: 'a_fazer', session_id: '', updated_at: ago(2) },
+  ]
+  const withPlan = {
+    ...routes,
+    '/api/cards': [
+      card({ id: 1, key: 'NAC-1', title: 'Feita', column: 'concluido', updated_at: '2026-11-09T12:00:00Z', branch_merged_at: '2026-11-03T12:00:00Z' }),
+      card({ id: 2, key: 'NAC-2', title: 'Rodando', column: 'em_andamento', last_activity_at: ago(1), updated_at: ago(2), plan: { path: 'p.md', tasks } }),
+    ],
+  }
+  it('Entrega atual mostra os blocos; sem plano só o título', async () => {
+    mock(withPlan)
+    const { unmount } = wrap('/projetos')
+    expect(await screen.findByText('1/4 concluídas')).toBeInTheDocument()
+    unmount()
+    mock(routes)
+    wrap('/projetos')
+    await screen.findByText('Rodando')
+    expect(screen.queryByText(/concluídas$/)).toBeNull()
+  })
+  it('Entrega atual mostra o texto do sinal quando o card tem um', async () => {
+    mock({ ...routes, '/api/cards': [card({ id: 7, key: 'NAC-7', title: 'Travada', column: 'em_andamento', signal: 'bloqueado', signal_since: ago(5), blocked_by: 'NAC-4', last_activity_at: ago(1), updated_at: ago(5) })] })
+    wrap('/projetos')
+    expect(await screen.findByText('bloqueado por NAC-4')).toBeInTheDocument()
+  })
+  it('sinal bloqueado continua visível ao lado do estado', async () => {
+    mock({ ...routes, '/api/cards': [card({ id: 7, key: 'NAC-7', title: 'Travada', column: 'pausado', signal: 'bloqueado', signal_since: ago(5), blocked_by: 'NAC-4', updated_at: ago(5) })] })
+    wrap('/projetos/1')
+    const l = await screen.findByRole('link', { name: /NAC-7/ })
+    expect(l).toHaveTextContent('em andamento')
+    expect(l).toHaveTextContent('bloqueado por NAC-4')
+  })
+  it('a página do projeto mostra estado e contexto', async () => {
+    mock(withPlan)
+    wrap('/projetos/1')
+    const running = await screen.findByRole('link', { name: /NAC-2/ })
+    expect(running).toHaveTextContent('em andamento')
+    expect(running).toHaveTextContent('tarefa 2: b')
+    expect(running).toHaveTextContent('1/4 concluídas')
+    const done = screen.getByRole('link', { name: /NAC-1/ })
+    expect(done.textContent?.match(/concluída/g)).toHaveLength(1)
+    expect(done).toHaveTextContent('merge 03/11')
   })
 })
 

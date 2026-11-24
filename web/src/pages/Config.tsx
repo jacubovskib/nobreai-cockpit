@@ -260,6 +260,7 @@ function CardCreation({ settings }: { settings: Settings }) {
   const [creates, setCreates] = useState(settings.agent_creates_cards !== false)
   const [inject, setInject] = useState(settings.inject_paused_cards !== false)
   const [mem, setMem] = useState(String(settings.memory_budget_tokens ?? 1500))
+  const [patterns, setPatterns] = useState((settings.plan_patterns ?? []).join('\n'))
   const [bad, setBad] = useState<Error | null>(null)
   const submit = () => {
     const v = parseNum(n)
@@ -267,7 +268,7 @@ function CardCreation({ settings }: { settings: Settings }) {
     const m = parseNum(mem)
     if (!(Number.isInteger(m) && m >= 0 && m <= 2000)) return setBad(new Error('O limite das memórias deve ficar entre 0 e 2000 tokens.'))
     setBad(null)
-    save.mutate({ reminder_edit_threshold: on ? v : 0, agent_creates_cards: creates, inject_paused_cards: inject, memory_budget_tokens: m })
+    save.mutate({ reminder_edit_threshold: on ? v : 0, agent_creates_cards: creates, inject_paused_cards: inject, memory_budget_tokens: m, plan_patterns: patterns.split('\n').map((l) => l.trim()).filter(Boolean) })
   }
   return (
     <Section id="cards" title="Criação de cards" hint="Toda sessão é registrada, com tokens e custo. Um card só nasce quando o trabalho precisa de histórico.">
@@ -296,6 +297,11 @@ function CardCreation({ settings }: { settings: Settings }) {
         <input style={small} inputMode="numeric" value={mem} onChange={(e) => setMem(e.target.value)} />
         <span style={muted}>0 desliga; máximo 2000</span>
       </label>
+      <div style={field}>
+        <label htmlFor="plan-patterns">Arquivos de plano</label>
+        <textarea id="plan-patterns" aria-describedby="plan-patterns-hint" style={{ ...small, width: '100%', minHeight: 72, padding: 8, fontFamily: 'var(--mono, monospace)' }} value={patterns} onChange={(e) => setPatterns(e.target.value)} />
+        <span id="plan-patterns-hint" style={muted}>Um padrão por linha, relativo ao projeto. Vazio desliga a cobrança de plano.</span>
+      </div>
       <SaveRow pending={save.isPending} saved={save.isSuccess} error={bad ?? save.error} onSave={submit} notified={save.data?.notified_sessions} />
     </Section>
   )

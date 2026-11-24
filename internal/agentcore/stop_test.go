@@ -76,3 +76,250 @@ func TestTurnEndRemindsOnceWithoutCard(t *testing.T) {
 		t.Fatalf("lembrou de novo: %+v", r.HoldTurn)
 	}
 }
+
+const planRel = "docs/superpowers/plans/p.md"
+
+func planText(key string) string {
+	return "NobreAI Cockpit: você escreveu um plano (" + planRel + ") e o card " + key +
+		` ainda não tem as tarefas. Registre com nobre plan ` + planRel + ` --task "<tarefa 1>" --task "<tarefa 2>" ...`
+}
+
+func taskText(key string) string {
+	return "NobreAI Cockpit: houve commit desde a última atualização das tarefas do card " + key +
+		". Se alguma tarefa mudou de estado, atualize com nobre task <n> andamento|revisao|concluida; se não, só continue."
+}
+
+func (e *env) at(d time.Duration) { e.c.Deps().Now = func() time.Time { return t0.Add(d) } }
+
+func (e *env) settings(t *testing.T, f func(*domain.Settings)) {
+	t.Helper()
+	set, err := e.st.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f(&set)
+	if err := e.st.PutSettings(set); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// editPlanNoted edita o plano em t0+1m e atualiza o "Onde parei" em t0+2m,
+// para não haver handoff pendente; o relógio fica em t0+3m.
+func (e *env) editPlanNoted(t *testing.T, d *fakeDriver, c domain.Card) {
+	t.Helper()
+	e.at(time.Minute)
+	e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/" + planRel}})
+	if err := e.st.SetWhereStopped(c.ID, "plano escrito", t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	e.at(3 * time.Minute)
+}
+
+func (e *env) commit(t *testing.T, d *fakeDriver, at time.Duration, cmd string) {
+	t.Helper()
+	e.at(at)
+	e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolCommand, Command: cmd}})
+}
+
+func holdReason(t *testing.T, d *fakeDriver) string {
+	t.Helper()
+	if r := lastReply(t, d); r.HoldTurn != nil {
+		return r.HoldTurn.Reason
+	}
+	return ""
+}
+
+func TestTurnEndPlanReminderOnce(t *testing.T) {
+	e, d := newFake(t)
+	c := e.cardSession(t, d)
+	e.editPlanNoted(t, d, c)
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != planText(c.Key) {
+		t.Fatalf("motivo = %q\nquer      %q", got, planText(c.Key))
+	}
+	e.handle(t, d, Event{Kind: TurnEnd, StopActive: true})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("StopActive segurou: %q", got)
+	}
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("lembrou de novo: %q", got)
+	}
+}
+
+func TestTurnEndPlanReminderWithMark(t *testing.T) {
+	e, d := newFake(t)
+	c := e.cardSession(t, d)
+	e.settings(t, func(s *domain.Settings) { s.IncompleteAction = "mark" })
+	e.at(time.Minute)
+	e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/" + planRel}})
+	e.at(2 * time.Minute)
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != planText(c.Key) {
+		t.Fatalf("motivo = %q", got)
+	}
+}
+
+func TestTurnEndJoinsHandoffAndPlan(t *testing.T) {
+	e, d := newFake(t)
+	c := e.cardSession(t, d)
+	e.at(time.Minute)
+	e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/" + planRel}})
+	e.at(2 * time.Minute)
+	e.handle(t, d, Event{Kind: TurnEnd})
+	got := holdReason(t, d)
+	if !strings.HasPrefix(got, "Antes de encerrar, atualize o card "+c.Key) || !strings.HasSuffix(got, "\n\n"+planText(c.Key)) {
+		t.Fatalf("motivo = %q", got)
+	}
+}
+
+func TestTurnEndNoPlanReminderWhenRegistered(t *testing.T) {
+	e, d := newFake(t)
+	c := e.cardSession(t, d)
+	if _, err := e.st.SetPlan(c.ID, planRel, []string{"A"}, fakeID, t0); err != nil {
+		t.Fatal(err)
+	}
+	e.editPlanNoted(t, d, c)
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("segurou com plano registrado: %q", got)
+	}
+}
+
+func TestTurnEndTaskReminder(t *testing.T) {
+	e, d := newFake(t)
+	c := e.cardSession(t, d)
+	if _, err := e.st.SetPlan(c.ID, planRel, []string{"A", "B"}, fakeID, t0); err != nil {
+		t.Fatal(err)
+	}
+	e.commit(t, d, time.Minute, "git commit -m x")
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != taskText(c.Key) {
+		t.Fatalf("motivo = %q", got)
+	}
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("lembrou de novo sem mudança: %q", got)
+	}
+	setTask := func(n int, st domain.TaskStatus, at time.Duration) {
+		t.Helper()
+		if _, err := e.st.SetTaskStatus(c.ID, n, st, fakeID, t0.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setTask(1, domain.TaskDoing, 2*time.Minute)
+	e.commit(t, d, 3*time.Minute, "git commit -m y")
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != taskText(c.Key) {
+		t.Fatalf("depois de nova mudança e commit: %q", got)
+	}
+	// O comando que muda a tarefa junto com o commit não conta.
+	setTask(1, domain.TaskReview, 4*time.Minute)
+	e.commit(t, d, 5*time.Minute, "git commit -m x && nobre task 2 concluida")
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("commit com nobre task segurou: %q", got)
+	}
+	// Tudo concluído: nada a cobrar.
+	setTask(1, domain.TaskDone, 6*time.Minute)
+	setTask(2, domain.TaskDone, 6*time.Minute)
+	e.commit(t, d, 7*time.Minute, "git commit -m z")
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("tarefas concluídas segurou: %q", got)
+	}
+}
+
+func TestTurnEndNoCardPlanBypassesThreshold(t *testing.T) {
+	e, d := newFake(t)
+	e.project(t)
+	e.handle(t, d, Event{Kind: Started})
+	e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/docs/plan-x.md"}})
+	e.handle(t, d, Event{Kind: TurnEnd})
+	want := `NobreAI Cockpit: esta sessão já editou 1 arquivo sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.` +
+		"\n" + `Inclui um plano (docs/plan-x.md): crie o card com nobre start "<título>" e registre as tarefas com nobre plan.`
+	if got := holdReason(t, d); got != want {
+		t.Fatalf("motivo = %q", got)
+	}
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("lembrou de novo: %q", got)
+	}
+}
+
+func TestTurnEndNoCardPlanAfterReminder(t *testing.T) {
+	e, d := newFake(t)
+	e.project(t)
+	e.handle(t, d, Event{Kind: Started})
+	for _, f := range []string{"a.go", "b.go", "c.go"} {
+		e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/" + f}})
+	}
+	e.handle(t, d, Event{Kind: TurnEnd})
+	want := `NobreAI Cockpit: esta sessão já editou 3 arquivos sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.`
+	if got := holdReason(t, d); got != want {
+		t.Fatalf("lembrete = %q", got)
+	}
+	e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/docs/plan-x.md"}})
+	e.handle(t, d, Event{Kind: TurnEnd})
+	want = `NobreAI Cockpit: esta sessão escreveu um plano (docs/plan-x.md) sem card. Crie o card com nobre start "<título>" e registre as tarefas com nobre plan.`
+	if got := holdReason(t, d); got != want {
+		t.Fatalf("lembrete do plano = %q", got)
+	}
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("lembrou de novo: %q", got)
+	}
+}
+
+func TestTurnEndPlanPatternsEmpty(t *testing.T) {
+	e, d := newFake(t)
+	e.project(t)
+	e.settings(t, func(s *domain.Settings) { s.PlanPatterns = []string{} })
+	if set, err := e.st.GetSettings(); err != nil || set.PlanPatterns == nil || len(set.PlanPatterns) != 0 {
+		t.Fatalf("PlanPatterns gravado = %#v, %v", set.PlanPatterns, err)
+	}
+	e.handle(t, d, Event{Kind: Started})
+	for _, f := range []string{"docs/plan-x.md", "a.go"} {
+		e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/" + f}})
+	}
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("plano com padrões vazios segurou: %q", got)
+	}
+	e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/b.go"}})
+	e.handle(t, d, Event{Kind: TurnEnd})
+	want := `NobreAI Cockpit: esta sessão já editou 3 arquivos sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.`
+	if got := holdReason(t, d); got != want {
+		t.Fatalf("lembrete = %q", got)
+	}
+
+	// Com card, o plano editado também não cobra nada.
+	e, d = newFake(t)
+	c := e.cardSession(t, d)
+	e.settings(t, func(s *domain.Settings) { s.PlanPatterns = []string{} })
+	e.editPlanNoted(t, d, c)
+	e.handle(t, d, Event{Kind: TurnEnd})
+	if got := holdReason(t, d); got != "" {
+		t.Fatalf("card com padrões vazios segurou: %q", got)
+	}
+}
+
+// Plano escrito num worktree a partir do checkout principal: o prefixo
+// .worktrees/<nome>/ não impede o casamento; a mensagem cita o caminho gravado.
+func TestTurnEndPlanReminderInWorktree(t *testing.T) {
+	e, d := newFake(t)
+	c := e.cardSession(t, d)
+	e.at(time.Minute)
+	e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/.worktrees/x/docs/superpowers/plans/p.md"}})
+	if err := e.st.SetWhereStopped(c.ID, "plano escrito", t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	e.at(3 * time.Minute)
+	e.handle(t, d, Event{Kind: TurnEnd})
+	rel := ".worktrees/x/docs/superpowers/plans/p.md"
+	want := "NobreAI Cockpit: você escreveu um plano (" + rel + ") e o card " + c.Key +
+		` ainda não tem as tarefas. Registre com nobre plan ` + rel + ` --task "<tarefa 1>" --task "<tarefa 2>" ...`
+	if got := holdReason(t, d); got != want {
+		t.Fatalf("motivo = %q\nquer      %q", got, want)
+	}
+}

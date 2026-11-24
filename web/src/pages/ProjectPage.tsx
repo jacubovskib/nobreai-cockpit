@@ -6,9 +6,10 @@ import { familyIds, useWithProject, withProject } from '../app/project'
 import { Credits, Money } from '../ui/Money'
 import { range } from './analytics/data'
 import { ProjectTag } from '../ui/ProjectTag'
+import { PlanBlocks } from '../ui/PlanBlocks'
 import { signalText } from './board'
 import { btn, h2, muted, panel } from './card/shared'
-import { buildRows, GROUPS, timeline } from './projects'
+import { buildRows, contextLine, GROUPS, sessionProject, stateLabel, timeline } from './projects'
 
 // Cronograma das entregas do projeto da rota (não usa o seletor da barra lateral).
 export function ProjectPage() {
@@ -48,16 +49,22 @@ export function ProjectPage() {
             <h2 style={h2}>{g.label}</h2>
             {group.length === 0 && <p style={{ ...muted, margin: 0 }}>Nenhuma entrega</p>}
             <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {group.map(({ card }) => (
+              {group.map(({ card }) => {
+                const context = contextLine(card)
+                return (
                 <li key={card.key}>
                   <Link to={withP(`/cards/${card.key}`)} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'baseline', color: 'inherit', textDecoration: 'none' }}>
                     <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5, color: 'var(--text-2)' }}>{card.key}</span>
                     <span>{card.title}</span>
                     {isParent && card.project_id !== project.id && <span style={{ ...muted, fontSize: 12.5 }}>{appName(card.project_id, list)}</span>}
-                    {card.signal && <span style={muted}>{signalText(card)}</span>}
+                    <span style={muted}>{stateLabel(card)}</span>
+                    {card.signal && card.signal !== 'parado' && card.signal !== 'aguardando_revisao' && <span style={muted}>{signalText(card)}</span>}
+                    {context && <span style={muted}>{context}</span>}
+                    {card.plan && card.plan.tasks.length > 0 && <PlanBlocks tasks={card.plan.tasks} />}
                   </Link>
                 </li>
-              ))}
+                )
+              })}
             </ol>
           </section>
         )
@@ -79,7 +86,7 @@ const COLS: { id: CardSummary['column']; label: string }[] = [
 function ByApp({ project, list, cards, totals, sessions }: { project: Project; list: Project[]; cards: CardSummary[]; totals: ReturnType<typeof useTotals>; sessions: ReturnType<typeof useSessions> }) {
   if (totals.isError || sessions.isError) return <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar o quadro por app.</p>
   if (totals.isPending || sessions.isPending) return <p className="placeholder">Carregando…</p>
-  const row = buildRows(list, cards, totals.data ?? []).find((r) => r.project?.id === project.id)
+  const row = buildRows(list, cards, totals.data ?? [], sessions.data ?? []).find((r) => r.project?.id === project.id)
   if (!row || !row.general) return null
   const folder = (p: Project) => (project.path && p.path.startsWith(project.path.replace(/\/+$/, '') + '/') ? p.path.slice(project.path.replace(/\/+$/, '').length + 1) : p.path)
   const lines: { id: number; key: string; name: string; path: string; cost: number; credits: number; unpriced: boolean; cards: CardSummary[] }[] = [
@@ -87,7 +94,7 @@ function ByApp({ project, list, cards, totals, sessions }: { project: Project; l
     { id: project.id, key: 'geral', name: 'geral', path: '(raiz)', cost: row.general.costUsd, credits: row.general.credits, unpriced: row.general.unpriced, cards: cards.filter((x) => x.project_id === project.id) },
   ]
   // Sessão viva: não encerrada e com o processo existindo. As do pai caem em "geral".
-  const liveOf = (id: number) => (sessions.data ?? []).filter((s: SessionWithUsage) => s.project_id === id && !s.ended_at && !s.pid_dead_at).length
+  const liveOf = (id: number) => (sessions.data ?? []).filter((s: SessionWithUsage) => sessionProject(s) === id && !s.ended_at && !s.pid_dead_at).length
   return (
     <section style={{ ...panel, overflowX: 'auto' }}>
       <h2 style={h2}>Por app</h2>

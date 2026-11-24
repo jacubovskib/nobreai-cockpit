@@ -327,6 +327,7 @@ Comandos para o agente (dentro de uma sessão):
 | `nobre decide "<decisão>" --why "<porquê>"` | Registra uma decisão |
 | `nobre file <caminho> --why "<motivo>" [--lines L12-96]` | Marca um arquivo essencial |
 | `nobre todo add "<texto>"` / `nobre todo done <id>` | Adiciona ou conclui uma pendência |
+| `nobre plan <arquivo> --task "<tarefa>" …` / `nobre task <n> <estado>` | Registra as tarefas do plano e muda o estado de cada uma |
 | `nobre ask "<pergunta>"` / `nobre answer <id> "<resposta>"` | Abre ou responde uma pergunta para você |
 | `nobre block <KEY> [--why …]` / `nobre block --clear` | Marca que o card depende de outro |
 | `nobre branch <nome>` | Informa o branch de trabalho do card |

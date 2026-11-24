@@ -59,7 +59,7 @@ func (s *Store) RTKBeforeAfter(projectIDs []int64, intervals []rtk.Interval, min
 		LEFT JOIN cards c ON c.id = s.card_id
 		WHERE o.tool = 'Bash'`
 	if len(projectIDs) > 0 {
-		q += ` AND COALESCE(c.project_id, s.project_id) IN (` + placeholders(len(projectIDs)) + `)`
+		q += ` AND ` + sessionProjectSQL + ` IN (` + placeholders(len(projectIDs)) + `)`
 		for _, id := range projectIDs {
 			args = append(args, id)
 		}

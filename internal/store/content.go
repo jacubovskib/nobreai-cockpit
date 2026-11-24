@@ -144,7 +144,11 @@ func (s *Store) CardContent(cardID int64) (domain.Content, error) {
 		}
 		ct.Questions = append(ct.Questions, q)
 	}
-	return ct, closeRows(rows)
+	if err := closeRows(rows); err != nil {
+		return ct, err
+	}
+	ct.Plan, err = s.cardPlan(cardID)
+	return ct, err
 }
 
 func closeRows(rows *sql.Rows) error {

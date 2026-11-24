@@ -99,3 +99,23 @@ func TestBuildInUsesProjectDisplayName(t *testing.T) {
 		t.Fatalf("cabeçalho sem o nome do app:\n%s", out)
 	}
 }
+
+func TestBuildInPlan(t *testing.T) {
+	c, ct := fixture()
+	if out := BuildIn(c, "", ct, nil, nil, ""); strings.Contains(out, "## Plano") {
+		t.Fatalf("sem plano não há seção:\n%s", out)
+	}
+	ct.Plan = &domain.Plan{Path: "docs/p.md", Tasks: []domain.PlanTask{
+		{N: 1, Title: "Base", Status: domain.TaskDone},
+		{N: 2, Title: "Núcleo", Status: domain.TaskDoing},
+		{N: 3, Title: "Web", Status: domain.TaskTodo},
+	}}
+	out := BuildIn(c, "", ct, nil, nil, "")
+	want := "## Plano\ndocs/p.md · 1 de 3 concluídas\n- 2. Núcleo — em andamento\n- 3. Web — a fazer\n"
+	if !strings.Contains(out, want) {
+		t.Fatalf("faltou a seção:\n%s", out)
+	}
+	if strings.Index(out, "## Feito") > strings.Index(out, "## Plano") || strings.Index(out, "## Plano") > strings.Index(out, "## Decisões") {
+		t.Fatalf("ordem:\n%s", out)
+	}
+}

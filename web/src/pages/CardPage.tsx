@@ -22,6 +22,7 @@ import { Questions } from './card/Questions'
 import { ReadinessPanel } from './card/ReadinessPanel'
 import { ResumePreview } from './card/ResumePreview'
 import { Sessions } from './card/Sessions'
+import { Plan } from './card/Plan'
 import { Todos } from './card/Todos'
 import { WhereStopped } from './card/WhereStopped'
 import { CardContext } from './context/ContextSessions'
@@ -123,6 +124,7 @@ export function CardPage() {
           <WhereStopped card={c} />
           <Goal card={c} />
           <Todos card={c} />
+          <Plan card={c} />
           <Decisions card={c} />
           <Files card={c} />
           <Sessions card={c} currency={currency} rate={rate} />

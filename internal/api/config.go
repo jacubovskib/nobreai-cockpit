@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -80,6 +81,9 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 	// readJSON decodifica sobre a fatia existente: sem cópia, old mudaria junto e o diff do log perderia a troca.
 	old.ContextWarnPcts = slices.Clone(st.ContextWarnPcts)
 	old.ModelWindows = maps.Clone(st.ModelWindows)
+	old.PlanPatterns = slices.Clone(st.PlanPatterns)
+	keepPatterns := st.PlanPatterns
+	st.PlanPatterns = nil
 	keepCmd := old.TerminalCmd
 	// Janelas por modelo: o corpo substitui o mapa inteiro (decodificar sobre o atual só mesclaria).
 	keepWindows := st.ModelWindows
@@ -90,6 +94,9 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if st.ModelWindows == nil {
 		st.ModelWindows = keepWindows
 	}
+	if st.PlanPatterns == nil { // omitido ou null: mantém; só [] explícito desliga
+		st.PlanPatterns = keepPatterns
+	}
 	if st.ContextWarnPcts == nil {
 		st.ContextWarnPcts = []int{}
 	}
@@ -97,6 +104,10 @@ func (s *server) putSettings(w http.ResponseWriter, r *http.Request) {
 		st.TerminalCmd = keepCmd
 	}
 	if msg := validateLaunch(st.LaunchMode, st.TerminalCmd); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if msg := validatePlanPatterns(st.PlanPatterns); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -562,6 +573,20 @@ func validateContextSettings(st domain.Settings) string {
 	for m, w := range st.ModelWindows {
 		if m == "" || w < 1000 {
 			return "model_windows: modelo não pode ser vazio e a janela deve ser de pelo menos 1000"
+		}
+	}
+	return ""
+}
+
+// validatePlanPatterns confere os padrões de arquivo de plano; "" = válidos.
+func validatePlanPatterns(pats []string) string {
+	for _, p := range pats {
+		if p == "" || strings.TrimSpace(p) != p || strings.HasPrefix(p, "/") ||
+			strings.Contains(p, "**") || strings.HasPrefix(p, "./") {
+			return "padrão de plano inválido: " + p
+		}
+		if _, err := path.Match(p, ""); err != nil {
+			return "padrão de plano inválido: " + p
 		}
 	}
 	return ""

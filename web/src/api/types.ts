@@ -75,11 +75,16 @@ export interface EssentialFile { id: number; card_id: number; path: string; line
 export interface Todo { id: number; card_id: number; text: string; done: boolean; session_id: string }
 export interface Question { id: number; card_id: number; text: string; answer: string; session_id: string }
 
+export type TaskStatus = 'a_fazer' | 'em_andamento' | 'em_revisao' | 'concluida'
+export interface PlanTask { n: number; title: string; status: TaskStatus; session_id: string; updated_at: string }
+export interface Plan { path: string; tasks: PlanTask[] }
+
 export interface Content {
   decisions: Decision[]
   files: EssentialFile[]
   todos: Todo[]
   questions: Question[]
+  plan: Plan | null
 }
 
 export interface Prompt {
@@ -134,6 +139,7 @@ export interface Settings {
   big_output_max: number
   agent_context_warnings: boolean
   model_windows: Record<string, number>
+  plan_patterns: string[]
 }
 
 // GET /api/sessions/{id}/context
@@ -190,7 +196,8 @@ export interface Total {
   unpriced: boolean
 }
 
-export interface SessionWithUsage extends Session { usage: Total; unpriced: boolean }
+// effective_project_id: o projeto do card da sessão; sem card, o da própria sessão.
+export interface SessionWithUsage extends Session { usage: Total; unpriced: boolean; effective_project_id: number | null }
 
 export interface TouchedFile { path: string; kind: 'editado' | 'lido' | string; count: number; last_at: string }
 
@@ -209,6 +216,7 @@ export interface CardSummary extends Card {
   // aguardando_voce, bloqueado e pronto_para_retomar vêm do card pausado.
   signal: Signal
   signal_since: string | null
+  plan: Plan | null
 }
 
 // GET /api/cards/{key}
@@ -225,6 +233,7 @@ export interface CardDetail extends Card {
 
 // Sessão não encerrada; com pid_dead_at o processo já sumiu (não é viva).
 export interface ActiveSession extends Session {
+  effective_project_id: number | null
   card: Card | null
   last_activity: string
   session_usage: Total
