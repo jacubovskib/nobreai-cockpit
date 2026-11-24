@@ -137,7 +137,8 @@ func (a *Adapter) readContextSafe(sessionID, path string, main bool) (n int, win
 // conversa (assignWindows). Só o transcript principal (main) casa prompts do
 // hook: o prompt de um subagente é escrito pelo modelo, nunca digitado numa
 // janela. O arquivo de um subagente fica inteiro com a janela que rodou o
-// Agent (subagent_windows, vinda da leitura do principal), senão a principal. Devolve quantos registros leu, a janela de cada turno lido
+// Agent (subagent_windows, vinda da leitura do principal), senão a
+// principal. Devolve quantos registros leu, a janela de cada turno lido
 // (message.id → janela, "" = principal) e até onde leu (end; -1 se o arquivo
 // não existe). Arquivo inexistente é ignorado.
 func (a *Adapter) readContext(sessionID, path string, main bool) (n int, wins map[string]string, end int64, err error) {

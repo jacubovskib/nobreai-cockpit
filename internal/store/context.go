@@ -172,8 +172,9 @@ func (s *Store) SaveContextWindows(sessionID, path string, reset bool, outs []us
 // saveSubagentWindowTx grava a janela win do arquivo de subagente sub se ele
 // ainda não tem uma (a primeira vale) e, sendo filha, passa para ela os
 // turnos, as saídas e o uso já gravados do arquivo com a principal; o uso vai
-// também para o card atual da filha (única troca de card de uso já gravado). O uso não tem caminho: as linhas são as dos message_id
-// dos turnos do arquivo.
+// também para o card atual da filha (única troca de card de uso já gravado).
+// O uso não tem caminho: as linhas são as dos message_id dos turnos do
+// arquivo.
 func saveSubagentWindowTx(tx *sql.Tx, sessionID, sub, win string) error {
 	res, err := tx.Exec(`INSERT INTO subagent_windows (session_id, path, window_session_id) VALUES (?,?,?)
 		ON CONFLICT(session_id, path) DO NOTHING`, sessionID, sub, win)

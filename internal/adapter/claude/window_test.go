@@ -297,7 +297,7 @@ func TestWindow_BranchAcrossIncrementalReads(t *testing.T) {
 // O resumo de compactação herda a janela da fronteira que o antecede
 // (logicalParentUuid): o da principal fica na principal, mesmo depois de um
 // galho da filha.
-func TestWindow_CompactSummaryGoesToMain(t *testing.T) {
+func TestWindow_CompactSummaryFollowsBoundary(t *testing.T) {
 	e, _ := windowEnv(t)
 	e.prompt(t, 100, "investigue o login", time.Minute)
 	e.prompt(t, 200, "revise o readme", time.Minute+5*time.Second)
@@ -309,6 +309,29 @@ func TestWindow_CompactSummaryGoesToMain(t *testing.T) {
 		wAssistant("k1", "s1", "k1", "", 2*time.Minute+5*time.Second))
 	e.read(t)
 	wantWindows(t, "turno", e.turnWindows(t), map[string]string{"m1": "", "c1": childID(200), "k1": ""})
+}
+
+// O pai lógico da fronteira foi atribuído numa leitura anterior (known): a
+// compactação, o resumo e o turno seguinte ficam na janela dele (a filha).
+func TestWindow_CompactBoundaryParentFromKnown(t *testing.T) {
+	e, _ := windowEnv(t)
+	e.prompt(t, 100, "investigue o login", time.Minute)
+	e.prompt(t, 200, "revise o readme", time.Minute+5*time.Second)
+	appendFile(t, e.transcript, wPrompt("mu1", "", "investigue o login", time.Minute)+
+		wPrompt("cu1", "", "revise o readme", time.Minute+5*time.Second)+
+		wAssistant("ma1", "mu1", "m1", "", time.Minute+7*time.Second)+
+		wAssistant("ca1", "cu1", "c1", "", time.Minute+8*time.Second))
+	e.read(t)
+	appendFile(t, e.transcript, wCompact("b1", "ca1", "s1", 2*time.Minute)+
+		wAssistant("ca2", "s1", "c2", "", 2*time.Minute+5*time.Second))
+	e.read(t)
+	child := childID(200)
+	wantWindows(t, "turno", e.turnWindows(t), map[string]string{"m1": "", "c1": child, "c2": child})
+	comp := e.pairs(t, `SELECT CAST(segment AS TEXT), window_session_id FROM context_compactions WHERE session_id=? AND path=?`, sessID, e.transcript)
+	if len(comp) != 1 {
+		t.Fatalf("compactações = %v", comp)
+	}
+	wantWindows(t, "compactação", comp, map[string]string{"1": child})
 }
 
 // A filha compacta duas vezes sem prompt entre elas: as duas compactações e

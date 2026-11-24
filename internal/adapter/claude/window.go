@@ -104,8 +104,8 @@ func assignWindows(mainID string, lines []usage.LineRef, prompts []usage.Prompt,
 // compactionWindows devolve a janela de cada compactação desta leitura
 // (segmento → janela, "" = principal): a do pai lógico (logicalParentUuid),
 // atribuído nesta leitura (byUUID) ou numa anterior (known), senão a
-// principal. A fronteira e o resumo herdam essa mesma janela (assignWindows); isto
-// serve à contagem de compactações de cada janela.
+// principal. A fronteira e o resumo herdam essa mesma janela
+// (assignWindows); isto serve à contagem de compactações de cada janela.
 func compactionWindows(mainID string, lines []usage.LineRef, byUUID, known map[string]string) map[int]string {
 	var out map[int]string
 	for _, l := range lines {
