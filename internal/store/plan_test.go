@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,5 +102,81 @@ func TestCardContentPlan(t *testing.T) {
 	ct, err = s.CardContent(c.ID)
 	if err != nil || ct.Plan == nil || ct.Plan.Path != "docs/p.md" || len(ct.Plan.Tasks) != 2 || ct.Plan.Tasks[1].N != 2 {
 		t.Fatalf("plan = %+v, %v", ct.Plan, err)
+	}
+}
+
+func TestSessionCommittedAfter(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.StartSession(newSession("claude:1", 10)); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	add := func(data string, at time.Time) {
+		t.Helper()
+		if err := s.AddEvent(domain.Event{SessionID: "claude:1", Kind: domain.EvCommand, Data: []byte(data), At: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(after time.Time, want bool) {
+		t.Helper()
+		got, err := s.SessionCommittedAfter("claude:1", after)
+		if err != nil || got != want {
+			t.Fatalf("SessionCommittedAfter(%v) = %v, %v; quer %v", after, got, err, want)
+		}
+	}
+	add(`{"command":"git commit -m x","exit_code":1}`, t0.Add(time.Minute))
+	add(`{"command":"git commit -m x && nobre task 2 concluida"}`, t0.Add(time.Minute))
+	add(`{"command":"git log --grep commit"}`, t0.Add(time.Minute))
+	check(t0, false) // falhou, mudou a tarefa no mesmo comando, não é commit
+	add(`{"command":"git commit -m x","exit_code":0}`, t0.Add(2*time.Minute))
+	check(t0, true)
+	check(t0.Add(2*time.Minute), false) // no mesmo instante não é "depois"
+	add(`{"command":"rtk git commit -m y"}`, t0.Add(3*time.Minute))
+	check(t0.Add(2*time.Minute), true)
+	check(t0.Add(3*time.Minute), false)
+	// A mensagem que só cita os comandos conta como commit.
+	add(`{"command":"git commit -m \"feat(cli): nobre plan e nobre task (NAC-5)\""}`, t0.Add(4*time.Minute))
+	check(t0.Add(3*time.Minute), true)
+	add(`{"command":"cd /w/api && rtk nobre plan docs/p.md --task A"}`, t0.Add(5*time.Minute))
+	add(`{"command":"git commit -m y; ./bin/nobre task 1 concluida"}`, t0.Add(5*time.Minute))
+	check(t0.Add(4*time.Minute), false)
+}
+
+func TestSessionEditedPathsAndReminders(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.StartSession(newSession("claude:1", 10)); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	for i, p := range []string{"b.go", "a.go", "b.go", "docs/plan.md"} {
+		if err := s.AddEvent(domain.Event{SessionID: "claude:1", Kind: domain.EvFileEdit,
+			Data: []byte(`{"path":"` + p + `"}`), At: t0.Add(time.Duration(i) * time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.SessionEditedPaths("claude:1")
+	if err != nil || strings.Join(got, ",") != "b.go,a.go,docs/plan.md" {
+		t.Fatalf("SessionEditedPaths = %v, %v", got, err)
+	}
+	if r, err := s.SessionPlanReminded("claude:1"); err != nil || r {
+		t.Fatalf("SessionPlanReminded = %v, %v", r, err)
+	}
+	if err := s.MarkPlanReminded("claude:1"); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.SessionPlanReminded("claude:1"); err != nil || !r {
+		t.Fatalf("SessionPlanReminded depois de marcar = %v, %v", r, err)
+	}
+	if v, err := s.TaskRemindedFor("claude:1"); err != nil || v != "" {
+		t.Fatalf("TaskRemindedFor = %q, %v", v, err)
+	}
+	if err := s.SetTaskRemindedFor("claude:1", FmtTime(t0)); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.TaskRemindedFor("claude:1"); err != nil || v != FmtTime(t0) {
+		t.Fatalf("TaskRemindedFor = %q, %v", v, err)
+	}
+	if err := s.MarkPlanReminded("claude:x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("MarkPlanReminded inexistente = %v", err)
 	}
 }

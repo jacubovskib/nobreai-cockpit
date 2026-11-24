@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path"
 	"strings"
 	"time"
 
@@ -463,6 +464,112 @@ func (s *Store) DistinctEditedFiles(sessionID string) (int, error) {
 		WHERE session_id=? AND kind=? AND COALESCE(json_extract(data, '$.path'), '') <> ''`,
 		sessionID, domain.EvFileEdit).Scan(&n)
 	return n, err
+}
+
+// SessionEditedPaths devolve os caminhos distintos de file_edit da sessão, na
+// ordem da primeira edição.
+func (s *Store) SessionEditedPaths(sessionID string) ([]string, error) {
+	rows, err := s.DB.Query(`SELECT json_extract(data, '$.path') AS p FROM events
+		WHERE session_id=? AND kind=? AND COALESCE(json_extract(data, '$.path'), '') <> ''
+		GROUP BY p ORDER BY MIN(id)`, sessionID, domain.EvFileEdit)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, closeRows(rows)
+}
+
+// SessionCommittedAfter diz se a sessão rodou git commit com sucesso (exit_code
+// ausente ou 0) depois de after. A linha de comando que também roda nobre task
+// ou nobre plan não conta: a tarefa muda no meio do comando, e o evento só é
+// gravado no fim, com horário posterior.
+func (s *Store) SessionCommittedAfter(sessionID string, after time.Time) (bool, error) {
+	rows, err := s.DB.Query(`SELECT COALESCE(json_extract(data, '$.command'), '') FROM events
+		WHERE session_id=? AND kind=? AND julianday(at) > julianday(?)
+			AND COALESCE(json_extract(data, '$.exit_code'), 0) = 0
+		ORDER BY id`, sessionID, domain.EvCommand, fmtTime(after))
+	if err != nil {
+		return false, err
+	}
+	found := false
+	for rows.Next() {
+		var cmd string
+		if err := rows.Scan(&cmd); err != nil {
+			rows.Close()
+			return false, err
+		}
+		if domain.IsGitCommit(cmd) && !runsNobrePlanOrTask(cmd) {
+			found = true
+			break
+		}
+	}
+	if err := closeRows(rows); err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
+// runsNobrePlanOrTask diz se alguma parte da linha de comando roda nobre plan
+// ou nobre task: o nobre abre a parte (depois de atribuições VAR=valor e de um
+// rtk), para que a mensagem de um commit que só cita os comandos não conte.
+func runsNobrePlanOrTask(cmd string) bool {
+	for _, f := range domain.CommandParts(cmd) {
+		i := 0
+		for i < len(f) && (f[i] == "rtk" || strings.Contains(f[i], "=")) {
+			i++
+		}
+		if i+1 < len(f) && path.Base(f[i]) == "nobre" && (f[i+1] == "plan" || f[i+1] == "task") {
+			return true
+		}
+	}
+	return false
+}
+
+// MarkPlanReminded marca que a sessão já recebeu o lembrete de registrar o plano.
+func (s *Store) MarkPlanReminded(id string) error {
+	res, err := s.DB.Exec(`UPDATE sessions SET plan_reminded=1 WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
+}
+
+// SessionPlanReminded diz se a sessão já recebeu o lembrete de registrar o plano.
+func (s *Store) SessionPlanReminded(id string) (bool, error) {
+	var r bool
+	err := s.DB.QueryRow(`SELECT plan_reminded FROM sessions WHERE id=?`, id).Scan(&r)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	return r, err
+}
+
+// TaskRemindedFor devolve a última mudança de tarefa (no formato FmtTime) pela
+// qual a sessão já foi lembrada de atualizar as tarefas; "" se nenhuma.
+func (s *Store) TaskRemindedFor(id string) (string, error) {
+	var v string
+	err := s.DB.QueryRow(`SELECT task_reminded_for FROM sessions WHERE id=?`, id).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return v, err
+}
+
+// SetTaskRemindedFor grava a mudança de tarefa pela qual a sessão foi lembrada.
+func (s *Store) SetTaskRemindedFor(id, v string) error {
+	res, err := s.DB.Exec(`UPDATE sessions SET task_reminded_for=? WHERE id=?`, v, id)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
 }
 
 // EndSession encerra a sessão e, se ela tem card, aplica a transição

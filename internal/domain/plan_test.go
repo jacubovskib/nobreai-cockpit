@@ -48,3 +48,21 @@ func TestPlanOpen(t *testing.T) {
 		t.Fatalf("open = %d", p.Open())
 	}
 }
+
+func TestIsGitCommit(t *testing.T) {
+	for cmd, want := range map[string]bool{
+		"git commit -m x":            true,
+		"rtk git commit -m x":        true,
+		"git -C /w/api commit -am x": true,
+		"cd x && git commit":         true,
+		"git -c user.name=a commit":  true,
+		"git log --grep commit":      false,
+		"git status":                 false,
+		`grep -r "git commit" docs`:  false,
+		"":                           false,
+	} {
+		if got := IsGitCommit(cmd); got != want {
+			t.Errorf("IsGitCommit(%q) = %v, quer %v", cmd, got, want)
+		}
+	}
+}

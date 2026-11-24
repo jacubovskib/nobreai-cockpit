@@ -93,3 +93,42 @@ func MatchPlan(patterns []string, rel string) bool {
 	}
 	return false
 }
+
+// cmdSplitter troca os separadores de comando do shell por quebra de linha.
+var cmdSplitter = strings.NewReplacer("&&", "\n", "||", "\n", ";", "\n", "|", "\n")
+
+// CommandParts separa a linha de comando em &&, ||, ; e |, cada parte em
+// tokens separados por espaço (as aspas não são tiradas).
+func CommandParts(cmd string) [][]string {
+	var out [][]string
+	for _, part := range strings.Split(cmdSplitter.Replace(cmd), "\n") {
+		if f := strings.Fields(part); len(f) > 0 {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// IsGitCommit diz se alguma parte da linha de comando roda git commit: depois
+// do token git, pula as opções (-C e -c levam o argumento seguinte) e o
+// próximo token tem de ser commit.
+func IsGitCommit(cmd string) bool {
+	for _, f := range CommandParts(cmd) {
+		for i, tok := range f {
+			if tok != "git" {
+				continue
+			}
+			j := i + 1
+			for j < len(f) && strings.HasPrefix(f[j], "-") {
+				if f[j] == "-C" || f[j] == "-c" {
+					j++
+				}
+				j++
+			}
+			if j < len(f) && f[j] == "commit" {
+				return true
+			}
+		}
+	}
+	return false
+}
