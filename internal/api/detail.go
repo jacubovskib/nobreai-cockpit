@@ -66,6 +66,7 @@ func (s *server) cardDetail(c domain.Card) (CardDetail, error) {
 	d.Content = domain.Content{
 		Decisions: nonNil(ct.Decisions), Files: nonNil(ct.Files),
 		Todos: nonNil(ct.Todos), Questions: nonNil(ct.Questions),
+		Plan: ct.Plan,
 	}
 	sessions, err := s.st.SessionsForCard(c.ID)
 	if err != nil {

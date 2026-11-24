@@ -935,6 +935,23 @@ func TestMePlanAndTask(t *testing.T) {
 	if len(tasks) != 2 || tasks[0].(map[string]any)["status"] != "em_andamento" {
 		t.Fatalf("plan = %v", cards[0]["plan"])
 	}
+	// O detalhe do card (página do card e nobre status) também traz o plano,
+	// e a prontidão conta as tarefas abertas.
+	detail := decode[map[string]any](t, a.do(t, "GET", "/api/cards/"+c.Key, nil, 0))
+	dplan, _ := detail["content"].(map[string]any)["plan"].(map[string]any)
+	if dplan == nil || dplan["path"] != "docs/p.md" || len(dplan["tasks"].([]any)) != 2 {
+		t.Fatalf("detalhe sem plano: %v", detail["content"])
+	}
+	todoOpen := false
+	for _, it := range detail["readiness"].(map[string]any)["items"].([]any) {
+		item := it.(map[string]any)
+		if item["rule"] == "todo_open" {
+			todoOpen = item["ok"] == true
+		}
+	}
+	if !todoOpen {
+		t.Fatalf("todo_open deveria valer com tarefas abertas: %v", detail["readiness"])
+	}
 	evs, _ := a.st.RecentEvents(10)
 	kinds := map[string]bool{}
 	for _, e := range evs {
