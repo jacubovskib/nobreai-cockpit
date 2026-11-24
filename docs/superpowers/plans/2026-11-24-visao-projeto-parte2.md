@@ -78,6 +78,7 @@
     - 2. Núcleo — em andamento
     - 3. Web — a fazer
     ```
+    É por aqui que o prompt de handoff padrão (`retomar-card`, com `{{card.pacote}}`) passa a listar as tarefas em aberto: não há variável de prompt nova.
   - Em `config_test.go`: o PUT com `plan_patterns: ["docs/[plan.md"]` devolve 400 "padrão de plano inválido: docs/[plan.md". Com `["/abs/*.md"]`, também 400. Com `[]`, grava, e o GET devolve `[]`, não o padrão.
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -168,7 +169,7 @@ Regras de `turnEnd` (o começo continua igual: `StopActive` ou sem captura compl
   - `TestIsGitCommit` (tabela): `true` para `git commit -m x`, `rtk git commit -m x`, `git -C /w/api commit -am x`, `cd x && git commit`, `git -c user.name=a commit`; `false` para `git log --grep commit`, `git status`, `grep -r "git commit" docs` e `""`.
   - `TestSessionCommittedAfter`: um `command` `git commit -m x` com `exit_code` 1 não conta; com 0 ou sem `exit_code`, conta; antes de `after`, não conta.
   - Em `stop_test.go` (use `cardSession` e os helpers de lá):
-    - `TestTurnEndPlanReminderOnce`: card sem plano, edição em `/w/api/docs/superpowers/plans/p.md`, `nobre note` logo depois (para não ter handoff pendente), `TurnEnd` → `HoldTurn.Reason` é exatamente o texto de plano sem registro, com `<p> = docs/superpowers/plans/p.md`. O `TurnEnd` seguinte e o `StopActive` não seguram.
+    - `TestTurnEndPlanReminderOnce`: card sem plano, edição em `/w/api/docs/superpowers/plans/p.md`, "Onde parei" atualizado pelo store logo depois (para não ter handoff pendente), `TurnEnd` → `HoldTurn.Reason` é exatamente o texto de plano sem registro, com `<p> = docs/superpowers/plans/p.md`. O `TurnEnd` seguinte e o `StopActive` não seguram.
     - `TestTurnEndPlanReminderWithMark`: com `IncompleteAction = "mark"` e o mesmo cenário, segura só com a linha do plano.
     - `TestTurnEndJoinsHandoffAndPlan`: edição do plano sem `note` depois → o motivo começa com o prompt de handoff, e o texto do plano vem depois de `"\n\n"`.
     - `TestTurnEndNoPlanReminderWhenRegistered`: com `SetPlan` já feito no card, a edição do plano não gera lembrete.
