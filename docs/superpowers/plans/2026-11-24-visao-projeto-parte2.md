@@ -18,6 +18,7 @@
 4. **Um plano escrito sem card dispara o lembrete "sem card" mesmo abaixo do limite de arquivos.** Um plano já indica trabalho com histórico. Quando o lembrete "sem card" já saiu antes de o plano ser escrito, vem depois um único lembrete curto, só do plano.
 5. **A skill vale para os dois agentes.** O texto novo vai em `internal/adapter/claude/skill.md` e em `internal/adapter/kiro/steering.md`.
 6. **A linha de contexto de uma entrega concluída é "concluída dd/mm"**, e não "merge dd/mm". O Cockpit não sabe quando houve merge.
+7. **"O prompt de handoff lista as tarefas em aberto" é entendido como o prompt padrão de retomada** (`retomar-card`, que traz `{{card.pacote}}`). O `fechar-handoff`, que o fim de turno usa, não lista as tarefas. O lembrete de `nobre task` cobre esse caso.
 
 ## Global Constraints
 
@@ -26,6 +27,7 @@
 - Datas no SQL são comparadas com `julianday(col)`, nunca como texto.
 - Migração nova: `internal/store/migrations/021_plan_tasks.sql`. A última na `main` é a 020. Antes de criar, confira de novo com `git worktree list` e `ls internal/store/migrations` na `main`.
 - Regras de hook só em `internal/agentcore`. Os adaptadores (`internal/adapter/claude`, `internal/adapter/kiro`) não ganham regra nova. Toda regra nova de fim de turno também é exercitada pela bateria `internal/agentcore/contracttest`.
+- Os lembretes novos são só de fim de turno. O reconciliador (fim de sessão sem hook) não muda. `nobre memorias` não traz regras deste projeto hoje.
 - Lembretes nunca prendem o agente em loop. A continuação de um turno segurado (`StopActive`) nunca é segurada, e cada lembrete sai no máximo uma vez por condição.
 - Estados de tarefa gravados: `a_fazer`, `em_andamento`, `em_revisao`, `concluida`. Rótulos: "a fazer", "em andamento", "em revisão", "concluída". No CLI: `a-fazer`, `andamento`, `revisao`, `concluida` (os valores gravados também valem).
 - O Cockpit não lê nem interpreta o markdown do plano nem o `progress.md`. Quem informa as tarefas é o agente.
@@ -79,7 +81,7 @@
     - 3. Web — a fazer
     ```
     É por aqui que o prompt de handoff padrão (`retomar-card`, com `{{card.pacote}}`) passa a listar as tarefas em aberto: não há variável de prompt nova.
-  - Em `config_test.go`: o PUT com `plan_patterns: ["docs/[plan.md"]` devolve 400 "padrão de plano inválido: docs/[plan.md". Com `["/abs/*.md"]`, também 400. Com `[]`, grava, e o GET devolve `[]`, não o padrão.
+  - Em `config_test.go`: o PUT com `plan_patterns: ["docs/[plan.md"]` devolve 400 "padrão de plano inválido: docs/[plan.md". Com `["/abs/*.md"]`, também 400. Com `[]`, grava, e o GET devolve `[]`, não o padrão. Um PUT sem a chave `plan_patterns`, ou com `null`, mantém a lista anterior.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -89,6 +91,7 @@ Expected: FAIL (símbolos indefinidos)
 - [ ] **Step 3: Implement** a migração, `plan.go` no domínio e no store, o carregamento em `CardContent`, a regra `todo_open` (OK com um `Todo` aberto **ou** `ct.Plan.Open() > 0`, sem mudar o rótulo) e a seção "Plano" do pacote.
   - `SetPlan` roda numa transação. Para cada título novo, na ordem, ele reaproveita a primeira tarefa antiga de mesmo título ainda não usada, com estado, `session_id` e `updated_at`. Se não houver, cria a tarefa como `a_fazer` com `updated_at = at`. As antigas que sobram são apagadas. `n` é renumerado de 1 em diante, e o comando grava `plan_path` e `plan_updated_at = at`.
   - Os títulos chegam sem espaços nas pontas e nunca vazios. Título vazio ou lista vazia → erro `store.ErrInvalid` (crie-o se não existir, e mapeie para 400 em `writeStoreError`).
+  - No PUT de configurações (`putSettings`), `plan_patterns` segue o padrão das outras fatias. Chave ausente ou `null` mantém o valor atual, e só um `[]` explícito desliga. Clone a fatia em `old`, como `ContextWarnPcts`, para o diff do log de configuração não perder a troca.
   - Validação no PUT de configurações: cada padrão sem espaços nas pontas, não vazio, não absoluto, e com `path.Match(p, "")` sem `path.ErrBadPattern`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -101,7 +104,7 @@ Expected: PASS
 ### Task 2: API, CLI e skill — `nobre plan` e `nobre task`
 
 **Files:**
-- Modify: `internal/api/me.go` (rotas e handlers), `internal/api/detail.go` (`CardSummary`, `cardSummary`), `internal/domain/column.go` (eventos), `internal/client/client.go` (se a forma de `Me` pedir), `cmd/nobre/agent.go`, `cmd/nobre/main.go` (`usage`, `run`, `helpFor`), `internal/agentcore/nobrecmd.go` (`handoffSubcommands`), `internal/adapter/claude/skill.md`, `internal/adapter/kiro/steering.md`
+- Modify: `internal/agentcore/start.go` (`commandsGuidance`: depois de `nobre todo add "<texto>";`, acrescente `nobre plan <arquivo> --task "<tarefa>" ... ao terminar um plano; nobre task <n> <estado> a cada tarefa;`; ajuste os testes que comparam o texto exato), `internal/api/me.go` (rotas e handlers), `internal/api/detail.go` (`CardSummary`, `cardSummary`), `internal/domain/column.go` (eventos), `internal/client/client.go` (se a forma de `Me` pedir), `cmd/nobre/agent.go`, `cmd/nobre/main.go` (`usage`, `run`, `helpFor`), `internal/agentcore/nobrecmd.go` (`handoffSubcommands`), `internal/adapter/claude/skill.md`, `internal/adapter/kiro/steering.md`
 - Test: `internal/api/me_test.go`, `cmd/nobre/agent_test.go`, `internal/agentcore/nobrecmd_test.go`
 
 **Interfaces:**
@@ -147,7 +150,7 @@ Expected: PASS (inclusive testes que comparem a skill instalada com o arquivo).
 - Produces:
   - `func IsGitCommit(cmd string) bool` (`internal/domain/plan.go`). Separa o comando em `&&`, `||`, `;` e `|`, e procura em cada parte o token `git`. Depois dele, pula as opções (`-C` e `-c` levam o argumento seguinte) e o próximo token tem de ser `commit`.
   - `func (s *Store) SessionEditedPaths(sessionID string) ([]string, error)`: os caminhos distintos de `file_edit`, na ordem da primeira edição.
-  - `func (s *Store) SessionCommittedAfter(sessionID string, after time.Time) (bool, error)`: há um evento `command` da sessão depois de `after`, com `IsGitCommit` e `exit_code` ausente ou 0.
+  - `func (s *Store) SessionCommittedAfter(sessionID string, after time.Time) (bool, error)`: há um evento `command` da sessão depois de `after`, com `IsGitCommit` e `exit_code` ausente ou 0. Uma linha de comando que também roda `nobre task` ou `nobre plan` (por exemplo, `git commit -m x && nobre task 2 concluida`) **não** conta. A tarefa muda no meio do comando, e o evento só é gravado no fim, com horário posterior.
   - `func (s *Store) MarkPlanReminded(id string) error`, `func (s *Store) SessionPlanReminded(id string) (bool, error)`, `func (s *Store) TaskRemindedFor(id string) (string, error)`, `func (s *Store) SetTaskRemindedFor(id, v string) error`.
 - Textos exatos (`<p>` = o primeiro caminho editado que casa com um padrão; `<KEY>` = a chave do card):
   - Plano sem registro: `NobreAI Cockpit: você escreveu um plano (<p>) e o card <KEY> ainda não tem as tarefas. Registre com nobre plan <p> --task "<tarefa 1>" --task "<tarefa 2>" ...`
@@ -173,7 +176,7 @@ Regras de `turnEnd` (o começo continua igual: `StopActive` ou sem captura compl
     - `TestTurnEndPlanReminderWithMark`: com `IncompleteAction = "mark"` e o mesmo cenário, segura só com a linha do plano.
     - `TestTurnEndJoinsHandoffAndPlan`: edição do plano sem `note` depois → o motivo começa com o prompt de handoff, e o texto do plano vem depois de `"\n\n"`.
     - `TestTurnEndNoPlanReminderWhenRegistered`: com `SetPlan` já feito no card, a edição do plano não gera lembrete.
-    - `TestTurnEndTaskReminder`: com plano registrado em t0, um `command` `git commit -m x` em t0+1m e `TurnEnd` → texto de tarefas para trás. O segundo `TurnEnd` não segura. `SetTaskStatus` em t0+2m, outro commit em t0+3m e `TurnEnd` → segura de novo. Com todas as tarefas concluídas e um commit novo, não segura.
+    - `TestTurnEndTaskReminder`: com plano registrado em t0, um `command` `git commit -m x` em t0+1m e `TurnEnd` → texto de tarefas para trás. O segundo `TurnEnd` não segura. `SetTaskStatus` em t0+2m, outro commit em t0+3m e `TurnEnd` → segura de novo. Com todas as tarefas concluídas e um commit novo, não segura. Um `command` `git commit -m x && nobre task 2 concluida` depois da última mudança não segura.
     - `TestTurnEndNoCardPlanBypassesThreshold`: sem card, uma única edição de `docs/plan-x.md` → `NobreAI Cockpit: esta sessão já editou 1 arquivo sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.\nInclui um plano (docs/plan-x.md): crie o card com nobre start "<título>" e registre as tarefas com nobre plan.`
     - `TestTurnEndNoCardPlanAfterReminder`: três edições comuns e `TurnEnd` (lembrete de hoje, sem linha de plano), depois a edição de `docs/plan-x.md` e `TurnEnd` → o lembrete curto do plano. O terceiro `TurnEnd` não segura.
     - `TestTurnEndPlanPatternsEmpty`: com `PlanPatterns = []`, nada disso dispara; o lembrete de 3 arquivos continua como hoje.
