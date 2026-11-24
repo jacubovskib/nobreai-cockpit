@@ -101,12 +101,9 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 	if err != nil {
 		return out, err
 	}
-	owner, where, args := sessionID, `window_session_id IN ('', ?)`, []any{sessionID}
-	if parent != "" {
-		owner, where = parent, `window_session_id = ?`
-		if err := s.DB.QueryRow(`SELECT transcript_path FROM sessions WHERE id=?`, parent).Scan(&mainPath); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return out, err
-		}
+	owner, mainPath, where, args, err := s.windowScope(sessionID, parent, mainPath)
+	if err != nil {
+		return out, err
 	}
 	if model == "" {
 		err := s.DB.QueryRow(`SELECT model FROM usage WHERE session_id=? AND `+where+` AND model<>'' ORDER BY at DESC LIMIT 1`,
@@ -140,23 +137,8 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 		return out, err
 	}
 
-	// Compactações das outras janelas: não contam para esta.
-	foreign := map[int]bool{}
-	crows, err := s.DB.Query(`SELECT segment FROM context_compactions WHERE session_id=? AND path=? AND NOT (`+where+`)`,
-		append([]any{owner, mainPath}, args...)...)
+	foreign, err := s.foreignCompactions(owner, mainPath, where, args)
 	if err != nil {
-		return out, err
-	}
-	for crows.Next() {
-		var seg int
-		if err := crows.Scan(&seg); err != nil {
-			crows.Close()
-			return out, err
-		}
-		foreign[seg] = true
-	}
-	crows.Close()
-	if err := crows.Err(); err != nil {
 		return out, err
 	}
 
@@ -207,6 +189,42 @@ func (s *Store) SessionContextWith(sessionID string, now time.Time, set domain.S
 		out.TopOutputs = append(out.TopOutputs, o)
 	}
 	return out, orows.Err()
+}
+
+// windowScope resolve as linhas da janela sessionID (parent é o
+// parent_session_id dela, path o transcript_path): na principal, as do
+// próprio id com window_session_id ” ou o dela; na filha, as gravadas sob a
+// principal (owner) com o id da filha. mainPath é o transcript principal (o da
+// principal, para a filha); where e args filtram window_session_id.
+func (s *Store) windowScope(sessionID, parent, path string) (owner, mainPath, where string, args []any, err error) {
+	owner, mainPath, where, args = sessionID, path, `window_session_id IN ('', ?)`, []any{sessionID}
+	if parent != "" {
+		owner, where = parent, `window_session_id = ?`
+		if err := s.DB.QueryRow(`SELECT transcript_path FROM sessions WHERE id=?`, parent).Scan(&mainPath); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", "", "", nil, err
+		}
+	}
+	return owner, mainPath, where, args, nil
+}
+
+// foreignCompactions devolve os segmentos abertos por compactação de outra
+// janela (context_compactions fora de where): não contam para esta.
+func (s *Store) foreignCompactions(owner, mainPath, where string, args []any) (map[int]bool, error) {
+	foreign := map[int]bool{}
+	rows, err := s.DB.Query(`SELECT segment FROM context_compactions WHERE session_id=? AND path=? AND NOT (`+where+`)`,
+		append([]any{owner, mainPath}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seg int
+		if err := rows.Scan(&seg); err != nil {
+			return nil, err
+		}
+		foreign[seg] = true
+	}
+	return foreign, rows.Err()
 }
 
 // fillWindow define a janela: tabela por modelo, "[1m]" no nome, senão 200.000

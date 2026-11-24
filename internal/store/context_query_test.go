@@ -298,3 +298,55 @@ func TestContextSessionDetailPctOnly(t *testing.T) {
 		t.Fatalf("%+v", ct)
 	}
 }
+
+// compactWindows cria a principal claude:p e a filha claude:p@2 no mesmo
+// transcript: a filha compacta (segmento 1) e depois a principal (segmento 2).
+// Turnos: m* da principal, c* da filha; a principal tem também um turno só no
+// subagente /sub com tokens enormes (não conta para o pico).
+func compactWindows(t *testing.T) *Store {
+	t.Helper()
+	s := newTestStore(t)
+	ctxSession(t, s, "claude:p", nil, nil)
+	child := newSession("claude:p@2", 2)
+	child.ParentSessionID = "claude:p"
+	child.TranscriptPath = "/main"
+	if err := s.StartSession(child); err != nil {
+		t.Fatal(err)
+	}
+	turns := []usage.ContextTurn{
+		liveTurn(0, 0, 9*time.Minute, 1000, 0, 0, "", "m0"),
+		liveTurn(1, 0, 8*time.Minute, 5000, 0, 0, "", "c0"),
+		liveTurn(2, 1, 7*time.Minute, 800, 0, 0, "", "c1"),
+		liveTurn(3, 1, 6*time.Minute, 2000, 0, 0, "", "m1"),
+		liveTurn(4, 2, 5*time.Minute, 900, 0, 0, "", "m2"),
+		liveTurn(5, 2, 4*time.Minute, 1200, 0, 0, "", "c2"),
+	}
+	byUUID := map[string]string{"c0": "claude:p@2", "c1": "claude:p@2", "c2": "claude:p@2"}
+	w := ContextWindows{ByUUID: byUUID, Compactions: map[int]string{1: "claude:p@2", 2: ""}}
+	if err := s.SaveContextWindows("claude:p", "/main", false, nil, turns, 1, usage.ContextState{LastTurn: -1}, w); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// A curva de cada janela só marca as compactações da própria janela.
+func TestContextSessionDetailCompactionPerWindow(t *testing.T) {
+	s := compactWindows(t)
+	for _, c := range []struct {
+		id   string
+		want []bool
+	}{
+		{"claude:p", []bool{false, false, true}},   // m0, m1 (compactação da filha), m2 (dela)
+		{"claude:p@2", []bool{false, true, false}}, // c0, c1 (dela), c2 (compactação da principal)
+	} {
+		turns, _, err := s.ContextSessionDetail(c.id, 10)
+		if err != nil || len(turns) != len(c.want) {
+			t.Fatalf("%s: turns=%+v err=%v", c.id, turns, err)
+		}
+		for i, p := range turns {
+			if p.AfterCompact != c.want[i] {
+				t.Errorf("%s: turns[%d]=%+v, quer after_compact=%v", c.id, i, p, c.want[i])
+			}
+		}
+	}
+}

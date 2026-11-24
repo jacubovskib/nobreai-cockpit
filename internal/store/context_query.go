@@ -63,7 +63,7 @@ type ContextTurnPoint struct {
 	Turn         int     `json:"turn"`
 	At           string  `json:"at"`
 	Tokens       int64   `json:"tokens"`
-	AfterCompact bool    `json:"after_compact"` // segmento maior que o do turno anterior
+	AfterCompact bool    `json:"after_compact"` // compactação da própria janela desde o turno anterior
 	Pct          float64 `json:"pct"`           // % da janela informada pelo agente (só com PctOnly)
 	PctOnly      bool    `json:"pct_only"`      // só a % é conhecida (sem tokens)
 }
@@ -237,7 +237,8 @@ func (s *Store) ContextTotals(f ContextFilter) (ContextTotals, error) {
 // as saídas mais pesadas da sessão (principal e subagentes). Como no medidor
 // ao vivo, a janela decide as linhas: a principal lê as suas (window_session_id
 // ” ou o dela); a filha lê as gravadas sob a principal com o id da filha.
-// Turnos só com % (agente sem tokens) saem com PctOnly e Pct.
+// AfterCompact marca só as compactações da própria janela (ownCompaction, a
+// regra do medidor). Turnos só com % (agente sem tokens) saem com PctOnly e Pct.
 func (s *Store) ContextSessionDetail(sessionID string, limit int) (turns []ContextTurnPoint, top []ContextOutput, err error) {
 	var path, parent string
 	if err = s.DB.QueryRow(`SELECT transcript_path, parent_session_id FROM sessions WHERE id=?`, sessionID).Scan(&path, &parent); err != nil {
@@ -246,12 +247,13 @@ func (s *Store) ContextSessionDetail(sessionID string, limit int) (turns []Conte
 		}
 		return nil, nil, err
 	}
-	owner, where, args := sessionID, `window_session_id IN ('', ?)`, []any{sessionID}
-	if parent != "" {
-		owner, where = parent, `window_session_id = ?`
-		if err := s.DB.QueryRow(`SELECT transcript_path FROM sessions WHERE id=?`, parent).Scan(&path); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, err
-		}
+	owner, path, where, args, err := s.windowScope(sessionID, parent, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	foreign, err := s.foreignCompactions(owner, path, where, args)
+	if err != nil {
+		return nil, nil, err
 	}
 	turns, top = []ContextTurnPoint{}, []ContextOutput{}
 	rows, err := s.DB.Query(`SELECT turn, at, tokens, segment, pct FROM context_turns WHERE session_id=? AND path=? AND `+where+` ORDER BY turn`,
@@ -269,10 +271,7 @@ func (s *Store) ContextSessionDetail(sessionID string, limit int) (turns []Conte
 			return nil, nil, err
 		}
 		p.Pct, p.PctOnly = pct.Float64, pct.Valid && p.Tokens == 0
-		if prev < 0 {
-			prev = seg
-		}
-		p.AfterCompact = seg > prev
+		p.AfterCompact = prev >= 0 && ownCompaction(prev, seg, foreign)
 		prev = seg
 		turns = append(turns, p)
 	}
