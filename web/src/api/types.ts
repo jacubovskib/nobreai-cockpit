@@ -196,7 +196,8 @@ export interface Total {
   unpriced: boolean
 }
 
-export interface SessionWithUsage extends Session { usage: Total; unpriced: boolean }
+// effective_project_id: o projeto do card da sessão; sem card, o da própria sessão.
+export interface SessionWithUsage extends Session { usage: Total; unpriced: boolean; effective_project_id: number | null }
 
 export interface TouchedFile { path: string; kind: 'editado' | 'lido' | string; count: number; last_at: string }
 
@@ -232,6 +233,7 @@ export interface CardDetail extends Card {
 
 // Sessão não encerrada; com pid_dead_at o processo já sumiu (não é viva).
 export interface ActiveSession extends Session {
+  effective_project_id: number | null
   card: Card | null
   last_activity: string
   session_usage: Total

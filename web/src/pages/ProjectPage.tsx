@@ -9,7 +9,7 @@ import { ProjectTag } from '../ui/ProjectTag'
 import { PlanBlocks } from '../ui/PlanBlocks'
 import { signalText } from './board'
 import { btn, h2, muted, panel } from './card/shared'
-import { buildRows, contextLine, GROUPS, stateLabel, timeline } from './projects'
+import { buildRows, contextLine, GROUPS, sessionProject, stateLabel, timeline } from './projects'
 
 // Cronograma das entregas do projeto da rota (não usa o seletor da barra lateral).
 export function ProjectPage() {
@@ -83,7 +83,7 @@ const COLS: { id: CardSummary['column']; label: string }[] = [
 function ByApp({ project, list, cards, totals, sessions }: { project: Project; list: Project[]; cards: CardSummary[]; totals: ReturnType<typeof useTotals>; sessions: ReturnType<typeof useSessions> }) {
   if (totals.isError || sessions.isError) return <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar o quadro por app.</p>
   if (totals.isPending || sessions.isPending) return <p className="placeholder">Carregando…</p>
-  const row = buildRows(list, cards, totals.data ?? []).find((r) => r.project?.id === project.id)
+  const row = buildRows(list, cards, totals.data ?? [], sessions.data ?? []).find((r) => r.project?.id === project.id)
   if (!row || !row.general) return null
   const folder = (p: Project) => (project.path && p.path.startsWith(project.path.replace(/\/+$/, '') + '/') ? p.path.slice(project.path.replace(/\/+$/, '').length + 1) : p.path)
   const lines: { id: number; key: string; name: string; path: string; cost: number; credits: number; unpriced: boolean; cards: CardSummary[] }[] = [
@@ -91,7 +91,7 @@ function ByApp({ project, list, cards, totals, sessions }: { project: Project; l
     { id: project.id, key: 'geral', name: 'geral', path: '(raiz)', cost: row.general.costUsd, credits: row.general.credits, unpriced: row.general.unpriced, cards: cards.filter((x) => x.project_id === project.id) },
   ]
   // Sessão viva: não encerrada e com o processo existindo. As do pai caem em "geral".
-  const liveOf = (id: number) => (sessions.data ?? []).filter((s: SessionWithUsage) => s.project_id === id && !s.ended_at && !s.pid_dead_at).length
+  const liveOf = (id: number) => (sessions.data ?? []).filter((s: SessionWithUsage) => sessionProject(s) === id && !s.ended_at && !s.pid_dead_at).length
   return (
     <section style={{ ...panel, overflowX: 'auto' }}>
       <h2 style={h2}>Por app</h2>

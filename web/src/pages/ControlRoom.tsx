@@ -144,7 +144,7 @@ function ActiveCard({ s, terminalId, projects }: { s: ActiveSession; terminalId?
           </span>
         )}
       </div>
-      <ProjectTag project={projects.find((p) => p.id === s.project_id) ?? null} projects={projects} />
+      <ProjectTag project={projects.find((p) => p.id === (s.effective_project_id ?? s.project_id)) ?? null} projects={projects} />
       <WorktreeTag path={s.worktree} linked={s.worktree_linked} branch={s.branch} />
       {s.card ? (
         <Link to={withP(`/cards/${s.card.key}`)} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, textDecoration: 'none', color: 'var(--text)' }}>
@@ -213,7 +213,7 @@ function NoCardRow({ s, projects }: { s: SessionWithUsage; projects: Project[] }
         ·{' '}
         <Money usd={s.usage.cost_usd} unpriced={s.usage.unpriced} /><Credits credits={s.usage.credits} />
       </span>
-      <ProjectTag project={projects.find((p) => p.id === s.project_id) ?? null} projects={projects} />
+      <ProjectTag project={projects.find((p) => p.id === (s.effective_project_id ?? s.project_id)) ?? null} projects={projects} />
       {open ? (
         <form
           onSubmit={(e) => { e.preventDefault(); if (createdKey || title.trim()) create.mutate() }}

@@ -1,6 +1,6 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { useCards, useProjects, useTotals } from '../api/queries'
+import { useCards, useProjects, useSessions, useTotals } from '../api/queries'
 import { PlanBlocks } from '../ui/PlanBlocks'
 import { Credits, Money } from '../ui/Money'
 import { ProjectTag } from '../ui/ProjectTag'
@@ -69,6 +69,7 @@ function Line({ r, list, max, withP, label, sub, action }: RowProps & { label?: 
           <Link to={withP(`/cards/${r.current.key}`)} style={{ color: 'inherit' }}>
             <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5 }}>{r.current.key}</span> {r.current.title}
           </Link>
+          {r.current.signal && <span style={{ ...muted, display: 'block' }}>{signalText(r.current)}</span>}
           {r.current.plan && r.current.plan.tasks.length > 0 && <div style={{ marginTop: 4 }}><PlanBlocks tasks={r.current.plan.tasks} /></div>}
           </>
         ) : (
@@ -108,11 +109,12 @@ export function Projects() {
   const { from, to } = useMemo(() => range(period), [period])
   const projects = useProjects()
   const cards = useCards()
+  const sessions = useSessions(200)
   const totals = useTotals('project', from, to)
   const failed = projects.isError || cards.isError || totals.isError
   const loading = projects.isPending || cards.isPending || totals.isPending
   const list = projects.data ?? []
-  const rows = useMemo(() => buildRows(list, cards.data ?? [], totals.data ?? []), [list, cards.data, totals.data])
+  const rows = useMemo(() => buildRows(list, cards.data ?? [], totals.data ?? [], sessions.data ?? []), [list, cards.data, totals.data, sessions.data])
   const max = Math.max(0.0001, ...rows.map((r) => r.costUsd))
 
   return (

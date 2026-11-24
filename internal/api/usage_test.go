@@ -3,6 +3,7 @@ package api
 import (
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
@@ -57,5 +58,49 @@ func TestUsageTotalsExpandsFamily(t *testing.T) {
 	}
 	if got := sum(filho.ID); got != 200 {
 		t.Fatalf("filho = %d", got)
+	}
+}
+
+func TestListSessionsEffectiveProject(t *testing.T) {
+	a := newTestAPI(t)
+	p1, _ := a.st.CreateProject("api", "/w/api")
+	p2, _ := a.st.CreateProject("web", "/w/web")
+	card, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: p2.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := testNow
+	for i, id := range []string{"claude:com-card", "claude:sem-card"} {
+		if err := a.st.StartSession(domain.Session{ID: id, Agent: "claude", ProviderSessionID: id, PID: 10 + i, Cwd: "/w/api", ProjectID: &p1.ID, FullCapture: true, StartedAt: now.Add(time.Duration(i) * time.Second), LastEventAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.st.UpsertUsage([]domain.UsageRow{{SessionID: id, MessageID: "m" + id, Model: "m", Input: 100, At: now}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.st.AttachSession("claude:com-card", card.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "GET", "/api/sessions", nil, 0)
+	if rec.Code != 200 {
+		t.Fatalf("sessions = %d %s", rec.Code, rec.Body)
+	}
+	got := map[string]*int64{}
+	for _, s := range decode[[]SessionWithUsage](t, rec) {
+		got[s.ID] = s.EffectiveProjectID
+	}
+	if got["claude:com-card"] == nil || *got["claude:com-card"] != p2.ID {
+		t.Fatalf("com card: %v, quer %d", got["claude:com-card"], p2.ID)
+	}
+	if got["claude:sem-card"] == nil || *got["claude:sem-card"] != p1.ID {
+		t.Fatalf("sem card: %v, quer %d", got["claude:sem-card"], p1.ID)
+	}
+	rec = a.do(t, "GET", "/api/usage/totals?group=project", nil, 0)
+	by := map[string]int64{}
+	for _, x := range decode[[]store.Total](t, rec) {
+		by[x.Key] = x.Input
+	}
+	if by[strconv.FormatInt(p2.ID, 10)] != 100 || by[strconv.FormatInt(p1.ID, 10)] != 100 {
+		t.Fatalf("totais por projeto = %v", by)
 	}
 }

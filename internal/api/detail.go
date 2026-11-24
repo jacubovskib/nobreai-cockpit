@@ -85,7 +85,7 @@ func (s *server) cardDetail(c domain.Card) (CardDetail, error) {
 		return d, err
 	}
 	d.TouchedFiles = touched
-	d.Sessions = withUsage(sessions, bySession)
+	d.Sessions = withUsage(sessions, bySession, nil)
 	d.Totals = byCard[c.Key]
 	for i := range sessions {
 		if owns(sessions[i], c.ID) && sessions[i].Live() {

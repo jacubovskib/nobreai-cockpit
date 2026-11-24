@@ -39,6 +39,8 @@ type ActiveSession struct {
 	SessionUsage store.Total             `json:"session_usage"`
 	CardTotals   store.Total             `json:"card_totals"`
 	Readiness    *domain.ReadinessResult `json:"readiness"`
+	// EffectiveProjectID: o projeto do card, se há; senão o da sessão.
+	EffectiveProjectID *int64 `json:"effective_project_id"`
 }
 
 // AgentSpend é o gasto de hoje de um agente frente ao limite diário
@@ -193,9 +195,9 @@ func (s *server) buildOverview() (Overview, error) {
 			agents[x.Agent] = true
 		}
 		if x.CardID == nil {
-			o.NoCard = append(o.NoCard, SessionWithUsage{Session: x, Usage: bySession[x.ID], Unpriced: bySession[x.ID].Unpriced})
+			o.NoCard = append(o.NoCard, SessionWithUsage{Session: x, Usage: bySession[x.ID], Unpriced: bySession[x.ID].Unpriced, EffectiveProjectID: x.ProjectID})
 		}
-		a := ActiveSession{Session: x, SessionUsage: bySession[x.ID]}
+		a := ActiveSession{Session: x, SessionUsage: bySession[x.ID], EffectiveProjectID: x.ProjectID}
 		if ev, err := s.st.LastSessionEvent(x.ID); err != nil {
 			return o, err
 		} else if ev != nil {
@@ -207,6 +209,8 @@ func (s *server) buildOverview() (Overview, error) {
 			}
 			if c, ok := byID[*x.CardID]; ok {
 				a.Card = &c
+				id := c.ProjectID
+				a.EffectiveProjectID = &id
 				a.CardTotals = byCard[c.Key]
 				ct, err := s.st.CardContent(c.ID)
 				if err != nil {
@@ -225,7 +229,7 @@ func (s *server) buildOverview() (Overview, error) {
 	if err != nil {
 		return o, err
 	}
-	o.NoCard = append(o.NoCard, withUsage(ended, bySession)...)
+	o.NoCard = append(o.NoCard, withUsage(ended, bySession, nil)...)
 
 	// Alertas, na ordem stale, limit_warn, incomplete, unpriced.
 	o.Alerts = []Alert{}

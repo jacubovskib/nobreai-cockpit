@@ -1,5 +1,5 @@
 import { buildRows, contextLine, stateLabel, timeline } from './projects'
-import type { CardSummary, Project, Total } from '../api/types'
+import type { CardSummary, Project, SessionWithUsage, Total } from '../api/types'
 
 const T = '2026-11-10T12:00:00Z'
 const iso = (h: number) => new Date(Date.parse(T) - h * 3600000).toISOString()
@@ -17,7 +17,7 @@ describe('buildRows', () => {
     card({ id: 3, key: 'C', column: 'revisao', project_id: 2, signal: 'aguardando_revisao', signal_since: iso(40), updated_at: iso(40) }),
   ]
   it('uma linha por projeto, sem "Sem projeto" quando o custo é 0', () => {
-    const rows = buildRows([proj(2), proj(1)], cards, [tot('1', 41), tot('2', 8), tot('', 0)])
+    const rows = buildRows([proj(2), proj(1)], cards, [tot('1', 41), tot('2', 8), tot('', 0)], [])
     expect(rows).toHaveLength(2)
     expect(rows[0].project?.id).toBe(1)
     expect(rows[0].current?.key).toBe('A')
@@ -29,13 +29,13 @@ describe('buildRows', () => {
     expect(rows[0].lastActivity).toBe(iso(1))
   })
   it('com custo sem projeto, acrescenta a linha no fim', () => {
-    const rows = buildRows([proj(1), proj(2)], cards, [tot('', 3)])
+    const rows = buildRows([proj(1), proj(2)], cards, [tot('', 3)], [])
     expect(rows).toHaveLength(3)
     expect(rows[2].project).toBeNull()
     expect(rows[2].costUsd).toBe(3)
   })
   it('projeto sem captura continua com linha', () => {
-    const rows = buildRows([proj(1, false)], [], [])
+    const rows = buildRows([proj(1, false)], [], [], [])
     expect(rows).toHaveLength(1)
     expect(rows[0].project?.capture).toBe(false)
     expect(rows[0].current).toBeNull()
@@ -43,15 +43,51 @@ describe('buildRows', () => {
   })
 })
 
+const sess = (o: Partial<SessionWithUsage>) => ({ id: 's', project_id: 1, effective_project_id: 1, last_event_at: iso(0), ...o }) as SessionWithUsage
+
+describe('Última atividade com sessões', () => {
+  it('projeto sem cards e com uma sessão usa o last_event_at dela', () => {
+    const rows = buildRows([proj(1)], [], [], [sess({ last_event_at: iso(3) })])
+    expect(rows[0].lastActivity).toBe(iso(3))
+  })
+  it('vale o maior entre o card e a sessão, pelo projeto efetivo', () => {
+    const cards = [card({ id: 1, column: 'em_andamento', updated_at: iso(5), last_activity_at: iso(5) })]
+    const rows = buildRows([proj(1), proj(2)], cards, [], [
+      sess({ id: 'a', project_id: 2, effective_project_id: 1, last_event_at: iso(1) }),
+      sess({ id: 'b', project_id: 1, effective_project_id: 2, last_event_at: iso(9) }),
+    ])
+    expect(rows[0].lastActivity).toBe(iso(1))
+    expect(rows[1].lastActivity).toBe(iso(9))
+  })
+  it('sem effective_project_id cai no project_id da sessão', () => {
+    const rows = buildRows([proj(1)], [], [], [sess({ effective_project_id: undefined, last_event_at: iso(2) })])
+    expect(rows[0].lastActivity).toBe(iso(2))
+  })
+  it('numa família, a sessão de um app conta para o pai', () => {
+    const loja = { ...proj(1), name: 'loja' }
+    const web = { ...proj(2), name: 'web', parent_id: 1 }
+    const rows = buildRows([loja, web], [], [], [sess({ project_id: 2, effective_project_id: 2, last_event_at: iso(4) })])
+    expect(rows[0].lastActivity).toBe(iso(4))
+    expect(rows[0].children[0].lastActivity).toBe(iso(4))
+  })
+})
+
 describe('timeline', () => {
+  it('as concluídas saem por created_at, mesmo se uma for editada depois', () => {
+    const cards = [
+      card({ id: 1, key: 'NOVA', column: 'concluido', created_at: iso(10), updated_at: iso(1) }),
+      card({ id: 2, key: 'VELHA', column: 'concluido', created_at: iso(200), updated_at: iso(0) }),
+    ]
+    expect(timeline(cards).map((e) => e.card.key)).toEqual(['VELHA', 'NOVA'])
+  })
   it('ordena por grupo', () => {
     const cards = [
       card({ id: 1, key: 'BL', column: 'backlog', created_at: iso(10) }),
       card({ id: 2, key: 'PA', column: 'pausado', updated_at: iso(5) }),
       card({ id: 3, key: 'RV', column: 'revisao', signal: 'aguardando_revisao', signal_since: iso(30), updated_at: iso(30) }),
       card({ id: 4, key: 'PD', column: 'em_andamento', signal: 'parado', signal_since: iso(60), updated_at: iso(60) }),
-      card({ id: 5, key: 'C2', column: 'concluido', updated_at: iso(1) }),
-      card({ id: 6, key: 'C1', column: 'concluido', updated_at: iso(100) }),
+      card({ id: 5, key: 'C2', column: 'concluido', created_at: iso(50), updated_at: iso(1) }),
+      card({ id: 6, key: 'C1', column: 'concluido', created_at: iso(300), updated_at: iso(100) }),
       card({ id: 7, key: 'EA', column: 'em_andamento', updated_at: iso(2) }),
       card({ id: 8, key: 'PS', column: 'pausado', signal: 'parado', signal_since: iso(40), updated_at: iso(40) }),
     ]
@@ -70,7 +106,7 @@ describe('buildRows com família', () => {
   const api = { ...proj(3), name: 'api', parent_id: 1 }
   it('family total equals children plus general', () => {
     const cards = [card({ id: 1, key: 'A', project_id: 2, column: 'em_andamento', updated_at: iso(1) }), card({ id: 2, key: 'B', project_id: 1 })]
-    const rows = buildRows([loja, web, api], cards, [tot('1', 26.0), tot('2', 95.1), tot('3', 61.05)])
+    const rows = buildRows([loja, web, api], cards, [tot('1', 26.0), tot('2', 95.1), tot('3', 61.05)], [])
     expect(rows).toHaveLength(1)
     const [r] = rows
     expect(r.costUsd).toBe(182.15)

@@ -274,6 +274,37 @@ func (s *Store) RecentSessions(limit int) ([]domain.Session, error) {
 	return querySessions(s.DB, `SELECT `+sessionCols+` FROM sessions ORDER BY julianday(started_at) DESC, id DESC LIMIT ?`, limit)
 }
 
+// SessionProjects devolve o projeto efetivo (sessionProjectSQL) de cada sessão
+// pedida, por id. Sessão sem projeto nenhum fica com nil.
+func (s *Store) SessionProjects(ids []string) (map[string]*int64, error) {
+	out := make(map[string]*int64, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.DB.Query(`SELECT s.id, `+sessionProjectSQL+` FROM sessions s LEFT JOIN cards c ON c.id = s.card_id WHERE s.id IN (`+placeholders(len(ids))+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var p sql.NullInt64
+		if err := rows.Scan(&id, &p); err != nil {
+			return nil, err
+		}
+		if p.Valid {
+			out[id] = &p.Int64
+		} else {
+			out[id] = nil
+		}
+	}
+	return out, rows.Err()
+}
+
 // moveCardTx aplica a transição ao card dentro da transação.
 func moveCardTx(tx *sql.Tx, cardID int64, ev domain.Transition) error {
 	var cur domain.Column

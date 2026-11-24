@@ -12,6 +12,10 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/usage"
 )
 
+// sessionProjectSQL é a definição de projeto de uma sessão: o projeto do card dela;
+// sem card, o da própria sessão. Usa os aliases c (cards) e s (sessions).
+const sessionProjectSQL = "COALESCE(c.project_id, s.project_id)"
+
 // UpsertUsage grava as linhas de uso; a chave é (session_id, message_id). O
 // card_id é o card da janela dona (WindowSessionID, senão a própria sessão) no
 // momento da ingestão e nunca é sobrescrito por uma reingestão: o custo fica no
@@ -178,7 +182,7 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 
 	// A sessão de cada linha é a janela dona (a filha grava o uso com o id da
 	// principal): por sessão, cada janela tem o seu custo e a sua contagem.
-	q := `SELECT COALESCE(NULLIF(u.window_session_id,''), u.session_id), u.model, u.input, u.output, u.cache_write, u.cache_read, u.credits, u.at, s.agent, COALESCE(c.key, ''), COALESCE(c.project_id, s.project_id)
+	q := `SELECT COALESCE(NULLIF(u.window_session_id,''), u.session_id), u.model, u.input, u.output, u.cache_write, u.cache_read, u.credits, u.at, s.agent, COALESCE(c.key, ''), ` + sessionProjectSQL + `
 		FROM usage u JOIN sessions s ON s.id = u.session_id LEFT JOIN cards c ON c.id = u.card_id WHERE 1=1`
 	var args []any
 	if f.CardID != nil {
@@ -186,11 +190,11 @@ func (s *Store) Totals(f TotalsFilter) ([]Total, error) {
 		args = append(args, *f.CardID)
 	}
 	if f.ProjectID != nil {
-		q += ` AND COALESCE(c.project_id, s.project_id) = ?`
+		q += ` AND ` + sessionProjectSQL + ` = ?`
 		args = append(args, *f.ProjectID)
 	}
 	if len(f.ProjectIDs) > 0 {
-		q += ` AND COALESCE(c.project_id, s.project_id) IN (` + placeholders(len(f.ProjectIDs)) + `)`
+		q += ` AND ` + sessionProjectSQL + ` IN (` + placeholders(len(f.ProjectIDs)) + `)`
 		for _, id := range f.ProjectIDs {
 			args = append(args, id)
 		}
