@@ -23,8 +23,8 @@ const top = {
     { tool: 'hook', key: 'SessionStart · cockpit', count: 10, tokens: 2000, in_tokens: 0, avg_tokens: 200, weight: 5000 },
   ],
   sessions: [
-    { session_id: 's1', card_key: 'NAC-7', card_title: 'Medir', started_at: '2026-11-15T12:00:00Z', peak_context: 150000, compactions: 2, weight: 80000 },
-    { session_id: 's2', card_key: '', card_title: '', started_at: '2026-11-16T12:00:00Z', peak_context: 50000, compactions: 0, weight: 1000 },
+    { session_id: 's1', card_key: 'NAC-7', card_title: 'Medir', started_at: '2026-11-15T12:00:00Z', peak_context: 150000, peak_pct: 0, compactions: 2, weight: 80000 },
+    { session_id: 's2', card_key: '', card_title: '', started_at: '2026-11-16T12:00:00Z', peak_context: 50000, peak_pct: 0, compactions: 0, weight: 1000 },
   ],
   projects: [{ project_id: 1, weight: 95000, top_tool: 'Read', top_key: 'Read README.md' }],
   context_total: 200000,
@@ -111,6 +111,17 @@ describe('ContextSection', () => {
     expect(urls).toContain('/api/context/sessions/s1')
     fireEvent.click(screen.getByRole('button', { name: /NAC-7/ }))
     expect(screen.queryByRole('img', { name: 'Contexto por turno' })).toBeNull()
+  })
+
+  it('sessão só com % mostra "pico N%" na lista, mesmo sem saídas no período', async () => {
+    mock({ ...routes, '/api/context/top': { keys: [], projects: [], context_total: 0, weight_total: 0, sessions: [
+      { session_id: 'k1', card_key: 'NAC-9', card_title: 'Kiro', started_at: '2026-11-15T12:00:00Z', peak_context: 0, peak_pct: 41.6, compactions: 1, weight: 0 },
+    ] } })
+    show()
+    const k1 = await screen.findByRole('button', { name: /NAC-9/ })
+    expect(within(k1).getByText('pico 42%')).toBeInTheDocument()
+    expect(within(k1).getByText('1 compactação')).toBeInTheDocument()
+    expect(screen.getByText('Nenhuma saída medida no período.')).toBeInTheDocument()
   })
 
   it('sem dados', async () => {

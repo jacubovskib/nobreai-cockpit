@@ -141,3 +141,33 @@ func TestContextTop_KeepsHookKeysBelowCutoff(t *testing.T) {
 		t.Fatalf("keys = %d, last = %+v", len(got.Keys), got.Keys[len(got.Keys)-1])
 	}
 }
+
+// Sessão só com % (Kiro), sem saídas: entra na lista de sessões com peak_pct
+// e pico em tokens 0.
+func TestContextTop_PctOnlySessionShape(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	pid := p.ID
+	if err := a.st.StartSession(domain.Session{ID: "kiro:1", Agent: "kiro", PID: 1, Cwd: "/w", ProjectID: &pid,
+		TranscriptPath: "/k", StartedAt: testNow, LastEventAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	pct := func(v float64) *float64 { return &v }
+	turns := []usage.ContextTurn{
+		{Turn: 0, MessageID: "k0", At: testNow, Pct: pct(12)},
+		{Turn: 1, MessageID: "k1", At: testNow.Add(time.Minute), Pct: pct(41.5)},
+	}
+	if err := a.st.SaveContext("kiro:1", "/k", false, nil, turns, 1, usage.ContextState{LastTurn: 1}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "GET", "/api/context/top", nil, 0)
+	got := decode[map[string]any](t, rec)
+	ss, ok := got["sessions"].([]any)
+	if rec.Code != http.StatusOK || !ok || len(ss) != 1 {
+		t.Fatalf("sessões = %d %s", rec.Code, rec.Body)
+	}
+	x := ss[0].(map[string]any)
+	if x["session_id"] != "kiro:1" || x["peak_pct"] != 41.5 || x["peak_context"] != 0.0 || x["weight"] != 0.0 || x["compactions"] != 0.0 {
+		t.Fatalf("sessão = %v", x)
+	}
+}
