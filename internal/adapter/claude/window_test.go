@@ -237,7 +237,7 @@ func TestWindow_TwoWindowsSplitByBranch(t *testing.T) {
 func TestWindow_RereadKeepsWindows(t *testing.T) {
 	e, _, _ := twoWindows(t)
 	e.read(t)
-	if err := e.st.ResetContextCursors(); err != nil {
+	if err := e.st.ResetContextCursors([]string{sessID}); err != nil {
 		t.Fatal(err)
 	}
 	e.read(t)
@@ -424,7 +424,7 @@ func TestWindow_MainRootUnderChildLeafSurvivesReread(t *testing.T) {
 	e.read(t)
 	want := map[string]string{"c1": childID(200), "m1": ""}
 	wantWindows(t, "turno", e.turnWindows(t), want)
-	if err := e.st.ResetContextCursors(); err != nil {
+	if err := e.st.ResetContextCursors([]string{sessID}); err != nil {
 		t.Fatal(err)
 	}
 	e.read(t)
@@ -672,7 +672,7 @@ func TestWindow_ChildSubagentUsageOnChildCard(t *testing.T) {
 	p := e.writeSub(t, "ab1", time.Minute+10*time.Second)
 	e.read(t)
 	wantSubOnChild(t, e, p, mc, cc)
-	if err := e.st.ResetContextCursors(); err != nil {
+	if err := e.st.ResetContextCursors([]string{sessID}); err != nil {
 		t.Fatal(err)
 	}
 	e.read(t)

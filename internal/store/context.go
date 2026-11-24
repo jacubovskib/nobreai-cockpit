@@ -195,15 +195,32 @@ func saveSubagentWindowTx(tx *sql.Tx, sessionID, sub, win string) error {
 	return err
 }
 
-// ResetContextCursors volta o cursor de contexto de todos os transcripts ao
-// começo (tool_offset e segment 0) para a próxima leitura refazer a medição.
-// Nada é apagado aqui: a leitura do Claude que recomeça do zero apaga os
-// turnos e as saídas daquele path na mesma transação em que os regrava
+// ResetContextCursors volta ao começo (tool_offset e segment 0) o cursor de
+// contexto de todos os paths das sessões sessionIDs (o transcript principal e
+// os subagentes), para a próxima leitura refazer a medição. Quem chama passa
+// só as sessões do próprio leitor: o cursor de outro agente não muda. Nada é
+// apagado aqui: a leitura do Claude que recomeça do zero apaga os turnos e as
+// saídas daquele path na mesma transação em que os regrava
 // (ContextWindows.Rewrite); window_lines, compactações e uso ficam. Linhas de
 // transcript que não existe mais ficam como estão. O offset de uso não muda.
-func (s *Store) ResetContextCursors() error {
-	_, err := s.DB.Exec(`UPDATE transcript_offsets SET tool_offset=0, segment=0`)
-	return err
+func (s *Store) ResetContextCursors(sessionIDs []string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Um UPDATE por sessão: um IN com milhares de ids estouraria o limite de parâmetros.
+	stmt, err := tx.Prepare(`UPDATE transcript_offsets SET tool_offset=0, segment=0 WHERE session_id=?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, id := range sessionIDs {
+		if _, err := stmt.Exec(id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ClaudeTranscripts devolve o transcript_path de cada sessão do Claude que

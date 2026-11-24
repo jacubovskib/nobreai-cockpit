@@ -201,8 +201,15 @@ func TestResetContextCursors(t *testing.T) {
 		500, usage.ContextState{LastTurn: 3, LastMessageID: "m", Segment: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ResetContextCursors(); err != nil {
+	// Cursor de outra sessão (outro agente): fora da lista, não muda.
+	if err := s.SaveContext("codex:1", "/k", false, nil, nil, 70, usage.ContextState{Segment: 4}); err != nil {
 		t.Fatal(err)
+	}
+	if err := s.ResetContextCursors([]string{"claude:1"}); err != nil {
+		t.Fatal(err)
+	}
+	if off, st, err := s.ContextCursor("codex:1", "/k"); err != nil || off != 70 || st.Segment != 4 {
+		t.Fatalf("cursor fora da lista mudou: off=%d st=%+v err=%v", off, st, err)
 	}
 	// Nada é apagado aqui (a releitura do começo regrava o path: ver Rewrite).
 	var o2, tu int

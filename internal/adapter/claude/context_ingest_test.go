@@ -9,6 +9,7 @@ import (
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/usage"
 )
 
 const ctxSess = "claude:ctx"
@@ -383,5 +384,36 @@ func TestBackfillContext_V4RewritesTurns(t *testing.T) {
 	wantTurns(t, "turnos (2ª subida)", mainTurns(t, e, main), map[int]string{0: "m1:777", 1: "c1:20"})
 	if after := sumUsage(); after != before {
 		t.Fatalf("uso mudou na 2ª subida: %+v -> %+v", before, after)
+	}
+}
+
+// A subida do leitor do Claude só volta os cursores dos transcripts do
+// Claude: o cursor de outro agente (o Kiro usa tool_offset como cursor do
+// histórico dele) fica como está.
+func TestBackfillContext_UpgradeKeepsOtherAgentCursor(t *testing.T) {
+	e, main, _ := ctxEnv(t)
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.StartSession(domain.Session{ID: "kiro:1", Agent: "kiro", ProviderSessionID: "k", TranscriptPath: "/k.json"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.SaveContext("kiro:1", "/k.json", false, nil, nil, 4321, usage.ContextState{Segment: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.PutKV(contextReaderVersionKey, 3); err != nil {
+		t.Fatal(err)
+	}
+	e.a.BackfillContext(context.Background())
+	if v := readerVersion(t, e); v != contextReaderVersion {
+		t.Fatalf("versão = %d", v)
+	}
+	var off int64
+	var seg int
+	if err := e.st.DB.QueryRow(`SELECT tool_offset, segment FROM transcript_offsets WHERE session_id='kiro:1' AND path='/k.json'`).Scan(&off, &seg); err != nil {
+		t.Fatal(err)
+	}
+	if off != 4321 || seg != 3 {
+		t.Fatalf("cursor do kiro mudou: tool_offset=%d segment=%d", off, seg)
 	}
 }

@@ -245,7 +245,8 @@ const (
 	contextReaderVersionKey = "context_reader_version"
 )
 
-// upgradeReader volta os cursores de contexto ao começo quando a versão
+// upgradeReader volta os cursores de contexto das sessões do Claude
+// (ClaudeTranscripts, com os subagentes de cada uma) ao começo quando a versão
 // gravada é menor que a atual (sem apagar nada aqui: cada arquivo relido do
 // começo tem os turnos e as saídas regravados; o uso fica) e diz
 // se a passada que vem precisa gravar a versão no fim. A versão só é gravada
@@ -261,7 +262,16 @@ func (a *Adapter) upgradeReader() (pending bool, err error) {
 	}
 	a.readerMu.Lock()
 	defer a.readerMu.Unlock()
-	if err := a.st.ResetContextCursors(); err != nil {
+	// Só os cursores das sessões do Claude: os de outro agente ficam.
+	transcripts, err := a.st.ClaudeTranscripts()
+	if err != nil {
+		return false, err
+	}
+	ids := make([]string, 0, len(transcripts))
+	for id := range transcripts {
+		ids = append(ids, id)
+	}
+	if err := a.st.ResetContextCursors(ids); err != nil {
 		return false, err
 	}
 	log.Printf("medição de contexto: leitor v%d → v%d, relendo o histórico", v, contextReaderVersion)
