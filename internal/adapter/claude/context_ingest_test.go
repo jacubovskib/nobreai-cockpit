@@ -4,9 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/usage"
 )
 
 const ctxSess = "claude:ctx"
@@ -172,7 +175,8 @@ func readerVersion(t *testing.T, e *env) int {
 }
 
 // Medição gravada por um leitor antigo (sem versão): a primeira passada do
-// histórico relê tudo uma vez por cima (upsert, sem apagar); a segunda não relê.
+// histórico relê tudo uma vez (turnos e saídas de cada arquivo relido são
+// regravados; o uso fica); a segunda não relê.
 func TestBackfillContext_ReaderVersion(t *testing.T) {
 	e, main, sub := ctxEnv(t)
 	// Dois turnos no principal: a releitura do começo tem de renumerar do zero.
@@ -243,5 +247,173 @@ func TestBackfillContext_ReaderVersion(t *testing.T) {
 	e.st.DB.QueryRow(`SELECT tokens FROM context_turns WHERE session_id=? AND path=? AND turn=0`, ctxSess, main).Scan(&tok)
 	if tok != 777 || ctxCount(t, e, "tool_outputs", main) != 2 || ctxCount(t, e, "context_turns", main) != 2 {
 		t.Fatalf("releu de novo ou duplicou: tokens=%d", tok)
+	}
+}
+
+// ctxBlock é um bloco de assistant da mensagem id com tokens de entrada in
+// (uuid próprio, como as linhas reais de uma mensagem em vários blocos).
+func ctxBlock(uuid, id string, in int) string {
+	return `{"type":"assistant","uuid":"` + uuid + `","timestamp":"2026-11-18T10:00:00Z","message":{"id":"` + id +
+		`","model":"claude-opus-5-5","usage":{"input_tokens":` + itoa(in) + `,"output_tokens":5},"content":[]}}` + "\n"
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
+
+// mainTurns: turno → message_id:tokens do transcript path.
+func mainTurns(t *testing.T, e *env, path string) map[int]string {
+	t.Helper()
+	rows, err := e.st.DB.Query(`SELECT turn, message_id, tokens FROM context_turns WHERE session_id=? AND path=?`, ctxSess, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[int]string{}
+	for rows.Next() {
+		var n int
+		var id string
+		var tok int64
+		if err := rows.Scan(&n, &id, &tok); err != nil {
+			t.Fatal(err)
+		}
+		out[n] = id + ":" + strconv.FormatInt(tok, 10)
+	}
+	return out
+}
+
+func wantTurns(t *testing.T, what string, got, want map[int]string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s = %v, quer %v", what, got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("%s = %v, quer %v", what, got, want)
+		}
+	}
+}
+
+// Blocos de m1 intercalados com a outra janela, numa leitura (m1, c1, m1) e
+// entre leituras (m1 de novo depois de c1, na leitura seguinte): um turno por
+// message.id, com os tokens do último bloco; a mensagem nova seguinte ganha o
+// próximo número.
+func TestReadTranscripts_InterleavedMessageID(t *testing.T) {
+	e, main, _ := ctxEnv(t)
+	if err := os.WriteFile(main, []byte(ctxBlock("m1a", "m1", 1)+ctxBlock("c1a", "c1", 2)+ctxBlock("m1b", "m1", 3)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
+		t.Fatal(err)
+	}
+	wantTurns(t, "turnos (uma leitura)", mainTurns(t, e, main), map[int]string{0: "m1:3", 1: "c1:2"})
+	appendFile(t, main, ctxBlock("c1b", "c1", 4)+ctxBlock("m1c", "m1", 5)+ctxBlock("d1a", "d1", 6))
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
+		t.Fatal(err)
+	}
+	wantTurns(t, "turnos (entre leituras)", mainTurns(t, e, main), map[int]string{0: "m1:5", 1: "c1:4", 2: "d1:6"})
+}
+
+// Medição gravada pelo leitor v3 (m1 intercalado virou dois turnos, saída com
+// a numeração velha): a subida relê uma vez, apaga os turnos e as saídas de
+// cada arquivo relido antes de regravar, sem tocar no uso; ContextTotals deixa
+// de contar m1 duas vezes. A segunda subida não relê.
+func TestBackfillContext_V4RewritesTurns(t *testing.T) {
+	e, main, sub := ctxEnv(t)
+	if err := os.WriteFile(main, []byte(ctxBlock("m1a", "m1", 100)+ctxBlock("c1a", "c1", 20)+ctxBlock("m1b", "m1", 300)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
+		t.Fatal(err)
+	}
+	type usageSum struct{ n, in, out int64 }
+	sumUsage := func() (u usageSum) {
+		t.Helper()
+		if err := e.st.DB.QueryRow(`SELECT COUNT(*), SUM(input), SUM(output) FROM usage WHERE session_id=?`, ctxSess).Scan(&u.n, &u.in, &u.out); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	before := sumUsage()
+	// Estado do v3: turnos 0:m1, 1:c1, 2:m1 e uma saída no turno velho 2.
+	for _, q := range []string{
+		`UPDATE context_turns SET tokens=100 WHERE message_id='m1'`,
+		`INSERT INTO context_turns(session_id, path, turn, message_id, at, tokens) VALUES ('` + ctxSess + `', '` + main + `', 2, 'm1', '2026-11-18T10:00:00Z', 300)`,
+		`INSERT INTO tool_outputs(session_id, path, item_id, tool, key, bytes, tokens, turn, at) VALUES ('` + ctxSess + `', '` + main + `', 'velho', 'Bash', 'x', 8, 2, 2, '2026-11-18T10:00:00Z')`,
+	} {
+		if _, err := e.st.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.st.PutKV(contextReaderVersionKey, 3); err != nil {
+		t.Fatal(err)
+	}
+	total := func() int64 {
+		t.Helper()
+		ct, err := e.st.ContextTotals(store.ContextFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ct.ContextTotal
+	}
+	if got := total(); got != 100+20+300+110 {
+		t.Fatalf("pré-condição: total v3 = %d", got)
+	}
+
+	e.a.BackfillContext(context.Background())
+	if v := readerVersion(t, e); v != 4 {
+		t.Fatalf("versão = %d", v)
+	}
+	wantTurns(t, "turnos relidos", mainTurns(t, e, main), map[int]string{0: "m1:300", 1: "c1:20"})
+	if ctxCount(t, e, "tool_outputs", main) != 0 {
+		t.Fatal("saída da numeração velha ficou")
+	}
+	if ctxCount(t, e, "context_turns", sub) != 1 || ctxCount(t, e, "tool_outputs", sub) != 1 {
+		t.Fatal("subagente relido duplicou ou perdeu")
+	}
+	if got := total(); got != 300+20+110 {
+		t.Fatalf("total depois = %d, quer %d (sem m1 duas vezes)", got, 300+20+110)
+	}
+	if after := sumUsage(); after != before {
+		t.Fatalf("uso mudou: %+v -> %+v", before, after)
+	}
+
+	// Segunda subida: não relê (a adulteração fica).
+	if _, err := e.st.DB.Exec(`UPDATE context_turns SET tokens=777 WHERE session_id=? AND path=? AND turn=0`, ctxSess, main); err != nil {
+		t.Fatal(err)
+	}
+	e.a.BackfillContext(context.Background())
+	wantTurns(t, "turnos (2ª subida)", mainTurns(t, e, main), map[int]string{0: "m1:777", 1: "c1:20"})
+	if after := sumUsage(); after != before {
+		t.Fatalf("uso mudou na 2ª subida: %+v -> %+v", before, after)
+	}
+}
+
+// A subida do leitor do Claude só volta os cursores dos transcripts do
+// Claude: o cursor de outro agente (o Kiro usa tool_offset como cursor do
+// histórico dele) fica como está.
+func TestBackfillContext_UpgradeKeepsOtherAgentCursor(t *testing.T) {
+	e, main, _ := ctxEnv(t)
+	if _, err := e.a.readTranscripts(ctxSess, main, e.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.StartSession(domain.Session{ID: "kiro:1", Agent: "kiro", ProviderSessionID: "k", TranscriptPath: "/k.json"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.SaveContext("kiro:1", "/k.json", false, nil, nil, 4321, usage.ContextState{Segment: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.PutKV(contextReaderVersionKey, 3); err != nil {
+		t.Fatal(err)
+	}
+	e.a.BackfillContext(context.Background())
+	if v := readerVersion(t, e); v != contextReaderVersion {
+		t.Fatalf("versão = %d", v)
+	}
+	var off int64
+	var seg int
+	if err := e.st.DB.QueryRow(`SELECT tool_offset, segment FROM transcript_offsets WHERE session_id='kiro:1' AND path='/k.json'`).Scan(&off, &seg); err != nil {
+		t.Fatal(err)
+	}
+	if off != 4321 || seg != 3 {
+		t.Fatalf("cursor do kiro mudou: tool_offset=%d segment=%d", off, seg)
 	}
 }

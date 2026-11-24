@@ -576,24 +576,21 @@ function PriceRow({ model, price, unpriced }: { model: string; price?: Price; un
 // Mesmas regras do servidor (validateContextSettings).
 function ContextMonitor({ settings }: { settings: Settings }) {
   const save = useSaveSettings(settings)
-  const pcts = settings.context_warn_pcts ?? [60, 80]
-  const [p1, setP1] = useState(String(pcts[0] ?? ''))
-  const [p2, setP2] = useState(String(pcts[1] ?? ''))
+  const [bands, setBands] = useState<string[]>(() => (settings.context_warn_pcts ?? [60, 80]).map(String))
   const [big, setBig] = useState(String(settings.big_output_tokens ?? 15000))
   const [max, setMax] = useState(String(settings.big_output_max ?? 3))
   const [warn, setWarn] = useState(settings.agent_context_warnings ?? true)
   const [bad, setBad] = useState<Error | null>(null)
   const submit = () => {
-    const a = parseNum(p1)
-    const b = parseNum(p2)
+    const pcts = bands.map(parseNum)
     const bg = parseNum(big)
     const mx = parseNum(max)
     const ok = (n: number) => Number.isInteger(n)
-    if (![a, b].every((n) => ok(n) && n >= 1 && n <= 99) || a >= b) return setBad(new Error('As faixas devem ficar entre 1 e 99, em ordem crescente.'))
+    if (!pcts.every((n, i) => ok(n) && n >= 1 && n <= 99 && (i === 0 || n > pcts[i - 1]))) return setBad(new Error('As faixas devem ficar entre 1 e 99, em ordem crescente.'))
     if (!ok(bg) || bg < 1000) return setBad(new Error('A saída grande deve ter pelo menos 1000 tokens.'))
     if (!ok(mx) || mx < 0 || mx > 20) return setBad(new Error('O máximo de avisos deve ficar entre 0 e 20.'))
     setBad(null)
-    save.mutate({ context_warn_pcts: [a, b], big_output_tokens: bg, big_output_max: mx, agent_context_warnings: warn })
+    save.mutate({ context_warn_pcts: pcts, big_output_tokens: bg, big_output_max: mx, agent_context_warnings: warn })
   }
   return (
     <Section id="contexto" title="Monitor de contexto" hint="Avisos ao agente quando o contexto da sessão enche ou uma saída de ferramenta fica grande. Nada aqui chama modelo.">
@@ -601,13 +598,19 @@ function ContextMonitor({ settings }: { settings: Settings }) {
         <input type="checkbox" checked={warn} onChange={(e) => setWarn(e.target.checked)} />
         <span>Avisar o agente</span>
       </label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {bands.length === 0 && <p style={{ ...muted, margin: 0 }}>Sem avisos de faixa: o agente só é avisado de saídas grandes.</p>}
+        {bands.map((v, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <label style={field}>Faixa {i + 1} (% da janela)
+              <input style={small} inputMode="numeric" value={v} onChange={(e) => setBands((b) => b.map((x, j) => (j === i ? e.target.value : x)))} />
+            </label>
+            <button type="button" style={btn} aria-label={`Remover faixa ${i + 1}`} onClick={() => setBands((b) => b.filter((_, j) => j !== i))}>Remover</button>
+          </div>
+        ))}
+        <div><button type="button" style={btn} onClick={() => setBands((b) => [...b, ''])}>Adicionar faixa</button></div>
+      </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
-        <label style={field}>Primeira faixa (% da janela)
-          <input style={small} inputMode="numeric" value={p1} onChange={(e) => setP1(e.target.value)} />
-        </label>
-        <label style={field}>Segunda faixa (% da janela)
-          <input style={small} inputMode="numeric" value={p2} onChange={(e) => setP2(e.target.value)} />
-        </label>
         <label style={field}>Saída grande (tokens)
           <input style={small} inputMode="numeric" value={big} onChange={(e) => setBig(e.target.value)} />
         </label>

@@ -101,17 +101,53 @@ func (s *Store) TurnWindow(sessionID, path, messageID string) (window string, ok
 	return window, err == nil, err
 }
 
+// TurnOfMessage devolve o turno já gravado do message.id no transcript path
+// (índice idx_context_turns_message); ok=false se não há (ver usage.KnownTurn).
+func (s *Store) TurnOfMessage(sessionID, path, messageID string) (turn int, ok bool, err error) {
+	err = s.DB.QueryRow(`SELECT turn FROM context_turns WHERE session_id=? AND path=? AND message_id=? ORDER BY turn LIMIT 1`,
+		sessionID, path, messageID).Scan(&turn)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return turn, err == nil, err
+}
+
+// SubagentWindow devolve a janela dona do arquivo de subagente path do
+// transcript lido por sessionID ("" = principal; ver ContextWindows.Subagents);
+// ok=false se ainda não se sabe (a linha do resultado do Agent não foi lida).
+func (s *Store) SubagentWindow(sessionID, path string) (window string, ok bool, err error) {
+	err = s.DB.QueryRow(`SELECT window_session_id FROM subagent_windows WHERE session_id=? AND path=?`,
+		sessionID, path).Scan(&window)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return window, err == nil, err
+}
+
 // ContextWindows é a atribuição por janela de uma leitura do transcript.
 // ByUUID tem as linhas desta leitura que pertencem a uma janela filha (uuid →
-// id da janela); as demais são da principal. MainRoots são prompts casados com
+// id da janela); as demais são de Default ("" = a principal). Default é a
+// janela do arquivo inteiro de um subagente (não vai para window_lines). MainRoots são prompts casados com
 // a principal cujo pai é de uma filha (vão para window_lines com o id da
 // principal, para a releitura não os passar à filha). UsedPrompts são os
 // prompts de window_prompts casados nesta leitura. Compactions são as
 // compactações desta leitura (segmento → janela que compactou, "" =
 // principal), gravadas em context_compactions.
+//
+// Subagents são os arquivos de subagente cujo Agent teve o resultado nesta
+// leitura do principal (caminho → janela da linha do resultado, "" =
+// principal), gravados em subagent_windows. A primeira gravação vale: se a
+// janela é filha, turnos, saídas e uso já gravados daquele arquivo (lidos
+// antes do resultado, com a principal) passam para ela e para o card dela.
 type ContextWindows struct {
 	ByUUID      map[string]string
 	MainRoots   []string
 	UsedPrompts []int64
 	Compactions map[int]string
+	Default     string
+	Subagents   map[string]string
+	// Rewrite apaga os turnos e as saídas já gravados do path antes de gravar
+	// os desta leitura (releitura do começo, com numeração que pode ter
+	// mudado). Diferente de reset, window_lines, compactações e uso ficam.
+	Rewrite bool
 }

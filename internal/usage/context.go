@@ -89,20 +89,33 @@ type Prompt struct {
 // Numa linha compact_boundary, Compact é o número da compactação (o Segment
 // depois dela) e LogicalParentUUID a última linha antes dela (o parentUuid
 // da compactação é nulo): dá a janela que compactou. Nas outras, 0 e "".
+//
+// Numa linha user com o tool_result do Agent, AgentID é o
+// toolUseResult.agentId: o id do arquivo subagents/agent-<id>.jsonl do
+// subagente que o Agent rodou (a janela da linha é a do subagente). Id fora
+// do padrão (letras, números, _ e -) fica vazio.
 type LineRef struct {
 	UUID              string
 	ParentUUID        string
 	Kind              string // o type da linha
 	Compact           int
 	LogicalParentUUID string
+	AgentID           string
 }
 
 // ContextState é o estado que atravessa leituras incrementais do mesmo arquivo.
+// LastTurn é o maior turno já numerado (o próximo message.id novo ganha
+// LastTurn+1) e LastMessageID o message.id dele.
 type ContextState struct {
 	LastTurn      int // -1 se nenhum
 	LastMessageID string
 	Segment       int
 }
+
+// KnownTurn devolve o turno já gravado de um message.id do arquivo (ok=false
+// se não há): blocos da mesma mensagem podem chegar em leituras diferentes,
+// intercalados com linhas da outra janela.
+type KnownTurn func(messageID string) (turn int, ok bool, err error)
 
 // EstimateTokens estima tokens: ceil(bytes/4) mais 1600 por imagem.
 func EstimateTokens(textBytes int64, images int) int64 {
@@ -129,7 +142,10 @@ type ctxLine struct {
 	IsMeta           bool   `json:"isMeta"`
 	IsCompactSummary bool   `json:"isCompactSummary"`
 	Timestamp        string `json:"timestamp"`
-	Attachment       *struct {
+	// toolUseResult pode ser objeto ou texto (erro): só o agentId é lido
+	// (agentID), sem quebrar a linha quando não é objeto.
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Attachment    *struct {
 		Type          string          `json:"type"`
 		HookEvent     string          `json:"hookEvent"`
 		Command       string          `json:"command"`
@@ -152,16 +168,27 @@ type ctxLine struct {
 	} `json:"message"`
 }
 
-// ParseContext lê de offset até a última linha completa (em fluxo, linhas de
+// ParseContext é ParseContextKnown sem turnos gravados para consultar.
+func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput, turns []ContextTurn, prompts []Prompt, lines []LineRef, next int64, newState ContextState, reset bool, err error) {
+	return ParseContextKnown(path, offset, st, nil)
+}
+
+// ParseContextKnown lê de offset até a última linha completa (em fluxo, linhas de
 // qualquer tamanho). Offset maior que o arquivo devolve reset=true e lê do
-// começo com estado zerado ({LastTurn:-1}). Turnos devolvidos podem repetir
-// o último turno do estado (mesmo message.id): o chamador faz upsert.
+// começo com estado zerado ({LastTurn:-1}), sem consultar known.
+//
+// Um turno por message.id: os blocos de uma mensagem podem vir intercalados
+// com linhas da outra janela (m1, c1, m1) e ficam todos no turno de m1. O
+// turno de um message.id vem desta leitura, senão de known (o já gravado; nil
+// = nada gravado), senão é o próximo número livre (LastTurn+1). Erro de known
+// falha a leitura. Turnos devolvidos podem repetir turnos já gravados (mesmo
+// message.id): o chamador faz upsert.
 // O tool_use emite um registro (Result false) que o tool_result completa na
 // mesma leitura; se o tool_use ficou numa leitura anterior, o registro sai com
 // Tool/Key vazios e Result true, e o armazenamento faz o upsert por ItemID.
 // prompts são as linhas de prompt do usuário (ver Prompt) e lines todas as
 // linhas com uuid (ver LineRef), na ordem do arquivo.
-func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput, turns []ContextTurn, prompts []Prompt, lines []LineRef, next int64, newState ContextState, reset bool, err error) {
+func ParseContextKnown(path string, offset int64, st ContextState, known KnownTurn) (outs []ToolOutput, turns []ContextTurn, prompts []Prompt, lines []LineRef, next int64, newState ContextState, reset bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, nil, nil, offset, st, false, err
@@ -172,7 +199,7 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 		return nil, nil, nil, nil, offset, st, false, err
 	}
 	if offset > info.Size() {
-		offset, st, reset = 0, ContextState{LastTurn: -1}, true
+		offset, st, reset, known = 0, ContextState{LastTurn: -1}, true, nil
 	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return nil, nil, nil, nil, offset, st, reset, err
@@ -180,6 +207,13 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 	next = offset
 	outIdx := map[string]int{} // tool_use_id -> posição em outs
 	turnIdx := map[int]int{}   // índice do turno -> posição em turns
+	turnOf := map[string]int{} // message.id -> turno, nesta leitura
+	if st.LastTurn >= 0 {
+		turnOf[st.LastMessageID] = st.LastTurn
+	}
+	// cur é o turno da última linha assistant vista (o das saídas); começa no
+	// último numerado.
+	cur := st.LastTurn
 	r := bufio.NewReaderSize(f, 1<<20)
 	for {
 		line, rerr := r.ReadBytes('\n')
@@ -195,7 +229,11 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 			continue
 		}
 		if l.UUID != "" {
-			lines = append(lines, LineRef{UUID: l.UUID, ParentUUID: l.ParentUUID, Kind: l.Type})
+			ref := LineRef{UUID: l.UUID, ParentUUID: l.ParentUUID, Kind: l.Type}
+			if l.Type == "user" {
+				ref.AgentID = agentID(l.ToolUseResult)
+			}
+			lines = append(lines, ref)
 		}
 		at, perr := time.Parse(time.RFC3339Nano, l.Timestamp)
 		if perr != nil {
@@ -216,11 +254,19 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 			if u := l.Message.Usage; u != nil {
 				tokens := u.Input + u.CacheRead + u.CacheWrite
 				if tokens+u.Output > 0 { // mensagem sintética, sem token, não abre turno
-					if l.Message.ID != st.LastMessageID || st.LastTurn < 0 {
+					n, ok := turnOf[l.Message.ID]
+					if !ok && known != nil {
+						if n, ok, err = known(l.Message.ID); err != nil {
+							return outs, turns, prompts, lines, next, st, reset, err
+						}
+					}
+					if !ok {
 						st.LastTurn++
 						st.LastMessageID = l.Message.ID
+						n = st.LastTurn
 					}
-					ct := ContextTurn{Turn: st.LastTurn, Segment: st.Segment, MessageID: l.Message.ID, At: at, Tokens: tokens,
+					turnOf[l.Message.ID], cur = n, n
+					ct := ContextTurn{Turn: n, Segment: st.Segment, MessageID: l.Message.ID, At: at, Tokens: tokens,
 						Input: u.Input, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, UUID: l.UUID, ParentUUID: l.ParentUUID}
 					if c := u.Creation; c != nil && c.H1 > 0 {
 						ct.TTL = "1h"
@@ -241,7 +287,7 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 					name, key := toolKey(b.Name, b.Input)
 					outIdx[b.ID] = len(outs)
 					outs = append(outs, ToolOutput{ItemID: b.ID, Tool: name, Key: key,
-						InTokens: EstimateTokens(int64(len(b.Input)), 0), Turn: st.LastTurn, Segment: st.Segment, At: at,
+						InTokens: EstimateTokens(int64(len(b.Input)), 0), Turn: cur, Segment: st.Segment, At: at,
 						UUID: l.UUID, ParentUUID: l.ParentUUID})
 				}
 			}
@@ -262,7 +308,7 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 					continue
 				}
 				outs = append(outs, ToolOutput{ItemID: b.ToolUseID, Bytes: bytes, Tokens: EstimateTokens(bytes, images),
-					Turn: st.LastTurn, Segment: st.Segment, At: at, IsError: b.IsError, Result: true,
+					Turn: cur, Segment: st.Segment, At: at, IsError: b.IsError, Result: true,
 					UUID: l.UUID, ParentUUID: l.ParentUUID})
 			}
 		case "attachment":
@@ -271,13 +317,31 @@ func ParseContext(path string, offset int64, st ContextState) (outs []ToolOutput
 			}
 			if o, ok := hookOutput(l.UUID, l.Attachment.Type, l.Attachment.HookEvent, l.Attachment.Command,
 				l.Attachment.Stdout, l.Attachment.BlockingError); ok {
-				o.Turn, o.Segment, o.At = st.LastTurn, st.Segment, at
+				o.Turn, o.Segment, o.At = cur, st.Segment, at
 				o.UUID, o.ParentUUID = l.UUID, l.ParentUUID
 				outs = append(outs, o)
 			}
 		}
 	}
 	return outs, turns, prompts, lines, next, st, reset, nil
+}
+
+var reAgentID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// agentID devolve o toolUseResult.agentId de uma linha user ("" se o
+// toolUseResult não é objeto, não tem agentId ou o id foge do padrão: ele vira
+// nome de arquivo).
+func agentID(raw json.RawMessage) string {
+	if len(raw) == 0 || raw[0] != '{' {
+		return ""
+	}
+	var r struct {
+		AgentID string `json:"agentId"`
+	}
+	if json.Unmarshal(raw, &r) != nil || !reAgentID.MatchString(r.AgentID) {
+		return ""
+	}
+	return r.AgentID
 }
 
 // promptText devolve o texto de um prompt do usuário (regra em Prompt):

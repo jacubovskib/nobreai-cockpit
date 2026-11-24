@@ -14,8 +14,10 @@ function SessionDetail({ id }: { id: string }) {
   if (q.isError) return <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar a sessão.</p>
   const turns = q.data.turns ?? []
   const top = q.data.top ?? []
+  const pctOnly = turns.length > 0 && turns.every((t) => t.pct_only)
   return (
     <div style={{ padding: '8px 12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {pctOnly && <span style={muted}>janela informada pelo agente</span>}
       <ContextCurve turns={turns} />
       <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Saídas mais pesadas</h3>
       <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -121,35 +123,37 @@ export function ContextSection({ from, to, projectId, exact }: { from: string; t
               </div>
             </>
           )}
+        </>
+      )}
 
-          {sessions.length > 0 && (
-            <>
-              <h3 style={{ fontSize: 14, fontWeight: 600, margin: '8px 0 0' }}>Sessões que mais pesaram</h3>
-              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-                {sessions.map((s) => {
-                  const expanded = open === s.session_id
-                  return (
-                    <li key={s.session_id} style={{ borderTop: '1px solid var(--border)' }}>
-                      <button
-                        type="button"
-                        aria-expanded={expanded}
-                        onClick={() => setOpen(expanded ? null : s.session_id)}
-                        style={{ all: 'unset', boxSizing: 'border-box', width: '100%', cursor: 'pointer', display: 'flex', flexWrap: 'wrap', gap: 12, padding: '10px 12px', fontSize: 14 }}
-                      >
-                        <span className="mono" style={{ color: 'var(--text-2)', minWidth: 64 }}>{s.card_key || 'sem card'}</span>
-                        <span style={{ flex: 1, minWidth: 0 }}>{s.card_title}</span>
-                        <span style={muted}>{startFmt.format(new Date(s.started_at))}</span>
-                        <span style={{ fontVariantNumeric: 'tabular-nums' }}>peso {tokens(s.weight)}</span>
-                        <span style={{ ...muted, fontVariantNumeric: 'tabular-nums' }}>pico {tokens(s.peak_context)}</span>
-                        <span style={muted}>{s.compactions} {s.compactions === 1 ? 'compactação' : 'compactações'}</span>
-                      </button>
-                      {expanded && <SessionDetail id={s.session_id} />}
-                    </li>
-                  )
-                })}
-              </ul>
-            </>
-          )}
+      {/* Fora do bloco das chaves: sessão só com % (sem saídas) também aparece. */}
+      {q.data && sessions.length > 0 && (
+        <>
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: '8px 0 0' }}>Sessões que mais pesaram</h3>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {sessions.map((s) => {
+              const expanded = open === s.session_id
+              return (
+                <li key={s.session_id} style={{ borderTop: '1px solid var(--border)' }}>
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    onClick={() => setOpen(expanded ? null : s.session_id)}
+                    style={{ all: 'unset', boxSizing: 'border-box', width: '100%', cursor: 'pointer', display: 'flex', flexWrap: 'wrap', gap: 12, padding: '10px 12px', fontSize: 14 }}
+                  >
+                    <span className="mono" style={{ color: 'var(--text-2)', minWidth: 64 }}>{s.card_key || 'sem card'}</span>
+                    <span style={{ flex: 1, minWidth: 0 }}>{s.card_title}</span>
+                    <span style={muted}>{s.started_at && startFmt.format(new Date(s.started_at))}</span>
+                    <span style={{ fontVariantNumeric: 'tabular-nums' }}>peso {tokens(s.weight)}</span>
+                    {s.peak_context > 0 && <span style={{ ...muted, fontVariantNumeric: 'tabular-nums' }}>pico {tokens(s.peak_context)}</span>}
+                    {s.peak_context === 0 && s.peak_pct > 0 && <span style={{ ...muted, fontVariantNumeric: 'tabular-nums' }}>pico {Math.round(s.peak_pct)}%</span>}
+                    <span style={muted}>{s.compactions} {s.compactions === 1 ? 'compactação' : 'compactações'}</span>
+                  </button>
+                  {expanded && <SessionDetail id={s.session_id} />}
+                </li>
+              )
+            })}
+          </ul>
         </>
       )}
     </section>

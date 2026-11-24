@@ -459,3 +459,121 @@ func TestParseContext_Lines(t *testing.T) {
 		}
 	}
 }
+
+// A linha user com o tool_result do Agent traz toolUseResult.agentId (o id do
+// arquivo subagents/agent-<id>.jsonl): sai em LineRef.AgentID. toolUseResult
+// que não é objeto (texto de erro) ou id fora do padrão não quebram a linha.
+func TestParseContext_AgentID(t *testing.T) {
+	res := `"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}`
+	p := writeLines(t,
+		line("user", "r1", "a1", res+`,"toolUseResult":{"status":"completed","agentId":"a72765c5809310a83","content":[]}`),
+		line("user", "r2", "r1", res+`,"toolUseResult":"Error: agente falhou"`),
+		line("user", "r3", "r2", res+`,"toolUseResult":{"status":"async_launched","agentId":"../../etc/x"}`),
+		line("user", "r4", "r3", res+`,"toolUseResult":{"stdout":"x"}`),
+		line("assistant", "a2", "r4", `"toolUseResult":{"agentId":"a1"},"message":{"id":"m1","content":[]}`),
+	)
+	_, _, _, lines, _, _, _, err := ParseContext(p, 0, zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []LineRef{
+		{UUID: "r1", ParentUUID: "a1", Kind: "user", AgentID: "a72765c5809310a83"},
+		{UUID: "r2", ParentUUID: "r1", Kind: "user"},
+		{UUID: "r3", ParentUUID: "r2", Kind: "user"},
+		{UUID: "r4", ParentUUID: "r3", Kind: "user"},
+		{UUID: "a2", ParentUUID: "r4", Kind: "assistant"},
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("lines %+v", lines)
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Fatalf("linha %d: %+v, quer %+v", i, lines[i], w)
+		}
+	}
+}
+
+func TestSubagentTranscript(t *testing.T) {
+	main := filepath.Join("x", "proj", "abc.jsonl")
+	got := SubagentTranscript(main, "a7")
+	if want := filepath.Join("x", "proj", "abc", "subagents", "agent-a7.jsonl"); got != want {
+		t.Fatalf("SubagentTranscript = %q, quer %q", got, want)
+	}
+}
+
+// Blocos do mesmo message.id intercalados com linhas da outra janela (m1, c1,
+// m1): um turno por message.id, com os tokens do último bloco de m1; o
+// tool_use do segundo bloco de m1 fica no turno de m1 e a mensagem seguinte
+// ganha o próximo número livre.
+func TestParseContext_InterleavedMessageID(t *testing.T) {
+	p := writeLines(t,
+		asst("m1", 1, 1, 1),
+		asst("c1", 2, 2, 2),
+		asst("m1", 10, 20, 30, toolUse("t1", "Bash", `{"command":"ls"}`)),
+		userResult("t1", quote("abcd"), false),
+		asst("d1", 3, 3, 3),
+	)
+	outs, turns, _, _, _, st, _, err := ParseContext(p, 0, zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		turn   int
+		id     string
+		tokens int64
+	}{{0, "m1", 60}, {1, "c1", 6}, {2, "d1", 9}}
+	if len(turns) != len(want) {
+		t.Fatalf("turns %+v", turns)
+	}
+	for i, w := range want {
+		if turns[i].Turn != w.turn || turns[i].MessageID != w.id || turns[i].Tokens != w.tokens {
+			t.Fatalf("turno %d = %+v, quer %+v", i, turns[i], w)
+		}
+	}
+	if len(outs) != 1 || outs[0].Turn != 0 {
+		t.Fatalf("outs %+v", outs)
+	}
+	if st.LastTurn != 2 || st.LastMessageID != "d1" {
+		t.Fatalf("state %+v", st)
+	}
+}
+
+// m1 numa leitura e de novo na seguinte, depois de outra mensagem: o turno de
+// m1 vem do que já foi gravado (known), sem número novo.
+func TestParseContext_MessageIDAcrossReads(t *testing.T) {
+	l1, l2 := asst("m1", 1, 1, 1), asst("c1", 2, 2, 2)
+	l3, l4 := asst("m1", 10, 20, 30), asst("d1", 3, 3, 3)
+	p := writeLines(t, l1, l2)
+	_, turns, _, _, next, st, _, err := ParseContext(p, 0, zero)
+	if err != nil || len(turns) != 2 {
+		t.Fatalf("turns %+v %v", turns, err)
+	}
+	saved := map[string]int{}
+	for _, tr := range turns {
+		saved[tr.MessageID] = tr.Turn
+	}
+	known := func(id string) (int, bool, error) {
+		n, ok := saved[id]
+		return n, ok, nil
+	}
+	appendTo(t, p, l3+"\n"+l4+"\n")
+	_, turns, _, _, _, st, _, err = ParseContextKnown(p, next, st, known)
+	if err != nil || len(turns) != 2 || turns[0].Turn != 0 || turns[0].MessageID != "m1" || turns[0].Tokens != 60 ||
+		turns[1].Turn != 2 || turns[1].MessageID != "d1" || st.LastTurn != 2 || st.LastMessageID != "d1" {
+		t.Fatalf("turns %+v st %+v err %v", turns, st, err)
+	}
+}
+
+// Erro na consulta do turno gravado falha a leitura (senão o message.id
+// ganharia um turno novo, duplicado). Releitura truncada não consulta.
+func TestParseContext_KnownErrorAndReset(t *testing.T) {
+	p := writeLines(t, asst("m1", 1, 1, 1))
+	boom := func(string) (int, bool, error) { return 0, false, os.ErrPermission }
+	if _, _, _, _, _, _, _, err := ParseContextKnown(p, 0, ContextState{LastTurn: 0, LastMessageID: "x"}, boom); err == nil {
+		t.Fatal("erro da consulta ignorado")
+	}
+	_, turns, _, _, _, _, reset, err := ParseContextKnown(p, 1<<30, ContextState{LastTurn: 5, LastMessageID: "x"}, boom)
+	if err != nil || !reset || len(turns) != 1 || turns[0].Turn != 0 {
+		t.Fatalf("turns %+v reset %v err %v", turns, reset, err)
+	}
+}

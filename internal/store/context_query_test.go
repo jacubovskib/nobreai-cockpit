@@ -230,3 +230,199 @@ func TestContextEmpty(t *testing.T) {
 		t.Fatalf("nil: %v %v %v %v %v %+v", keys == nil, sess == nil, proj == nil, turns == nil, top == nil, tot)
 	}
 }
+
+// detailWindows cria a principal claude:p e a filha claude:p@2 com turnos e
+// saídas intercalados (m* = principal, c* = filha).
+func detailWindows(t *testing.T) *Store {
+	t.Helper()
+	s := newTestStore(t)
+	ctxSession(t, s, "claude:p", nil, nil)
+	child := newSession("claude:p@2", 2)
+	child.ParentSessionID = "claude:p"
+	child.TranscriptPath = "/main"
+	if err := s.StartSession(child); err != nil {
+		t.Fatal(err)
+	}
+	turns := []usage.ContextTurn{
+		liveTurn(0, 0, 5*time.Minute, 1000, 0, 0, "", "m0"),
+		liveTurn(1, 0, 4*time.Minute, 2000, 0, 0, "", "c0"),
+		liveTurn(2, 0, 3*time.Minute, 3000, 0, 0, "", "m1"),
+		liveTurn(3, 0, 2*time.Minute, 4000, 0, 0, "", "c1"),
+	}
+	om := ctxOut("om", "Read", "main-key", 10, 0, 0, 0)
+	om.UUID = "m0"
+	oc := ctxOut("oc", "Bash", "child-key", 20, 0, 1, 0)
+	oc.UUID = "c0"
+	w := ContextWindows{ByUUID: map[string]string{"c0": "claude:p@2", "c1": "claude:p@2"}}
+	if err := s.SaveContextWindows("claude:p", "/main", false, []usage.ToolOutput{om, oc}, turns, 1, usage.ContextState{LastTurn: -1}, w); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestContextSessionDetailPerWindow(t *testing.T) {
+	s := detailWindows(t)
+	main, mtop, err := s.ContextSessionDetail("claude:p", 10)
+	if err != nil || len(main) != 2 || main[0].Tokens != 1000 || main[1].Tokens != 3000 || len(mtop) != 1 || mtop[0].Key != "main-key" {
+		t.Fatalf("principal turns=%+v top=%+v err=%v", main, mtop, err)
+	}
+	ch, ctop, err := s.ContextSessionDetail("claude:p@2", 10)
+	if err != nil || len(ch) != 2 || ch[0].Tokens != 2000 || ch[1].Tokens != 4000 || len(ctop) != 1 || ctop[0].Key != "child-key" {
+		t.Fatalf("filha turns=%+v top=%+v err=%v", ch, ctop, err)
+	}
+	for _, p := range append(main, ch...) {
+		if p.AfterCompact || p.PctOnly {
+			t.Fatalf("ponto %+v", p)
+		}
+	}
+}
+
+func TestContextSessionDetailPctOnly(t *testing.T) {
+	s := newTestStore(t)
+	ctxSession(t, s, "k", nil, nil)
+	save(t, s, "k", "/main", nil, []usage.ContextTurn{pctTurn(0, 10), pctTurn(1, 14), pctTurn(2, 18)})
+	turns, _, err := s.ContextSessionDetail("k", 5)
+	if err != nil || len(turns) != 3 {
+		t.Fatalf("%+v %v", turns, err)
+	}
+	for i, p := range turns {
+		if !p.PctOnly || p.Tokens != 0 || p.Pct != []float64{10, 14, 18}[i] {
+			t.Fatalf("turns[%d]=%+v", i, p)
+		}
+	}
+	// Claude (pct NULL) não é só %.
+	ctxSession(t, s, "c", nil, nil)
+	save(t, s, "c", "/main", nil, ctxTurns(0, 0, 0))
+	ct, _, _ := s.ContextSessionDetail("c", 5)
+	if len(ct) != 1 || ct[0].PctOnly || ct[0].Pct != 0 {
+		t.Fatalf("%+v", ct)
+	}
+}
+
+// compactWindows cria a principal claude:p e a filha claude:p@2 no mesmo
+// transcript: a filha compacta (segmento 1) e depois a principal (segmento 2).
+// Turnos: m* da principal, c* da filha; a principal tem também um turno só no
+// subagente /sub com tokens enormes (não conta para o pico).
+func compactWindows(t *testing.T) *Store {
+	t.Helper()
+	s := newTestStore(t)
+	ctxSession(t, s, "claude:p", nil, nil)
+	child := newSession("claude:p@2", 2)
+	child.ParentSessionID = "claude:p"
+	child.TranscriptPath = "/main"
+	if err := s.StartSession(child); err != nil {
+		t.Fatal(err)
+	}
+	turns := []usage.ContextTurn{
+		liveTurn(0, 0, 9*time.Minute, 1000, 0, 0, "", "m0"),
+		liveTurn(1, 0, 8*time.Minute, 5000, 0, 0, "", "c0"),
+		liveTurn(2, 1, 7*time.Minute, 800, 0, 0, "", "c1"),
+		liveTurn(3, 1, 6*time.Minute, 2000, 0, 0, "", "m1"),
+		liveTurn(4, 2, 5*time.Minute, 900, 0, 0, "", "m2"),
+		liveTurn(5, 2, 4*time.Minute, 1200, 0, 0, "", "c2"),
+	}
+	byUUID := map[string]string{"c0": "claude:p@2", "c1": "claude:p@2", "c2": "claude:p@2"}
+	w := ContextWindows{ByUUID: byUUID, Compactions: map[int]string{1: "claude:p@2", 2: ""}}
+	if err := s.SaveContextWindows("claude:p", "/main", false, nil, turns, 1, usage.ContextState{LastTurn: -1}, w); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// A curva de cada janela só marca as compactações da própria janela.
+func TestContextSessionDetailCompactionPerWindow(t *testing.T) {
+	s := compactWindows(t)
+	for _, c := range []struct {
+		id   string
+		want []bool
+	}{
+		{"claude:p", []bool{false, false, true}},   // m0, m1 (compactação da filha), m2 (dela)
+		{"claude:p@2", []bool{false, true, false}}, // c0, c1 (dela), c2 (compactação da principal)
+	} {
+		turns, _, err := s.ContextSessionDetail(c.id, 10)
+		if err != nil || len(turns) != len(c.want) {
+			t.Fatalf("%s: turns=%+v err=%v", c.id, turns, err)
+		}
+		for i, p := range turns {
+			if p.AfterCompact != c.want[i] {
+				t.Errorf("%s: turns[%d]=%+v, quer after_compact=%v", c.id, i, p, c.want[i])
+			}
+		}
+	}
+}
+
+// A lista de sessões é por janela: a filha aparece com o próprio card, pico
+// e compactações; a principal não conta os turnos nem as compactações da
+// filha. O projeto (filtro e totais) é o da janela dona.
+func TestContextTopSessionsPerWindow(t *testing.T) {
+	s := compactWindows(t)
+	p1, _ := s.CreateProject("a", "/w/a")
+	p2, _ := s.CreateProject("b", "/w/b")
+	mc, _ := s.CreateCard(domain.Card{Title: "principal", ProjectID: p1.ID})
+	cc, _ := s.CreateCard(domain.Card{Title: "filha", ProjectID: p2.ID})
+	if _, err := s.DB.Exec(`UPDATE sessions SET card_id=? WHERE id='claude:p'`, mc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`UPDATE sessions SET card_id=? WHERE id='claude:p@2'`, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Saídas: a da principal no turno 0 (segmento 0), a da filha no turno 2
+	// (segmento 1); uma de subagente da principal com turno enorme em /sub.
+	om := ctxOut("om", "Read", "main-key", 10, 0, 0, 0)
+	om.UUID = "m0"
+	oc := ctxOut("oc", "Bash", "child-key", 20, 0, 2, 1)
+	oc.UUID = "c1"
+	w := ContextWindows{ByUUID: map[string]string{"c0": "claude:p@2", "c1": "claude:p@2", "c2": "claude:p@2"}}
+	if err := s.SaveContextWindows("claude:p", "/main", false, []usage.ToolOutput{om, oc}, nil, 1, usage.ContextState{LastTurn: -1}, w); err != nil {
+		t.Fatal(err)
+	}
+	save(t, s, "claude:p", "/sub", nil, []usage.ContextTurn{{Turn: 0, Segment: 7, MessageID: "x", At: ctxAt, Tokens: 99999}})
+
+	got, err := s.ContextTopSessions(ContextFilter{}, 10)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	by := map[string]ContextSession{}
+	for _, x := range got {
+		by[x.SessionID] = x
+	}
+	m, c := by["claude:p"], by["claude:p@2"]
+	if m.PeakContext != 2000 || m.Compactions != 1 || m.CardKey != mc.Key || m.CardTitle != "principal" || m.StartedAt == "" {
+		t.Errorf("principal = %+v", m)
+	}
+	if c.PeakContext != 5000 || c.Compactions != 1 || c.CardKey != cc.Key || c.CardTitle != "filha" || c.StartedAt == "" || c.Weight == 0 {
+		t.Errorf("filha = %+v", c)
+	}
+	// Filtro de projeto pela janela dona.
+	if got, _ := s.ContextTopSessions(ContextFilter{ProjectIDs: []int64{p2.ID}}, 10); len(got) != 1 || got[0].SessionID != "claude:p@2" {
+		t.Errorf("projeto da filha = %+v", got)
+	}
+	if got, _ := s.ContextTopSessions(ContextFilter{ProjectIDs: []int64{p1.ID}}, 10); len(got) != 1 || got[0].SessionID != "claude:p" {
+		t.Errorf("projeto da principal = %+v", got)
+	}
+	if keys, _ := s.ContextTopKeys(ContextFilter{ProjectIDs: []int64{p2.ID}}, 10); len(keys) != 1 || keys[0].Key != "child-key" {
+		t.Errorf("chaves do projeto da filha = %+v", keys)
+	}
+	tot, err := s.ContextTotals(ContextFilter{ProjectIDs: []int64{p2.ID}})
+	if err != nil || tot.ContextTotal != 5000+800+1200 || tot.WeightTotal != c.Weight {
+		t.Errorf("totais do projeto da filha = %+v err=%v", tot, err)
+	}
+}
+
+// Sessão só com % (Kiro) e sem saídas entra na lista pelos turnos, com o pico em %.
+func TestContextTopSessionsPctOnlyWithoutOutputs(t *testing.T) {
+	s := newTestStore(t)
+	ctxSession(t, s, "k", nil, nil)
+	save(t, s, "k", "/main", nil, []usage.ContextTurn{pctTurn(0, 10), pctTurn(1, 34), pctTurn(2, 18)})
+	got, err := s.ContextTopSessions(ContextFilter{}, 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	if got[0].SessionID != "k" || got[0].PeakPct != 34 || got[0].PeakContext != 0 || got[0].Weight != 0 || got[0].Compactions != 0 {
+		t.Fatalf("kiro = %+v", got[0])
+	}
+	// Fora do intervalo dos turnos, nada.
+	if got, _ := s.ContextTopSessions(ContextFilter{From: liveNow}, 10); len(got) != 0 {
+		t.Fatalf("fora do intervalo = %+v", got)
+	}
+}

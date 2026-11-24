@@ -233,9 +233,9 @@ describe('Config monitor de contexto', () => {
     const fn = mock(routes(withCtx))
     wrap(<Config />)
     const sec = await screen.findByRole('region', { name: 'Monitor de contexto' })
-    expect(within(sec).getByLabelText('Primeira faixa (% da janela)')).toHaveValue('60')
+    expect(within(sec).getByLabelText('Faixa 1 (% da janela)')).toHaveValue('60')
     expect(within(sec).getByLabelText('Avisar o agente')).toBeChecked()
-    fireEvent.change(within(sec).getByLabelText('Primeira faixa (% da janela)'), { target: { value: '50' } })
+    fireEvent.change(within(sec).getByLabelText('Faixa 1 (% da janela)'), { target: { value: '50' } })
     fireEvent.change(within(sec).getByLabelText('Saída grande (tokens)'), { target: { value: '20000' } })
     fireEvent.change(within(sec).getByLabelText(/Máximo de avisos/), { target: { value: '5' } })
     fireEvent.click(within(sec).getByLabelText('Avisar o agente'))
@@ -244,9 +244,46 @@ describe('Config monitor de contexto', () => {
     expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ context_warn_pcts: [50, 80], big_output_tokens: 20000, big_output_max: 5, agent_context_warnings: false })
   })
 
+  it('lista vazia salva e avisa que não há avisos de faixa', async () => {
+    const fn = mock(routes({ ...withCtx, context_warn_pcts: [] }))
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Monitor de contexto' })
+    expect(within(sec).getByText(/sem avisos de faixa/i)).toBeInTheDocument()
+    expect(within(sec).queryByLabelText(/^Faixa 1/)).toBeNull()
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
+    expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ context_warn_pcts: [] })
+  })
+
+  it('mostra e salva três faixas inteiras, e remove todas', async () => {
+    const fn = mock(routes({ ...withCtx, context_warn_pcts: [50, 70, 90] }))
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Monitor de contexto' })
+    expect(within(sec).getByLabelText('Faixa 3 (% da janela)')).toHaveValue('90')
+    expect(within(sec).queryByText(/sem avisos de faixa/i)).toBeNull()
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
+    expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ context_warn_pcts: [50, 70, 90] })
+    for (let i = 0; i < 3; i++) fireEvent.click(within(sec).getAllByRole('button', { name: /^Remover faixa/ })[0])
+    expect(within(sec).getByText(/sem avisos de faixa/i)).toBeInTheDocument()
+  })
+
+  it('acrescenta uma faixa', async () => {
+    const fn = mock(routes(withCtx))
+    wrap(<Config />)
+    const sec = await screen.findByRole('region', { name: 'Monitor de contexto' })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Adicionar faixa' }))
+    fireEvent.change(within(sec).getByLabelText('Faixa 3 (% da janela)'), { target: { value: '95' } })
+    fireEvent.click(within(sec).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls(fn, 'PUT', '/api/settings')).toHaveLength(1))
+    expect(calls(fn, 'PUT', '/api/settings')[0]).toMatchObject({ context_warn_pcts: [60, 80, 95] })
+  })
+
   it.each([
-    ['Primeira faixa (% da janela)', '80', /em ordem crescente/],
-    ['Segunda faixa (% da janela)', '100', /entre 1 e 99/],
+    ['Faixa 1 (% da janela)', '80', /em ordem crescente/],
+    ['Faixa 1 (% da janela)', '0', /entre 1 e 99/],
+    ['Faixa 1 (% da janela)', '', /entre 1 e 99/],
+    ['Faixa 2 (% da janela)', '100', /entre 1 e 99/],
     ['Saída grande (tokens)', '999', /pelo menos 1000/],
     [/Máximo de avisos/, '21', /entre 0 e 20/],
   ])('valida %s=%s sem enviar', async (label, value, msg) => {
