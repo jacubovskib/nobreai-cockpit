@@ -114,3 +114,24 @@ func TestReadiness(t *testing.T) {
 		}
 	})
 }
+
+func TestReadinessOpenTaskSatisfiesTodo(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	todo := func(ct Content) bool {
+		for _, it := range Readiness(Card{}, ct, false, nil, DefaultSettings(), now).Items {
+			if it.Rule == "todo_open" {
+				return it.OK
+			}
+		}
+		t.Fatal("regra todo_open ausente")
+		return false
+	}
+	ct := Content{Plan: &Plan{Tasks: []PlanTask{{N: 1, Status: TaskTodo}}}}
+	if !todo(ct) {
+		t.Fatal("tarefa a_fazer deveria satisfazer todo_open")
+	}
+	ct.Plan.Tasks[0].Status = TaskDone
+	if todo(ct) {
+		t.Fatal("tudo concluído deveria deixar pendente")
+	}
+}

@@ -49,6 +49,10 @@ func (s *Store) GetSettings() (domain.Settings, error) {
 			st.ModelWindows = nil
 		}
 	}
+	// Lista gravada como null = sem personalização: mantém o padrão; [] desliga.
+	if v, ok := raw["plan_patterns"]; ok && string(v) == "null" {
+		delete(raw, "plan_patterns")
+	}
 	obj := make(map[string]json.RawMessage, len(raw))
 	for k, v := range raw {
 		obj[k] = v

@@ -11,6 +11,8 @@ type Content struct {
 	Files     []EssentialFile `json:"files"`
 	Todos     []Todo          `json:"todos"`
 	Questions []Question      `json:"questions"`
+	// Plan é o plano da entrega; nil quando o card não tem tarefa.
+	Plan *Plan `json:"plan"`
 }
 
 // Settings são as preferências do usuário, persistidas na tabela settings.
@@ -45,6 +47,8 @@ type Settings struct {
 	// ModelWindows é a janela de contexto (tokens) por modelo; o que não está aqui usa 200.000
 	// (e "[1m]" no nome do modelo, 1.000.000).
 	ModelWindows map[string]int `json:"model_windows"`
+	// PlanPatterns são os padrões (path.Match, relativos ao projeto) dos arquivos de plano; lista vazia desliga.
+	PlanPatterns []string `json:"plan_patterns"`
 }
 
 // DefaultSettings devolve os padrões do piloto.
@@ -70,6 +74,7 @@ func DefaultSettings() Settings {
 		BigOutputMax:          3,
 		AgentContextWarnings:  true,
 		ModelWindows:          map[string]int{"claude-opus-5-5": 1000000},
+		PlanPatterns:          DefaultPlanPatterns(),
 	}
 }
 
@@ -117,6 +122,7 @@ func Readiness(c Card, ct Content, live bool, lastEdit *time.Time, s Settings, n
 				}
 			}
 		case "todo_open":
+			ok = ct.Plan.Open() > 0
 			for _, t := range ct.Todos {
 				if !t.Done {
 					ok = true
