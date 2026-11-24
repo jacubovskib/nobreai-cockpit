@@ -17,7 +17,7 @@
 3. **Os padrões iniciais vão além de `docs/plan*.md`.** São `docs/plan*.md`, `docs/superpowers/plans/*.md` e `.kiro/specs/*/tasks.md`. O segundo é onde o fluxo atual deste repositório grava os planos. No Kiro, `tasks.md` é o plano de implementação, e `requirements.md` e `design.md` são a spec. Por isso a regra "specs ficam de fora" continua valendo.
 4. **Um plano escrito sem card dispara o lembrete "sem card" mesmo abaixo do limite de arquivos.** Um plano já indica trabalho com histórico. Quando o lembrete "sem card" já saiu antes de o plano ser escrito, vem depois um único lembrete curto, só do plano.
 5. **A skill vale para os dois agentes.** O texto novo vai em `internal/adapter/claude/skill.md` e em `internal/adapter/kiro/steering.md`.
-6. **A linha de contexto de uma entrega concluída é "concluída dd/mm"**, e não "merge dd/mm". O Cockpit não sabe quando houve merge.
+6. **A linha de contexto de uma entrega concluída é "merge dd/mm"**, tirada de `branch_merged_at`, ou fica vazia quando não houve merge. O selo de estado já diz "concluída". (Na primeira versão, este desvio dizia "concluída dd/mm" e afirmava que o Cockpit não sabe quando houve merge. A revisão final mostrou que ele sabe.)
 7. **"O prompt de handoff lista as tarefas em aberto" é entendido como o prompt padrão de retomada** (`retomar-card`, que traz `{{card.pacote}}`). O `fechar-handoff`, que o fim de turno usa, não lista as tarefas. O lembrete de `nobre task` cobre esse caso.
 
 ## Global Constraints
