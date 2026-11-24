@@ -782,6 +782,11 @@ func (s *server) setPlan(w http.ResponseWriter, r *http.Request, c domain.Card, 
 		writeError(w, http.StatusBadRequest, "informe ao menos uma tarefa")
 		return
 	}
+	in.Path = strings.TrimSpace(in.Path)
+	if in.Path == "" {
+		writeError(w, http.StatusBadRequest, "informe o arquivo do plano")
+		return
+	}
 	p, err := s.st.SetPlan(c.ID, in.Path, in.Tasks, sessionID, s.now())
 	if err != nil {
 		writeStoreError(w, err, "")
@@ -804,6 +809,15 @@ func (s *server) setTask(w http.ResponseWriter, r *http.Request, c domain.Card, 
 	st, ok := domain.ParseTaskStatus(in.Status)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "estado inválido: use a-fazer, andamento, revisao ou concluida")
+		return
+	}
+	ct, err := s.st.CardContent(c.ID)
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	if ct.Plan == nil {
+		writeError(w, http.StatusNotFound, "o card não tem plano: registre com nobre plan")
 		return
 	}
 	t, err := s.st.SetTaskStatus(c.ID, in.N, st, sessionID, s.now())

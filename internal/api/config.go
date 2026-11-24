@@ -581,7 +581,8 @@ func validateContextSettings(st domain.Settings) string {
 // validatePlanPatterns confere os padrões de arquivo de plano; "" = válidos.
 func validatePlanPatterns(pats []string) string {
 	for _, p := range pats {
-		if p == "" || strings.TrimSpace(p) != p || strings.HasPrefix(p, "/") {
+		if p == "" || strings.TrimSpace(p) != p || strings.HasPrefix(p, "/") ||
+			strings.Contains(p, "**") || strings.HasPrefix(p, "./") {
 			return "padrão de plano inválido: " + p
 		}
 		if _, err := path.Match(p, ""); err != nil {

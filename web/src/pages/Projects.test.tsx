@@ -141,7 +141,7 @@ describe('plano nas telas de projeto', () => {
   const withPlan = {
     ...routes,
     '/api/cards': [
-      card({ id: 1, key: 'NAC-1', title: 'Feita', column: 'concluido', updated_at: '2026-11-03T12:00:00Z' }),
+      card({ id: 1, key: 'NAC-1', title: 'Feita', column: 'concluido', updated_at: '2026-11-09T12:00:00Z', branch_merged_at: '2026-11-03T12:00:00Z' }),
       card({ id: 2, key: 'NAC-2', title: 'Rodando', column: 'em_andamento', last_activity_at: ago(1), updated_at: ago(2), plan: { path: 'p.md', tasks } }),
     ],
   }
@@ -175,8 +175,8 @@ describe('plano nas telas de projeto', () => {
     expect(running).toHaveTextContent('tarefa 2: b')
     expect(running).toHaveTextContent('1/4 concluídas')
     const done = screen.getByRole('link', { name: /NAC-1/ })
-    expect(done).toHaveTextContent('concluída')
-    expect(done).toHaveTextContent('concluída 03/11')
+    expect(done.textContent?.match(/concluída/g)).toHaveLength(1)
+    expect(done).toHaveTextContent('merge 03/11')
   })
 })
 

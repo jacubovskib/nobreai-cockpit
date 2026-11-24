@@ -120,8 +120,9 @@ describe('buildRows com família', () => {
 describe('contextLine e stateLabel', () => {
   const task = (n: number, status: string, title = `t${n}`) => ({ n, title, status, session_id: '', updated_at: T })
   const withPlan = (tasks: ReturnType<typeof task>[], o: Partial<CardSummary> = {}) => card({ column: 'em_andamento', plan: { path: 'docs/plan.md', tasks } as never, ...o })
-  it('concluído mostra a data', () => {
-    expect(contextLine(card({ column: 'concluido', updated_at: '2026-11-03T12:00:00Z' }))).toBe('concluída 03/11')
+  it('concluído mostra a data do merge, ou nada sem ela', () => {
+    expect(contextLine(card({ column: 'concluido', updated_at: '2026-11-09T12:00:00Z', branch_merged_at: '2026-11-03T12:00:00Z' }))).toBe('merge 03/11')
+    expect(contextLine(card({ column: 'concluido', updated_at: '2026-11-03T12:00:00Z' }))).toBe('')
   })
   it('sem plano é vazio', () => {
     expect(contextLine(card({ column: 'em_andamento', plan: null }))).toBe('')

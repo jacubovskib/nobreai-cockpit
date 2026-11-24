@@ -86,7 +86,7 @@ func planText(key string) string {
 
 func taskText(key string) string {
 	return "NobreAI Cockpit: houve commit desde a última atualização das tarefas do card " + key +
-		". Atualize com nobre task <n> andamento|revisao|concluida."
+		". Se alguma tarefa mudou de estado, atualize com nobre task <n> andamento|revisao|concluida; se não, só continue."
 }
 
 func (e *env) at(d time.Duration) { e.c.Deps().Now = func() time.Time { return t0.Add(d) } }
@@ -301,5 +301,25 @@ func TestTurnEndPlanPatternsEmpty(t *testing.T) {
 	e.handle(t, d, Event{Kind: TurnEnd})
 	if got := holdReason(t, d); got != "" {
 		t.Fatalf("card com padrões vazios segurou: %q", got)
+	}
+}
+
+// Plano escrito num worktree a partir do checkout principal: o prefixo
+// .worktrees/<nome>/ não impede o casamento; a mensagem cita o caminho gravado.
+func TestTurnEndPlanReminderInWorktree(t *testing.T) {
+	e, d := newFake(t)
+	c := e.cardSession(t, d)
+	e.at(time.Minute)
+	e.handle(t, d, Event{Kind: ToolAfter, Tool: Tool{Kind: ToolEdit, Path: "/w/api/.worktrees/x/docs/superpowers/plans/p.md"}})
+	if err := e.st.SetWhereStopped(c.ID, "plano escrito", t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	e.at(3 * time.Minute)
+	e.handle(t, d, Event{Kind: TurnEnd})
+	rel := ".worktrees/x/docs/superpowers/plans/p.md"
+	want := "NobreAI Cockpit: você escreveu um plano (" + rel + ") e o card " + c.Key +
+		` ainda não tem as tarefas. Registre com nobre plan ` + rel + ` --task "<tarefa 1>" --task "<tarefa 2>" ...`
+	if got := holdReason(t, d); got != want {
+		t.Fatalf("motivo = %q\nquer      %q", got, want)
 	}
 }

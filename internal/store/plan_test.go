@@ -60,8 +60,12 @@ func TestSetPlanDuplicateTitles(t *testing.T) {
 	s := newTestStore(t)
 	c := newCard(t, s)
 	t0 := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
-	s.SetPlan(c.ID, "docs/p.md", []string{"A"}, "s1", t0)
-	s.SetTaskStatus(c.ID, 1, domain.TaskDone, "s1", t0)
+	if _, err := s.SetPlan(c.ID, "docs/p.md", []string{"A"}, "s1", t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetTaskStatus(c.ID, 1, domain.TaskDone, "s1", t0); err != nil {
+		t.Fatal(err)
+	}
 	p, err := s.SetPlan(c.ID, "docs/p.md", []string{"A", "A"}, "s1", t0.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
@@ -72,17 +76,31 @@ func TestSetPlanDuplicateTitles(t *testing.T) {
 func TestSetPlanInvalid(t *testing.T) {
 	s := newTestStore(t)
 	c := newCard(t, s)
-	for _, titles := range [][]string{nil, {"A", ""}, {" A"}} {
+	for _, titles := range [][]string{nil, {"A", ""}, {"A", "  "}} {
 		if _, err := s.SetPlan(c.ID, "docs/p.md", titles, "s", time.Now()); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%q: err = %v", titles, err)
 		}
 	}
 }
 
+func TestSetPlanTrimsTitles(t *testing.T) {
+	s := newTestStore(t)
+	c := newCard(t, s)
+	p, err := s.SetPlan(c.ID, "docs/p.md", []string{" A ", "\tB\n"}, "s", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Tasks) != 2 || p.Tasks[0].Title != "A" || p.Tasks[1].Title != "B" {
+		t.Fatalf("tasks = %+v", p.Tasks)
+	}
+}
+
 func TestSetTaskStatusUnknown(t *testing.T) {
 	s := newTestStore(t)
 	c := newCard(t, s)
-	s.SetPlan(c.ID, "docs/p.md", []string{"A", "B", "C"}, "s", time.Now())
+	if _, err := s.SetPlan(c.ID, "docs/p.md", []string{"A", "B", "C"}, "s", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.SetTaskStatus(c.ID, 9, domain.TaskDone, "s", time.Now()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v", err)
 	}
@@ -98,7 +116,9 @@ func TestCardContentPlan(t *testing.T) {
 	if last, _ := s.LastPlanChange(c.ID); last != nil {
 		t.Fatalf("last = %v", last)
 	}
-	s.SetPlan(c.ID, "docs/p.md", []string{"A", "B"}, "s", time.Now())
+	if _, err := s.SetPlan(c.ID, "docs/p.md", []string{"A", "B"}, "s", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	ct, err = s.CardContent(c.ID)
 	if err != nil || ct.Plan == nil || ct.Plan.Path != "docs/p.md" || len(ct.Plan.Tasks) != 2 || ct.Plan.Tasks[1].N != 2 {
 		t.Fatalf("plan = %+v, %v", ct.Plan, err)

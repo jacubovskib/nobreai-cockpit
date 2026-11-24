@@ -49,7 +49,9 @@ export function ProjectPage() {
             <h2 style={h2}>{g.label}</h2>
             {group.length === 0 && <p style={{ ...muted, margin: 0 }}>Nenhuma entrega</p>}
             <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {group.map(({ card }) => (
+              {group.map(({ card }) => {
+                const context = contextLine(card)
+                return (
                 <li key={card.key}>
                   <Link to={withP(`/cards/${card.key}`)} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'baseline', color: 'inherit', textDecoration: 'none' }}>
                     <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: 12.5, color: 'var(--text-2)' }}>{card.key}</span>
@@ -57,11 +59,12 @@ export function ProjectPage() {
                     {isParent && card.project_id !== project.id && <span style={{ ...muted, fontSize: 12.5 }}>{appName(card.project_id, list)}</span>}
                     <span style={muted}>{stateLabel(card)}</span>
                     {card.signal && card.signal !== 'parado' && card.signal !== 'aguardando_revisao' && <span style={muted}>{signalText(card)}</span>}
-                    {contextLine(card) && <span style={muted}>{contextLine(card)}</span>}
+                    {context && <span style={muted}>{context}</span>}
                     {card.plan && card.plan.tasks.length > 0 && <PlanBlocks tasks={card.plan.tasks} />}
                   </Link>
                 </li>
-              ))}
+                )
+              })}
             </ol>
           </section>
         )

@@ -468,7 +468,7 @@ func TestPutSettingsOmittedModelWindowsKeepsDefaults(t *testing.T) {
 
 func TestSettingsPlanPatterns(t *testing.T) {
 	a := newTestAPI(t)
-	for _, bad := range []string{"docs/[plan.md", "/abs/*.md", "", " docs/p.md"} {
+	for _, bad := range []string{"docs/[plan.md", "/abs/*.md", "", " docs/p.md", "docs/**/p.md", "./docs/p.md"} {
 		rec := a.do(t, "PUT", "/api/settings", map[string]any{"plan_patterns": []string{bad}}, 0)
 		if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "padrão de plano inválido: "+bad {
 			t.Fatalf("%q = %d %s", bad, rec.Code, rec.Body)

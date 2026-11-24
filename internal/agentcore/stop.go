@@ -159,9 +159,21 @@ func (c *Core) planReminders(sess domain.Session, card domain.Card, ct domain.Co
 			return nil, err
 		}
 		out = append(out, fmt.Sprintf(
-			"NobreAI Cockpit: houve commit desde a última atualização das tarefas do card %s. Atualize com nobre task <n> andamento|revisao|concluida.", card.Key))
+			"NobreAI Cockpit: houve commit desde a última atualização das tarefas do card %s. Se alguma tarefa mudou de estado, atualize com nobre task <n> andamento|revisao|concluida; se não, só continue.", card.Key))
 	}
 	return out, nil
+}
+
+// stripWorktree tira o prefixo .worktrees/<nome>/ de um caminho relativo: um
+// plano escrito num worktree a partir do checkout principal casa como se fosse
+// do projeto.
+func stripWorktree(p string) string {
+	if rest, ok := strings.CutPrefix(p, ".worktrees/"); ok {
+		if _, tail, ok := strings.Cut(rest, "/"); ok && tail != "" {
+			return tail
+		}
+	}
+	return p
 }
 
 // sessionPlan devolve o primeiro caminho editado pela sessão que casa com um
@@ -175,7 +187,7 @@ func (c *Core) sessionPlan(sessionID string, set domain.Settings) (string, error
 		return "", err
 	}
 	for _, p := range paths {
-		if domain.MatchPlan(set.PlanPatterns, p) {
+		if domain.MatchPlan(set.PlanPatterns, stripWorktree(p)) {
 			return p, nil
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,9 +21,11 @@ func (s *Store) SetPlan(cardID int64, path string, titles []string, sessionID st
 	if len(titles) == 0 {
 		return domain.Plan{}, fmt.Errorf("%w: o plano precisa de ao menos uma tarefa", ErrInvalid)
 	}
-	for _, t := range titles {
-		if t == "" || strings.TrimSpace(t) != t {
-			return domain.Plan{}, fmt.Errorf("%w: título de tarefa vazio ou com espaços nas pontas", ErrInvalid)
+	titles = slices.Clone(titles)
+	for i, t := range titles {
+		titles[i] = strings.TrimSpace(t)
+		if titles[i] == "" {
+			return domain.Plan{}, fmt.Errorf("%w: título de tarefa vazio", ErrInvalid)
 		}
 	}
 	tx, err := s.DB.Begin()

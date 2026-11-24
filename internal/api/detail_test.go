@@ -130,3 +130,26 @@ func TestPatchInProgressNeedsLiveSession(t *testing.T) {
 		t.Fatalf("processo morto = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// O projeto efetivo de cada sessão do detalhe segue o card atual dela.
+func TestCardDetailEffectiveProject(t *testing.T) {
+	a := newTestAPI(t)
+	p1, _ := a.st.CreateProject("api", "/w/api")
+	p2, _ := a.st.CreateProject("web", "/w/web")
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: p2.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.StartSession(domain.Session{ID: "claude:x", Agent: "claude", PID: 1, Cwd: "/w/api", ProjectID: &p1.ID, StartedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.AttachSession("claude:x", c.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	d := decode[struct {
+		Sessions []SessionWithUsage `json:"sessions"`
+	}](t, a.do(t, "GET", "/api/cards/"+c.Key, nil, 0))
+	if len(d.Sessions) != 1 || d.Sessions[0].EffectiveProjectID == nil || *d.Sessions[0].EffectiveProjectID != p2.ID {
+		t.Fatalf("sessions = %+v, quer projeto efetivo %d", d.Sessions, p2.ID)
+	}
+}

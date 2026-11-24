@@ -202,6 +202,8 @@ func TestLastActivityText(t *testing.T) {
 		{domain.EvDecision, `{}`, "decisão registrada"},
 		{domain.EvSessionStart, `{}`, "sessão iniciada"},
 		{domain.EvTodo, `{}`, "tarefa atualizada"},
+		{domain.EvPlan, `{}`, "plano registrado"},
+		{domain.EvTask, `{}`, "tarefa atualizada"},
 		{domain.EvDone, `{}`, "marcado como pronto para revisão"},
 		{domain.EvHowToTest, `{"text":"go test"}`, "“como testar” registrado"},
 		{domain.EvLimitPause, `{}`, "pausado por limite de custo"},

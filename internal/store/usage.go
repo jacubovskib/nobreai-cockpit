@@ -13,7 +13,10 @@ import (
 )
 
 // sessionProjectSQL é a definição de projeto de uma sessão: o projeto do card dela;
-// sem card, o da própria sessão. Usa os aliases c (cards) e s (sessions).
+// sem card, o da própria sessão. Usa os aliases c (cards) e s (sessions); o
+// alias c depende do JOIN de quem usa: em Totals é o card do uso (u.card_id); em
+// SessionProjects e RTKBeforeAfter, o card atual da sessão (s.card_id). Os dois
+// coincidem, salvo quando a sessão trocou de card.
 const sessionProjectSQL = "COALESCE(c.project_id, s.project_id)"
 
 // UpsertUsage grava as linhas de uso; a chave é (session_id, message_id). O

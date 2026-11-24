@@ -132,7 +132,7 @@ export function ddmm(iso: string): string {
 
 // contextLine: o que a entrega está fazendo agora, a partir do plano. Vazio sem plano.
 export function contextLine(c: CardSummary): string {
-  if (c.column === 'concluido') return `concluída ${ddmm(c.updated_at)}`
+  if (c.column === 'concluido') return c.branch_merged_at ? `merge ${ddmm(c.branch_merged_at)}` : ''
   const tasks = c.plan?.tasks ?? []
   if (tasks.length === 0) return ''
   const active = tasks.find((t) => t.status === 'em_andamento' || t.status === 'em_revisao')

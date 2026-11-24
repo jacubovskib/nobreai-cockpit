@@ -138,8 +138,10 @@ func lastActivityText(e domain.Event) string {
 		t = "decisão registrada"
 	case domain.EvEssentialFile:
 		t = "arquivo essencial registrado"
-	case domain.EvTodo:
+	case domain.EvTodo, domain.EvTask:
 		t = "tarefa atualizada"
+	case domain.EvPlan:
+		t = "plano registrado"
 	case domain.EvQuestion:
 		t = "pergunta registrada"
 	case domain.EvSessionStart:

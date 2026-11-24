@@ -908,6 +908,16 @@ func TestMePIDVivoTemPrioridadeSobreCabecalho(t *testing.T) {
 	}
 }
 
+func TestMeTaskWithoutPlan(t *testing.T) {
+	a := newTestAPI(t)
+	c := a.card(t)
+	a.liveSession(t, "claude:s", 4242, c.Key)
+	rec := a.do(t, "POST", "/api/me/task", map[string]any{"n": 1, "status": "andamento"}, 4242)
+	if rec.Code != http.StatusNotFound || decode[map[string]string](t, rec)["error"] != "o card não tem plano: registre com nobre plan" {
+		t.Fatalf("sem plano = %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestMePlanAndTask(t *testing.T) {
 	a := newTestAPI(t)
 	c := a.card(t)
@@ -947,6 +957,11 @@ func TestMePlanAndTask(t *testing.T) {
 	rec = a.do(t, "POST", "/api/me/plan", map[string]any{"path": "docs/p.md", "tasks": []string{}}, 4242)
 	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "informe ao menos uma tarefa" {
 		t.Fatalf("vazio = %d %s", rec.Code, rec.Body)
+	}
+
+	rec = a.do(t, "POST", "/api/me/plan", map[string]any{"path": "  ", "tasks": []string{"A"}}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "informe o arquivo do plano" {
+		t.Fatalf("path vazio = %d %s", rec.Code, rec.Body)
 	}
 
 	a.liveSession(t, "claude:n", 4343, "")
