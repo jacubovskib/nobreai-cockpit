@@ -142,6 +142,13 @@ describe('plano nas telas de projeto', () => {
     await screen.findByText('Rodando')
     expect(screen.queryByText(/concluídas$/)).toBeNull()
   })
+  it('sinal bloqueado continua visível ao lado do estado', async () => {
+    mock({ ...routes, '/api/cards': [card({ id: 7, key: 'NAC-7', title: 'Travada', column: 'pausado', signal: 'bloqueado', signal_since: ago(5), blocked_by: 'NAC-4', updated_at: ago(5) })] })
+    wrap('/projetos/1')
+    const l = await screen.findByRole('link', { name: /NAC-7/ })
+    expect(l).toHaveTextContent('em andamento')
+    expect(l).toHaveTextContent('bloqueado por NAC-4')
+  })
   it('a página do projeto mostra estado e contexto', async () => {
     mock(withPlan)
     wrap('/projetos/1')

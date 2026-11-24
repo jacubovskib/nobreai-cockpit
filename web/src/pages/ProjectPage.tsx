@@ -7,6 +7,7 @@ import { Credits, Money } from '../ui/Money'
 import { range } from './analytics/data'
 import { ProjectTag } from '../ui/ProjectTag'
 import { PlanBlocks } from '../ui/PlanBlocks'
+import { signalText } from './board'
 import { btn, h2, muted, panel } from './card/shared'
 import { buildRows, contextLine, GROUPS, stateLabel, timeline } from './projects'
 
@@ -55,6 +56,7 @@ export function ProjectPage() {
                     <span>{card.title}</span>
                     {isParent && card.project_id !== project.id && <span style={{ ...muted, fontSize: 12.5 }}>{appName(card.project_id, list)}</span>}
                     <span style={muted}>{stateLabel(card)}</span>
+                    {card.signal && card.signal !== 'parado' && card.signal !== 'aguardando_revisao' && <span style={muted}>{signalText(card)}</span>}
                     {contextLine(card) && <span style={muted}>{contextLine(card)}</span>}
                     {card.plan && card.plan.tasks.length > 0 && <PlanBlocks tasks={card.plan.tasks} />}
                   </Link>
