@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/resume"
 )
 
 func (c *cli) start(args []string) error {
@@ -295,6 +296,9 @@ func (c *cli) status() error {
 	if len(open) > 0 {
 		fmt.Fprintf(c.out, "Perguntas em aberto:\n%s\n", strings.Join(open, "\n"))
 	}
+	if plan := resume.PlanSection(k.Content.Plan); plan != "" {
+		fmt.Fprintf(c.out, "Plano:\n%s\n", plan)
+	}
 	return nil
 }
 
@@ -392,5 +396,49 @@ func (c *cli) memorias(args []string) error {
 		}
 		fmt.Fprintln(c.out, line)
 	}
+	return nil
+}
+
+// listFlag é uma flag repetível: cada --task soma um item.
+type listFlag []string
+
+func (l *listFlag) String() string     { return strings.Join(*l, ",") }
+func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
+
+func (c *cli) plan(args []string) error {
+	const u = `uso: nobre plan <arquivo> --task "<título>" [--task ...]`
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+	var tasks listFlag
+	fs.Var(&tasks, "task", "título de uma tarefa do plano (repita para cada tarefa, em ordem)")
+	pos, err := c.parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 || len(tasks) == 0 {
+		return usagef(u)
+	}
+	body := map[string]any{"path": pos[0], "tasks": []string(tasks)}
+	var plan domain.Plan
+	if err := c.client().Do(ctx(), "POST", "/api/me/plan", body, &plan); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Plano registrado: %d tarefas.\n", len(plan.Tasks))
+	return nil
+}
+
+func (c *cli) task(args []string) error {
+	const u = "uso: nobre task <n> a-fazer|andamento|revisao|concluida"
+	if len(args) != 2 {
+		return usagef(u)
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n < 1 {
+		return usagef(u)
+	}
+	var t domain.PlanTask
+	if err := c.client().Do(ctx(), "POST", "/api/me/task", map[string]any{"n": n, "status": args[1]}, &t); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.out, "Tarefa %d: %s.\n", t.N, t.Status.Label())
 	return nil
 }

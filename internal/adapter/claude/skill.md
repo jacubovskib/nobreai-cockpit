@@ -47,6 +47,8 @@ Quando o contexto trouxer a frase "NobreAI Cockpit: esta pasta não está cadast
 - `nobre decide "PKCE em vez de segredo no cliente" --why "o app é público"`: registra uma decisão.
 - `nobre file auth/oauth.go --why "fluxo do callback" --lines L12-96`: marca um arquivo essencial (`--lines` é opcional).
 - `nobre todo add "cobrir o erro de state inválido"`: adiciona uma pendência; `nobre todo done 3` conclui a pendência 3.
+- `nobre plan docs/plan-oauth.md --task "callback" --task "refresh token"`: liga o plano ao card e registra as tarefas em ordem; rode de novo quando o plano mudar (as tarefas de mesmo título mantêm o estado).
+- `nobre task 2 andamento`: muda o estado da tarefa 2 (`a-fazer`, `andamento`, `revisao`, `concluida`).
 - `nobre ask "Usar cookie ou localStorage para o token?"`: registra uma pergunta que precisa do usuário.
 - `nobre answer 4 "cookie httpOnly"`: responde a pergunta 4 do card (os ids aparecem em `nobre ask`, `nobre status` e no pacote de retomada como `- [4] <texto>`).
 - `nobre block NAC-4 --why "precisa do merge do NAC-4"`: marca que este card só continua depois do NAC-4 (o board mostra "bloqueado por NAC-4"); `nobre block --clear` remove.
@@ -71,6 +73,7 @@ Quando o início da sessão trouxer o bloco de memórias do Cockpit ("Memórias 
 ## Como manter o card útil
 
 - Atualize "Onde parei" com `nobre note` a cada passo relevante e antes de parar. Escreva o essencial: o que está feito, o que vem agora e qualquer armadilha.
+- Ao terminar de escrever um plano de implementação, registre as tarefas com `nobre plan` (a spec não é plano). A cada tarefa iniciada, mandada para revisão ou concluída, rode `nobre task`. A tarefa é um passo do plano; `nobre todo` é uma pendência solta, fora do plano.
 - Marque com `nobre file` os arquivos essenciais, sempre com o motivo.
 - Registre decisões com o porquê, e perguntas em aberto com `nobre ask`; assim que uma pergunta for decidida, responda com `nobre answer <id> "<resposta>"`.
 - Se o card só puder continuar depois de outro, rode `nobre block <KEY> --why "<motivo>"` antes de parar; o board passa a mostrar "bloqueado por <KEY>" e, quando o outro concluir, "pronto para retomar".

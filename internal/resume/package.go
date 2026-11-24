@@ -70,7 +70,7 @@ func BuildIn(c domain.Card, project string, ct domain.Content, sessions []domain
 	}
 	section("Falta", strings.Join(open, "\n"))
 	section("Feito", strings.Join(done, "\n"))
-	section("Plano", planSection(ct.Plan))
+	section("Plano", PlanSection(ct.Plan))
 
 	var dec []string
 	for _, d := range ct.Decisions {
@@ -161,8 +161,8 @@ func Vars(c domain.Card, ct domain.Content, pkg string, readiness domain.Readine
 	}
 }
 
-// planSection resume o plano: arquivo e progresso, depois as tarefas em aberto.
-func planSection(p *domain.Plan) string {
+// PlanSection resume o plano: arquivo e progresso, depois as tarefas em aberto.
+func PlanSection(p *domain.Plan) string {
 	if p == nil || len(p.Tasks) == 0 {
 		return ""
 	}

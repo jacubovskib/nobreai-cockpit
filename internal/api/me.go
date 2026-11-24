@@ -43,6 +43,8 @@ func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/decide", s.withSessionCard(s.meContent(s.addDecision)))
 	mux.HandleFunc("POST /api/me/file", s.withSessionCard(s.meContent(s.addFile)))
 	mux.HandleFunc("POST /api/me/todo", s.withSessionCard(s.meContent(s.addTodo)))
+	mux.HandleFunc("POST /api/me/plan", s.withSessionCard(s.meContent(s.setPlan)))
+	mux.HandleFunc("POST /api/me/task", s.withSessionCard(s.meContent(s.setTask)))
 	mux.HandleFunc("POST /api/me/ask", s.withSessionCard(s.meContent(s.addQuestion)))
 	mux.HandleFunc("POST /api/me/answer", s.withSessionCard(s.meAnswer))
 	mux.HandleFunc("POST /api/me/block", s.withSessionCard(s.meBlock))
@@ -765,4 +767,55 @@ func (s *server) meBlock(w http.ResponseWriter, r *http.Request, sess domain.Ses
 	}
 	s.publish("cards")
 	s.writeCard(w, http.StatusOK, c.Key)
+}
+
+// setPlan liga o plano ao card e registra as tarefas, em ordem.
+func (s *server) setPlan(w http.ResponseWriter, r *http.Request, c domain.Card, sessionID string) {
+	var in struct {
+		Path  string   `json:"path"`
+		Tasks []string `json:"tasks"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if len(in.Tasks) == 0 {
+		writeError(w, http.StatusBadRequest, "informe ao menos uma tarefa")
+		return
+	}
+	p, err := s.st.SetPlan(c.ID, in.Path, in.Tasks, sessionID, s.now())
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	s.recordEvent(sessionID, domain.EvPlan, map[string]any{"path": p.Path, "tasks": len(p.Tasks)})
+	s.publish("cards")
+	writeJSON(w, http.StatusOK, p)
+}
+
+// setTask muda o estado de uma tarefa do plano do card.
+func (s *server) setTask(w http.ResponseWriter, r *http.Request, c domain.Card, sessionID string) {
+	var in struct {
+		N      int    `json:"n"`
+		Status string `json:"status"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	st, ok := domain.ParseTaskStatus(in.Status)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "estado inválido: use a-fazer, andamento, revisao ou concluida")
+		return
+	}
+	t, err := s.st.SetTaskStatus(c.ID, in.N, st, sessionID, s.now())
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("tarefa %d não existe no plano do card", in.N))
+		return
+	}
+	if err != nil {
+		writeStoreError(w, err, "")
+		return
+	}
+	s.recordEvent(sessionID, domain.EvTask, map[string]any{"n": t.N, "status": t.Status})
+	s.publish("cards")
+	writeJSON(w, http.StatusOK, t)
 }

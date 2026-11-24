@@ -40,7 +40,7 @@ const createGuidance = `Crie um card com nobre start "<título>" quando começar
 const AskOnlyGuidance = `Só crie card quando o usuário pedir ("crie um card para isso"); se ele citar uma chave NAC-, use nobre resume <KEY>.`
 
 // commandsGuidance são os comandos nobre para uma sessão com card.
-const commandsGuidance = `Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre block <KEY> quando o card só puder continuar depois de outro, antes de parar; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
+const commandsGuidance = `Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre plan <arquivo> --task "<tarefa>" ... ao terminar um plano; nobre task <n> <estado> a cada tarefa; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre block <KEY> quando o card só puder continuar depois de outro, antes de parar; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre status mostra o card.`
 
 // appGuidance ensina o nobre app em projetos com sub-projetos.
 const appGuidance = "Quando o card for de um app só, rode nobre app <nome> ao criar o card ou ao começar a mexer nele; nobre app --geral devolve ao projeto principal."

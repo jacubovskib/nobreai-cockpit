@@ -29,6 +29,8 @@ Agente (use dentro de uma sessão de agente):
   nobre file <path> --why "<motivo>" [--lines L12-96]     marca um arquivo essencial
   nobre todo add "<texto>"                                adiciona uma pendência
   nobre todo done <id>                                    conclui uma pendência
+  nobre plan <arquivo> --task "<título>" [--task ...]     liga o plano ao card e registra as tarefas em ordem (de novo, quando o plano mudar)
+  nobre task <n> <estado>                                 muda o estado da tarefa: a-fazer, andamento, revisao ou concluida
   nobre ask "<pergunta>"                                  registra uma pergunta em aberto
   nobre branch <nome>                                     informa o branch de trabalho do card
   nobre app <nome> | --geral                              põe o card num app (sub-projeto) do monorepo; --geral volta ao projeto principal
@@ -143,6 +145,10 @@ func (c *cli) run(args []string) int {
 		err = c.file(rest)
 	case "todo":
 		err = c.todo(rest)
+	case "plan":
+		err = c.plan(rest)
+	case "task":
+		err = c.task(rest)
 	case "done":
 		err = c.done(rest)
 	case "lembrar":

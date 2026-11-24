@@ -81,3 +81,9 @@ func TestAppIsHandoffCommand(t *testing.T) {
 		t.Fatal("nobre app deveria passar na pausa por limite")
 	}
 }
+
+func TestPlanAndTaskAreHandoffCommands(t *testing.T) {
+	if !plainNobreCommand("nobre task 2 concluida") || !plainNobreCommand(`nobre plan docs/p.md --task "A"`) {
+		t.Fatal("nobre plan e nobre task deveriam passar na pausa por limite")
+	}
+}
