@@ -43,7 +43,7 @@ func (c *Core) turnEnd(sess domain.Session, ev Event) (Reply, error) {
 	if err != nil {
 		return Reply{}, err
 	}
-	plan, err := c.sessionPlan(sess.ID, set)
+	plan, err := c.sessionPlan(sess.ID, nil, set)
 	if err != nil {
 		return Reply{}, err
 	}
@@ -51,10 +51,10 @@ func (c *Core) turnEnd(sess domain.Session, ev Event) (Reply, error) {
 		if plan == "" {
 			return Reply{}, nil
 		}
-		if done, err := c.st.SessionPlanReminded(sess.ID); err != nil || done {
+		if done, err := c.st.SessionPlanReminded(sess.ID, nil); err != nil || done {
 			return Reply{}, err
 		}
-		if err := c.st.MarkPlanReminded(sess.ID); err != nil {
+		if err := c.st.MarkPlanReminded(sess.ID, nil); err != nil {
 			return Reply{}, err
 		}
 		return Reply{HoldTurn: &Decision{Reason: fmt.Sprintf(
@@ -73,7 +73,7 @@ func (c *Core) turnEnd(sess domain.Session, ev Event) (Reply, error) {
 	}
 	reason := fmt.Sprintf(`NobreAI Cockpit: esta sessão já editou %s sem card. Se é um trabalho que precisa de histórico, rode nobre start "<título>"; se não, só continue.`, files)
 	if plan != "" {
-		if err := c.st.MarkPlanReminded(sess.ID); err != nil {
+		if err := c.st.MarkPlanReminded(sess.ID, nil); err != nil {
 			return Reply{}, err
 		}
 		reason += fmt.Sprintf("\n"+`Inclui um plano (%s): crie o card com nobre start "<título>" e registre as tarefas com nobre plan.`, plan)
@@ -122,17 +122,17 @@ func (c *Core) cardTurnEnd(sess domain.Session, set domain.Settings, ev Event) (
 func (c *Core) planReminders(sess domain.Session, card domain.Card, ct domain.Content, set domain.Settings) ([]string, error) {
 	var out []string
 	if ct.Plan == nil && len(set.PlanPatterns) > 0 {
-		done, err := c.st.SessionPlanReminded(sess.ID)
+		done, err := c.st.SessionPlanReminded(sess.ID, sess.CardID)
 		if err != nil {
 			return nil, err
 		}
 		if !done {
-			plan, err := c.sessionPlan(sess.ID, set)
+			plan, err := c.sessionPlan(sess.ID, sess.CardID, set)
 			if err != nil {
 				return nil, err
 			}
 			if plan != "" {
-				if err := c.st.MarkPlanReminded(sess.ID); err != nil {
+				if err := c.st.MarkPlanReminded(sess.ID, sess.CardID); err != nil {
 					return nil, err
 				}
 				out = append(out, fmt.Sprintf(
@@ -176,13 +176,14 @@ func stripWorktree(p string) string {
 	return p
 }
 
-// sessionPlan devolve o primeiro caminho editado pela sessão que casa com um
-// padrão de plano; "" se nenhum (ou sem padrões).
-func (c *Core) sessionPlan(sessionID string, set domain.Settings) (string, error) {
+// sessionPlan devolve o primeiro caminho editado pela sessão no card cardID
+// (nil = sem card) que casa com um padrão de plano; "" se nenhum (ou sem
+// padrões). O plano escrito noutro card da mesma sessão não conta.
+func (c *Core) sessionPlan(sessionID string, cardID *int64, set domain.Settings) (string, error) {
 	if len(set.PlanPatterns) == 0 {
 		return "", nil
 	}
-	paths, err := c.st.SessionEditedPaths(sessionID)
+	paths, err := c.st.SessionEditedPaths(sessionID, cardID)
 	if err != nil {
 		return "", err
 	}

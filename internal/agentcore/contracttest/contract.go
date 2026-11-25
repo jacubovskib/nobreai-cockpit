@@ -230,6 +230,68 @@ func Run(t *testing.T, newAdapter func(st *store.Store, deps adapter.Deps) adapt
 		}
 	})
 
+	t.Run("Stop não cobra o plano de outro card da sessão", func(t *testing.T) {
+		if fx.DecodeHold == nil {
+			t.Skip("driver sem como segurar o turno: o núcleo ainda não entrega o texto do lembrete no próximo prompt")
+		}
+		h := setup(t)
+		h.planPatterns(fx.EditPath)
+		at := t0
+		a, err := h.st.CreateCard(domain.Card{ProjectID: h.project.ID, Title: "Visão por projeto", Branch: "main",
+			WhereStopped: "plano escrito", WhereStoppedAt: &at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := h.st.CreateCard(domain.Card{ProjectID: h.project.ID, Title: "Rodar no macOS", Branch: "main",
+			WhereStopped: "começando", WhereStoppedAt: &at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.call(fx.Events.Start, fx.Start, map[string]string{"NOBRE_RESUME": a.Key})
+		h.now = t0.Add(time.Minute)
+		h.call(fx.Events.EditAfter, fx.EditAfter, nil) // o plano é do card A
+		if err := h.st.AttachSession(h.session().ID, b.Key, true); err != nil {
+			t.Fatal(err)
+		}
+		h.now = t0.Add(2 * time.Minute)
+		if reason, held := fx.DecodeHold(h.call(fx.Events.Stop, fx.Stop, nil)); held && strings.Contains(reason, "nobre plan") {
+			t.Fatalf("o card %s foi cobrado pelo plano escrito no %s: %q", b.Key, a.Key, reason)
+		}
+	})
+
+	t.Run("Stop cobra o plano do card novo depois de cobrar o do anterior", func(t *testing.T) {
+		if fx.DecodeHold == nil {
+			t.Skip("driver sem como segurar o turno: o núcleo ainda não entrega o texto do lembrete no próximo prompt")
+		}
+		h := setup(t)
+		h.planPatterns(fx.EditPath)
+		at := t0
+		var cards []domain.Card
+		for _, title := range []string{"Card A", "Card B"} {
+			c, err := h.st.CreateCard(domain.Card{ProjectID: h.project.ID, Title: title, Branch: "main",
+				WhereStopped: "andando", WhereStoppedAt: &at})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cards = append(cards, c)
+		}
+		h.call(fx.Events.Start, fx.Start, map[string]string{"NOBRE_RESUME": cards[0].Key})
+		for i, c := range cards {
+			if i > 0 {
+				if err := h.st.AttachSession(h.session().ID, c.Key, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.now = t0.Add(time.Duration(2*i+1) * time.Minute)
+			h.call(fx.Events.EditAfter, fx.EditAfter, nil)
+			h.now = t0.Add(time.Duration(2*i+2) * time.Minute)
+			reason, held := fx.DecodeHold(h.call(fx.Events.Stop, fx.Stop, nil))
+			if !held || !strings.Contains(reason, "o card "+c.Key+" ainda não tem as tarefas") {
+				t.Fatalf("plano escrito no %s: held=%v reason=%q", c.Key, held, reason)
+			}
+		}
+	})
+
 	t.Run("Stop sem card cita o plano", func(t *testing.T) {
 		if fx.DecodeHold == nil {
 			t.Skip("driver sem como segurar o turno: o núcleo ainda não entrega o texto do lembrete no próximo prompt")
