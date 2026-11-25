@@ -85,10 +85,14 @@ assert_no_file() {
 	fi
 }
 
+# O daemon falso está de pé quando existe $T_STATE/daemon_version, e o
+# conteúdo é a versão que ele roda. Os pacotes do teste são todos da versão vT.
+#
 # Binários falsos que vão dentro dos pacotes. O nobre grava as chamadas em
-# $T_LOG; o setup marca stdin-com-dados se ler algo do stdin e cria
-# $T_STATE/daemon_up (a menos que T_SETUP_SEM_DAEMON=1). T_SETUP_EXIT dá o
-# código de saída do setup.
+# $T_LOG. O setup marca stdin-com-dados se ler algo do stdin, sobe o daemon
+# em vT se ele estava fora (a menos que T_SETUP_SEM_DAEMON=1) e, com
+# T_SETUP_REINICIA=1, troca para vT um daemon que já rodava (como o setup
+# real faz quando a unit ou o plist mudam). T_SETUP_EXIT dá o código de saída.
 escreve_falsos() { # <dir>
 	mkdir -p "$1"
 	cat >"$1/nobre" <<'EOF'
@@ -97,7 +101,11 @@ echo "nobre $*" >>"$T_LOG"
 case "$1" in
 setup)
 	if read -r _x; then echo stdin-com-dados >>"$T_LOG"; fi
-	if [ "${T_SETUP_SEM_DAEMON:-}" != 1 ]; then : >"$T_STATE/daemon_up"; fi
+	if [ -f "$T_STATE/daemon_version" ]; then
+		if [ "${T_SETUP_REINICIA:-}" = 1 ]; then printf vT >"$T_STATE/daemon_version"; fi
+	elif [ "${T_SETUP_SEM_DAEMON:-}" != 1 ]; then
+		printf vT >"$T_STATE/daemon_version"
+	fi
 	exit "${T_SETUP_EXIT:-0}"
 	;;
 version)
@@ -121,19 +129,23 @@ escreve_fakebin() { # <dir>
 #!/bin/sh
 echo "curl $*" >>"$T_LOG"
 case "$*" in
-*/api/health*) [ -f "$T_STATE/daemon_up" ] && exit 0; exit 7 ;;
+*/api/health*)
+	[ -f "$T_STATE/daemon_version" ] || exit 7
+	printf '{"ok":true,"version":"%s"}' "$(cat "$T_STATE/daemon_version")"
+	exit 0
+	;;
 esac
 exit 22
 EOF
 	cat >"$1/launchctl" <<'EOF'
 #!/bin/sh
 echo "launchctl $*" >>"$T_LOG"
-: >"$T_STATE/daemon_up"
+printf vT >"$T_STATE/daemon_version"
 EOF
 	cat >"$1/systemctl" <<'EOF'
 #!/bin/sh
 echo "systemctl $*" >>"$T_LOG"
-: >"$T_STATE/daemon_up"
+printf vT >"$T_STATE/daemon_version"
 EOF
 	chmod 755 "$1/curl" "$1/launchctl" "$1/systemctl"
 }
@@ -198,21 +210,37 @@ assert_not_contains "$(log)" "stdin-com-dados" "log"
 assert_not_contains "$(log)" "kickstart" "log"
 assert_contains "$OUT" "Próximo passo" "saída"
 
+# 2ª rodada: o daemon roda uma versão velha e o setup não o reinicia.
 caso reexecucao
 roda
 assert_exit 0
+printf v0.0.1-velha >"$T_STATE/daemon_version"
 roda
 assert_exit 0
 assert_count "$H/.zprofile" "# nobreai-cockpit: PATH" 1
 assert_count "$T_LOG" "launchctl kickstart -k gui/" 1
 assert_contains "$OUT" "Serviço reiniciado" "saída"
 
+caso setup_ja_reiniciou
+printf v0.0.1-velha >"$T_STATE/daemon_version"
+roda T_SETUP_REINICIA=1
+assert_exit 0
+assert_count "$T_LOG" "kickstart" 0
+assert_not_contains "$OUT" "Serviço reiniciado" "saída"
+
+caso mesma_versao
+printf vT >"$T_STATE/daemon_version"
+roda
+assert_exit 0
+assert_count "$T_LOG" "kickstart" 0
+assert_not_contains "$OUT" "Serviço reiniciado" "saída"
+
 caso linux_bash
-: >"$T_STATE/daemon_up"
+printf v0.0.1-velha >"$T_STATE/daemon_version"
 roda NOBRE_UNAME_S=Linux NOBRE_UNAME_M=x86_64 SHELL=/bin/bash
 assert_exit 0
 assert_count "$H/.bashrc" "# nobreai-cockpit: PATH" 1
-assert_contains "$(log)" "systemctl --user restart nobred" "log"
+assert_count "$T_LOG" "systemctl --user restart nobred" 1
 assert_not_contains "$(log)" "launchctl" "log"
 
 caso bindir_no_path

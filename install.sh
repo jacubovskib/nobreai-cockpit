@@ -28,6 +28,32 @@ die() {
 # Responde 0 se o nobred atende em http://$ADDR/api/health.
 health() { curl -fsS -o /dev/null "http://$ADDR/api/health" >/dev/null 2>&1; }
 
+# Espera o health por até TRIES × 0,5 s. Se responder, guarda em RUN_VER a
+# versão informada (vazia se o daemon não informa) e responde 0.
+espera_health() {
+	i=0
+	while [ "$i" -lt "$TRIES" ]; do
+		if BODY=$(curl -fsS "http://$ADDR/api/health" 2>/dev/null); then
+			RUN_VER=$(printf '%s\n' "$BODY" |
+				sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+			return 0
+		fi
+		sleep 0.5
+		i=$((i + 1))
+	done
+	return 1
+}
+
+# Falha com a dica de onde ver o log do serviço.
+sem_api() {
+	if [ "$OS" = darwin ]; then
+		LOGCMD="tail -n 50 ~/Library/Logs/nobred.log"
+	else
+		LOGCMD="journalctl --user -u nobred -n 50"
+	fi
+	die "A API não respondeu em http://$ADDR. Veja o log: $LOGCMD"
+}
+
 # Hash sha256 de um arquivo (Linux: sha256sum; macOS: shasum).
 sha256() {
 	if command -v sha256sum >/dev/null 2>&1; then
@@ -154,8 +180,12 @@ main() {
 			die "O nobre setup terminou com pendências (veja acima)."
 		fi
 
-		# 8. Atualização: troca o daemon que estava rodando.
-		if [ "$ERA_ATUALIZACAO" = 1 ]; then
+		# 8. Atualização: se o daemon que já rodava não está na versão nova,
+		# reinicia. O setup às vezes já reinicia sozinho (quando a unit ou o
+		# plist mudam); aí a versão bate e não reinicia de novo.
+		RUN_VER=
+		if espera_health; then OK=1; else OK=0; fi
+		if [ "$ERA_ATUALIZACAO" = 1 ] && [ "$RUN_VER" != "$VER" ]; then
 			if [ "$OS" = darwin ]; then
 				launchctl kickstart -k "gui/$(id -u)/io.nobretech.nobred" </dev/null ||
 					die "Não consegui reiniciar o serviço (launchctl kickstart)."
@@ -164,27 +194,10 @@ main() {
 					die "Não consegui reiniciar o serviço (systemctl --user restart nobred)."
 			fi
 			say "Serviço reiniciado com a versão nova (terminais abertos pela plataforma foram encerrados)."
+			# 9. Espera a API de novo.
+			if espera_health; then OK=1; else OK=0; fi
 		fi
-
-		# 9. Espera a API.
-		i=0
-		OK=0
-		while [ "$i" -lt "$TRIES" ]; do
-			if health; then
-				OK=1
-				break
-			fi
-			sleep 0.5
-			i=$((i + 1))
-		done
-		if [ "$OK" != 1 ]; then
-			if [ "$OS" = darwin ]; then
-				LOGCMD="tail -n 50 ~/Library/Logs/nobred.log"
-			else
-				LOGCMD="journalctl --user -u nobred -n 50"
-			fi
-			die "A API não respondeu em http://$ADDR. Veja o log: $LOGCMD"
-		fi
+		[ "$OK" = 1 ] || sem_api
 	fi
 
 	# 10. Resumo.
