@@ -185,7 +185,7 @@ O script faz, em ordem:
 4. instala `nobre` e `nobred` em `~/.local/bin`;
 5. acrescenta `~/.local/bin` ao PATH do seu shell de login, se faltar;
 6. roda `nobre setup`: hooks, skill e serviço de usuário;
-7. se já havia um nobred rodando em outra versão, reinicia o serviço;
+7. se o nobred que responde depois do setup está em outra versão, reinicia o serviço;
 8. espera a API responder e mostra `nobre version`.
 
 Variáveis opcionais:
@@ -194,9 +194,11 @@ Variáveis opcionais:
 |---|---|
 | `NOBRE_VERSION` | Versão a instalar (ex.: `v0.1.0`). Padrão: a última release. |
 | `NOBRE_BINDIR` | Onde instalar. Padrão: `~/.local/bin`. |
+| `NOBRE_SETUP_ARGS` | Opções extras do `nobre setup`, separadas por espaço. Ex.: `--sem-statusline`. Passe de novo a cada atualização: o script roda o setup toda vez. |
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jacubovskib/nobreai-cockpit/main/install.sh | NOBRE_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/jacubovskib/nobreai-cockpit/main/install.sh | NOBRE_SETUP_ARGS=--sem-statusline sh
 ```
 
 Para usar o Kiro, instale o kiro-cli antes. Se ele não estiver instalado, o
@@ -210,13 +212,6 @@ cd nobreai-cockpit
 make check     # confere as dependências
 make setup     # compila, instala em ~/.local/bin e configura tudo
 ```
-
-O daemon não guarda o `PATH` do terminal onde você rodou o setup. Toda vez que
-abre um agente ("Continuar" ou `nobre run`) ou procura o `claude`, ele pergunta
-o `PATH` ao seu shell de login (bash ou zsh). Assim, trocar a versão do Node,
-de um venv ou do mise não quebra nada, e não é preciso reinstalar. A unidade do
-systemd (ou o LaunchAgent, no macOS) guarda o `PATH` do terminal do setup só
-como reserva, para quando o shell não puder ser consultado (fish, por exemplo).
 
 O `make setup` faz, em ordem:
 
@@ -261,6 +256,16 @@ Na interface, em **Configuração → Agentes detectados**, o Claude Code deve
 aparecer como detectado e com os hooks instalados. Se faltar algo, use
 **Instalar o que falta**.
 
+### O PATH do daemon
+
+Vale para as duas formas de instalar. O daemon não guarda o `PATH` do terminal
+onde o setup rodou (pelo script ou pelo `make setup`). Toda vez que abre um
+agente ("Continuar" ou `nobre run`) ou procura o `claude` ou o `kiro-cli`, ele
+pergunta o `PATH` ao seu shell de login (bash ou zsh). Assim, trocar a versão
+do Node, de um venv ou do mise não quebra nada, e não é preciso reinstalar. A
+unidade do systemd (ou o LaunchAgent, no macOS) guarda o `PATH` do setup só
+como reserva, para quando o shell não puder ser consultado (fish, por exemplo).
+
 ## Primeiros passos
 
 1. **Cadastre os preços dos modelos.** Em **Configuração → Preços e moeda**,
@@ -277,11 +282,12 @@ aparecer como detectado e com os hooks instalados. Se faltar algo, use
    Também dá para cadastrar em **Configuração → Projetos**. Se o agente abrir
    uma sessão num repositório ainda não cadastrado, a skill o cadastra sozinha
    e sugere cards a partir dos branches e planos em andamento.
-3. **Trabalhe normalmente.** Abra o `claude` no repositório e peça uma tarefa
-   de várias etapas. O agente cria o card, e você acompanha no **Board** sem
-   recarregar a página.
+3. **Trabalhe normalmente.** Abra o agente no repositório (`claude` ou
+   `kiro-cli chat --v3`) e peça uma tarefa de várias etapas. O agente cria o
+   card, e você acompanha no **Board** sem recarregar a página.
 
-Para conhecer a interface sem dados reais:
+Para conhecer a interface sem dados reais, rode no clone do repositório (veja
+[Compilar do código](#compilar-do-código)):
 
 ```bash
 make demo      # sobe um nobred de demonstração em http://127.0.0.1:7421
@@ -415,7 +421,7 @@ procurado em `NOBRE_ADDR` (padrão `127.0.0.1:7420`).
 | `make restart` | Reinicia o daemon |
 | `make status` | Mostra o serviço e se a API responde |
 | `make logs` | Acompanha o log do daemon (`journalctl`; no macOS, `~/Library/Logs/nobred.log`) |
-| `make demo` | Sobe um daemon de demonstração em `127.0.0.1:7421` |
+| `make demo` | Sobe um daemon de demonstração em `127.0.0.1:7421` (no clone) |
 | `make uninstall` | Desfaz o setup e apaga os binários (o banco fica) |
 | `make uninstall-dry-run` | Mostra o que o `make uninstall` removeria |
 | `make test` | `go vet`, testes Go e testes da interface |
@@ -442,8 +448,14 @@ com `make status`.
 
 ## Atualizar
 
-Rode o mesmo comando da instalação de novo. Ele baixa a última release e só
-reinicia o serviço se a versão em execução for outra:
+Atualizar reinicia o serviço `nobred`. **Reiniciar encerra os terminais
+abertos pela plataforma** (`nobre run` e agentes em segundo plano). As sessões
+abertas em janelas de terminal normais continuam. Se houver agentes rodando na plataforma, atualize quando
+eles terminarem.
+
+Quem instalou pelo script roda o mesmo comando da instalação de novo. Ele
+baixa a última release e só reinicia o serviço se a versão em execução for
+outra:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jacubovskib/nobreai-cockpit/main/install.sh | sh
@@ -457,11 +469,8 @@ git pull
 make update
 ```
 
-O `make update` recompila, reinstala os binários e reinicia o `nobred`.
-**Reiniciar encerra os terminais que estão rodando dentro da plataforma**
-(`nobre run` e "Continuar" em segundo plano). As sessões abertas em janelas de
-terminal normais continuam. Se houver agentes rodando na plataforma, use
-`make install` agora e `make restart` depois.
+O `make update` recompila, reinstala os binários e reinicia o `nobred`. Para
+adiar o reinício, use `make install` agora e `make restart` depois.
 
 Só é preciso rodar `make setup` de novo se a skill ou os hooks mudarem (o
 `PATH` o daemon pega do seu shell na hora). O setup é idempotente: o que já está certo fica como está.
