@@ -5,7 +5,7 @@ name: macOS
 
 on:
   push:
-    branches: [main, "feat/macos"]
+    branches: [main, "feat/macos", "feat/release"]
   pull_request:
   workflow_dispatch:
 
@@ -68,6 +68,41 @@ jobs:
           test "$before" = "$after"
 
       - name: nobre setup --remover
+        run: |
+          "$HOME/.local/bin/nobre" setup --remover
+          if launchctl print "gui/$(id -u)/io.nobretech.nobred" >/dev/null 2>&1; then echo "serviço ainda carregado"; exit 1; fi
+          test ! -e "$HOME/Library/LaunchAgents/io.nobretech.nobred.plist"
+
+      - name: teste do install.sh
+        run: bash scripts/test-install.sh
+
+      - name: install.sh com pacotes locais
+        run: |
+          make dist VERSION=v0.0.0-ci
+          NOBRE_RELEASE_DIR=dist NOBRE_VERSION=v0.0.0-ci sh install.sh </dev/null | tee inst.txt
+          grep -q 'nobre v0.0.0-ci' inst.txt
+          grep -q 'nobred v0.0.0-ci' inst.txt
+          plutil -lint "$HOME/Library/LaunchAgents/io.nobretech.nobred.plist"
+          grep -q 'nobreai-cockpit: PATH' ~/.zprofile || echo "$PATH" | grep -q "$HOME/.local/bin"
+
+      - name: install.sh com outra versão atualiza e reinicia
+        run: |
+          before=$(launchctl print "gui/$(id -u)/io.nobretech.nobred" | awk '/^[[:space:]]*pid = /{print $3}')
+          make dist VERSION=v0.0.0-ci2
+          NOBRE_RELEASE_DIR=dist NOBRE_VERSION=v0.0.0-ci2 sh install.sh </dev/null | tee inst2.txt
+          after=$(launchctl print "gui/$(id -u)/io.nobretech.nobred" | awk '/^[[:space:]]*pid = /{print $3}')
+          echo "pid antes=$before depois=$after"
+          test -n "$after" && test "$before" != "$after"
+          grep -q 'nobred v0.0.0-ci2' inst2.txt
+
+      - name: install.sh com a mesma versão não reinicia
+        run: |
+          before=$(launchctl print "gui/$(id -u)/io.nobretech.nobred" | awk '/^[[:space:]]*pid = /{print $3}')
+          NOBRE_RELEASE_DIR=dist NOBRE_VERSION=v0.0.0-ci2 sh install.sh </dev/null
+          after=$(launchctl print "gui/$(id -u)/io.nobretech.nobred" | awk '/^[[:space:]]*pid = /{print $3}')
+          test -n "$after" && test "$before" = "$after"
+
+      - name: remover depois do install.sh
         run: |
           "$HOME/.local/bin/nobre" setup --remover
           if launchctl print "gui/$(id -u)/io.nobretech.nobred" >/dev/null 2>&1; then echo "serviço ainda carregado"; exit 1; fi

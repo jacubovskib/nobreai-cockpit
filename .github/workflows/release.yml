@@ -1,0 +1,45 @@
+# Publica o release compilado quando uma tag v* é empurrada: testa, empacota os
+# binários de macOS e Linux (make dist) e cria o release no GitHub.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: make web
+        run: make web
+
+      - name: make test
+        run: make test
+
+      - name: make dist
+        run: make dist VERSION=${GITHUB_REF_NAME}
+
+      - name: criar o release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt --verify-tag --generate-notes
