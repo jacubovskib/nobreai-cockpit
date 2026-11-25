@@ -5,7 +5,6 @@
 package claude
 
 import (
-	"slices"
 	"sync"
 
 	"github.com/nobretech/nobreai-cockpit/internal/adapter"
@@ -56,7 +55,7 @@ func New(st *store.Store, deps adapter.Deps) *Adapter {
 	a := &Adapter{st: st}
 	a.core = agentcore.New(st, deps, a)
 	a.deps = a.core.Deps()
-	a.alive = func(pid int) bool { return slices.Contains(a.ProcessNames(), proc.Comm("/proc", pid)) }
+	a.alive = func(pid int) bool { return proc.HasName(proc.Root, pid, a.ProcessNames()) }
 	return a
 }
 

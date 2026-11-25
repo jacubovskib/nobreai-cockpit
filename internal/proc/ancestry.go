@@ -1,10 +1,12 @@
-// Package proc identifica o processo do agente a partir de /proc (Linux).
+// Package proc identifica o processo do agente: pelo /proc no Linux e pelo
+// sysctl no macOS (native_darwin.go).
 package proc
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -16,13 +18,12 @@ const maxDepth = 64
 func FindAgentAncestor(root string, start int, names []string) (int, error) {
 	pid := start
 	for i := 0; i < maxDepth && pid > 0; i++ {
-		comm, err := os.ReadFile(filepath.Join(root, strconv.Itoa(pid), "comm"))
-		if err != nil {
+		got := Names(root, pid)
+		if got == nil {
 			break
 		}
-		name := strings.TrimSuffix(string(comm), "\n")
-		for _, n := range names {
-			if n == name {
+		for _, n := range got {
+			if slices.Contains(names, n) {
 				return pid, nil
 			}
 		}
@@ -38,6 +39,9 @@ func FindAgentAncestor(root string, start int, names []string) (int, error) {
 // parentPID lê o ppid (campo 4) de <root>/<pid>/stat. O comm fica entre
 // parênteses e pode conter espaços; por isso usa o texto após o último ')'.
 func parentPID(root string, pid int) (int, error) {
+	if useNative(root) {
+		return native.parent(pid)
+	}
 	b, err := os.ReadFile(filepath.Join(root, strconv.Itoa(pid), "stat"))
 	if err != nil {
 		return 0, err
@@ -54,9 +58,16 @@ func parentPID(root string, pid int) (int, error) {
 	return strconv.Atoi(f[1]) // f[0] é o estado; f[1] é o ppid
 }
 
-// Comm devolve o nome do processo (<root>/<pid>/comm), "" se não der para ler.
+// Comm devolve o nome do processo (<root>/<pid>/comm), "" se não der para
+// ler. No macOS (root == Root) é o primeiro de Names.
 func Comm(root string, pid int) string {
 	if pid <= 0 {
+		return ""
+	}
+	if useNative(root) {
+		if n := native.names(pid); len(n) > 0 {
+			return n[0]
+		}
 		return ""
 	}
 	b, err := os.ReadFile(filepath.Join(root, strconv.Itoa(pid), "comm"))
@@ -66,10 +77,14 @@ func Comm(root string, pid int) string {
 	return strings.TrimSuffix(string(b), "\n")
 }
 
-// Alive informa se existe <root>/<pid>.
+// Alive informa se existe <root>/<pid> (no macOS, com root == Root, se o
+// processo existe).
 func Alive(root string, pid int) bool {
 	if pid <= 0 {
 		return false
+	}
+	if useNative(root) {
+		return native.alive(pid)
 	}
 	_, err := os.Stat(filepath.Join(root, strconv.Itoa(pid)))
 	return err == nil
