@@ -167,25 +167,50 @@ func TestSessionEditedPathsAndReminders(t *testing.T) {
 	if err := s.StartSession(newSession("claude:1", 10)); err != nil {
 		t.Fatal(err)
 	}
+	cardA := mustCard(t, s, "A")
+	cardB := mustCard(t, s, "B")
 	t0 := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
-	for i, p := range []string{"b.go", "a.go", "b.go", "docs/plan.md"} {
-		if err := s.AddEvent(domain.Event{SessionID: "claude:1", Kind: domain.EvFileEdit,
-			Data: []byte(`{"path":"` + p + `"}`), At: t0.Add(time.Duration(i) * time.Minute)}); err != nil {
+	edits := []struct {
+		path string
+		card *int64
+	}{{"b.go", nil}, {"a.go", nil}, {"b.go", nil}, {"docs/plan.md", nil},
+		{"docs/plan-a.md", &cardA}, {"x.go", &cardA}, {"docs/plan-b.md", &cardB}}
+	for i, e := range edits {
+		if err := s.AddEvent(domain.Event{SessionID: "claude:1", CardID: e.card, Kind: domain.EvFileEdit,
+			Data: []byte(`{"path":"` + e.path + `"}`), At: t0.Add(time.Duration(i) * time.Minute)}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got, err := s.SessionEditedPaths("claude:1")
-	if err != nil || strings.Join(got, ",") != "b.go,a.go,docs/plan.md" {
-		t.Fatalf("SessionEditedPaths = %v, %v", got, err)
+	// Só as edições feitas com a sessão naquele card (ou sem card).
+	for _, c := range []struct {
+		card *int64
+		want string
+	}{{nil, "b.go,a.go,docs/plan.md"}, {&cardA, "docs/plan-a.md,x.go"}, {&cardB, "docs/plan-b.md"}} {
+		got, err := s.SessionEditedPaths("claude:1", c.card)
+		if err != nil || strings.Join(got, ",") != c.want {
+			t.Fatalf("SessionEditedPaths(%v) = %v, %v; want %s", c.card, got, err, c.want)
+		}
 	}
-	if r, err := s.SessionPlanReminded("claude:1"); err != nil || r {
+	// O lembrete do plano vale por card: avisar no A não cala o B nem o sem card.
+	if r, err := s.SessionPlanReminded("claude:1", &cardA); err != nil || r {
 		t.Fatalf("SessionPlanReminded = %v, %v", r, err)
 	}
-	if err := s.MarkPlanReminded("claude:1"); err != nil {
+	if err := s.MarkPlanReminded("claude:1", &cardA); err != nil {
 		t.Fatal(err)
 	}
-	if r, err := s.SessionPlanReminded("claude:1"); err != nil || !r {
-		t.Fatalf("SessionPlanReminded depois de marcar = %v, %v", r, err)
+	if r, err := s.SessionPlanReminded("claude:1", &cardA); err != nil || !r {
+		t.Fatalf("SessionPlanReminded(A) depois de marcar = %v, %v", r, err)
+	}
+	for _, other := range []*int64{&cardB, nil} {
+		if r, err := s.SessionPlanReminded("claude:1", other); err != nil || r {
+			t.Fatalf("SessionPlanReminded(%v) depois de marcar A = %v, %v", other, r, err)
+		}
+	}
+	if err := s.MarkPlanReminded("claude:1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.SessionPlanReminded("claude:1", nil); err != nil || !r {
+		t.Fatalf("SessionPlanReminded(sem card) = %v, %v", r, err)
 	}
 	if v, err := s.TaskRemindedFor("claude:1"); err != nil || v != "" {
 		t.Fatalf("TaskRemindedFor = %q, %v", v, err)
@@ -196,7 +221,20 @@ func TestSessionEditedPathsAndReminders(t *testing.T) {
 	if v, err := s.TaskRemindedFor("claude:1"); err != nil || v != FmtTime(t0) {
 		t.Fatalf("TaskRemindedFor = %q, %v", v, err)
 	}
-	if err := s.MarkPlanReminded("claude:x"); !errors.Is(err, ErrNotFound) {
+	if err := s.MarkPlanReminded("claude:x", nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("MarkPlanReminded inexistente = %v", err)
 	}
+}
+
+func mustCard(t *testing.T, s *Store, title string) int64 {
+	t.Helper()
+	p, err := s.CreateProject(title, "/w/"+title)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.CreateCard(domain.Card{Title: title, ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.ID
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -497,12 +498,13 @@ func (s *Store) DistinctEditedFiles(sessionID string) (int, error) {
 	return n, err
 }
 
-// SessionEditedPaths devolve os caminhos distintos de file_edit da sessão, na
-// ordem da primeira edição.
-func (s *Store) SessionEditedPaths(sessionID string) ([]string, error) {
+// SessionEditedPaths devolve os caminhos distintos de file_edit da sessão
+// feitos enquanto ela estava no card cardID (nil = sem card), na ordem da
+// primeira edição: a sessão que troca de card não leva as edições do anterior.
+func (s *Store) SessionEditedPaths(sessionID string, cardID *int64) ([]string, error) {
 	rows, err := s.DB.Query(`SELECT json_extract(data, '$.path') AS p FROM events
-		WHERE session_id=? AND kind=? AND COALESCE(json_extract(data, '$.path'), '') <> ''
-		GROUP BY p ORDER BY MIN(id)`, sessionID, domain.EvFileEdit)
+		WHERE session_id=? AND card_id IS ? AND kind=? AND COALESCE(json_extract(data, '$.path'), '') <> ''
+		GROUP BY p ORDER BY MIN(id)`, sessionID, cardID, domain.EvFileEdit)
 	if err != nil {
 		return nil, err
 	}
@@ -564,23 +566,33 @@ func runsNobrePlanOrTask(cmd string) bool {
 	return false
 }
 
-// MarkPlanReminded marca que a sessão já recebeu o lembrete de registrar o plano.
-func (s *Store) MarkPlanReminded(id string) error {
-	res, err := s.DB.Exec(`UPDATE sessions SET plan_reminded=1 WHERE id=?`, id)
+// MarkPlanReminded marca que a sessão recebeu, no card cardID (nil = sem
+// card), o lembrete de registrar o plano.
+func (s *Store) MarkPlanReminded(id string, cardID *int64) error {
+	res, err := s.DB.Exec(`UPDATE sessions SET plan_reminded_for=? WHERE id=?`, planScope(cardID), id)
 	if err != nil {
 		return err
 	}
 	return requireAffected(res)
 }
 
-// SessionPlanReminded diz se a sessão já recebeu o lembrete de registrar o plano.
-func (s *Store) SessionPlanReminded(id string) (bool, error) {
-	var r bool
-	err := s.DB.QueryRow(`SELECT plan_reminded FROM sessions WHERE id=?`, id).Scan(&r)
+// SessionPlanReminded diz se a sessão já recebeu, no card cardID (nil = sem
+// card), o lembrete de registrar o plano.
+func (s *Store) SessionPlanReminded(id string, cardID *int64) (bool, error) {
+	var r string
+	err := s.DB.QueryRow(`SELECT plan_reminded_for FROM sessions WHERE id=?`, id).Scan(&r)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrNotFound
 	}
-	return r, err
+	return r == planScope(cardID), err
+}
+
+// planScope é o valor de plan_reminded_for para o card (ou a falta dele).
+func planScope(cardID *int64) string {
+	if cardID == nil {
+		return "sem-card"
+	}
+	return strconv.FormatInt(*cardID, 10)
 }
 
 // TaskRemindedFor devolve a última mudança de tarefa (no formato FmtTime) pela
