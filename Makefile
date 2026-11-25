@@ -6,6 +6,10 @@ BINDIR     ?= $(PREFIX)/bin
 NOBRE_ADDR ?= 127.0.0.1:7420
 DEMO_ADDR  ?= 127.0.0.1:7421
 
+# Versão gravada nos binários (git describe; "dev" fora de um repositório).
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+GO_LDFLAGS  = -X github.com/nobretech/nobreai-cockpit/internal/version.Version=$(VERSION)
+
 # Serviço do nobred: launchd no macOS (o `nobre setup` grava o LaunchAgent
 # com este rótulo), systemd do usuário nos demais.
 UNAME         := $(shell uname -s)
@@ -67,8 +71,8 @@ web: ## compila a interface web (web/dist, embutida no nobred)
 	pnpm -C web install && pnpm -C web build
 
 build: web ## compila ./nobre e ./nobred (com a interface embutida)
-	go build -o nobre ./cmd/nobre
-	go build -o nobred ./cmd/nobred
+	go build -ldflags "$(GO_LDFLAGS)" -o nobre ./cmd/nobre
+	go build -ldflags "$(GO_LDFLAGS)" -o nobred ./cmd/nobred
 
 install: build ## instala nobre e nobred em BINDIR (não reinicia o daemon)
 	install -d "$(BINDIR)"

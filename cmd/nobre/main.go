@@ -53,6 +53,7 @@ Administração:
   nobre prompt save --name <n> --tag <t>                  salva um prompt (corpo pelo stdin)
   nobre run <agente> [args...]                            roda o agente com o terminal visível na plataforma (Ctrl+] solta)
   nobre ui                                                abre o Cockpit no navegador
+  nobre version                                           mostra a versão do nobre e do nobred
   nobre setup [--dry-run] [--sem-statusline]              instala hooks, skill e status line do Claude Code e ativa o daemon
   nobre setup --remover-statusline [--dry-run]            só remove a integração da status line (devolve o comando original)
   nobre setup --remover [--dry-run]                       desfaz o setup: hooks, status line, skill e serviço (binários e banco ficam)
@@ -166,6 +167,8 @@ func (c *cli) run(args []string) int {
 		err = c.ui()
 	case "setup":
 		err = c.setup(rest)
+	case "version":
+		err = c.version()
 	default:
 		fmt.Fprintf(c.err, "comando desconhecido: %s\n\n%s", cmd, usage)
 		return 2
