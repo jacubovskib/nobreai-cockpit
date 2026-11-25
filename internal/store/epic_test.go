@@ -108,6 +108,14 @@ func TestEpicNewChildRecalc(t *testing.T) {
 	newChild(t, s, p.ID, e.ID, domain.Backlog)
 	wantCol(t, s, e.Key, domain.EmAndamento, "nova filha no backlog")
 
+	// Épico concluído sem filhas recebe a primeira, no backlog: volta ao backlog.
+	vazio := newEpic(t, s, p.ID)
+	if err := s.MoveCard(vazio.Key, domain.Concluido); err != nil {
+		t.Fatal(err)
+	}
+	newChild(t, s, p.ID, vazio.ID, domain.Backlog)
+	wantCol(t, s, vazio.Key, domain.Backlog, "épico concluído recebe filha no backlog")
+
 	e2 := newEpic(t, s, p.ID)
 	startSession(t, s, "claude:n")
 	if _, err := s.CreateCardAndAttach(domain.Card{ProjectID: p.ID, Title: "f", ParentID: &e2.ID}, "claude:n"); err != nil {
