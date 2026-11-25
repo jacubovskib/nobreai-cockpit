@@ -28,9 +28,9 @@ binário.
 <sub>O board com os cards do próprio desenvolvimento do Cockpit, que é gerenciado
 por ele mesmo.</sub>
 
-> Estado atual: piloto funcional com o **Claude Code**, em **Linux com
-> systemd** e **macOS**. Os adaptadores para Codex e Kiro, o modo tmux, os limites mensais
-> e o servidor MCP ainda não existem.
+> Estado atual: piloto funcional com o **Claude Code** e o **Kiro** (kiro-cli
+> 3.1 ou mais novo), em **Linux com systemd** e **macOS**. O adaptador para o
+> Codex, o modo tmux, os limites mensais e o servidor MCP ainda não existem.
 
 ## Sumário
 
@@ -150,18 +150,59 @@ restrito). Ele tem três páginas:
 
 ## Requisitos
 
-- **Linux com systemd** ou **macOS** (o daemon roda como serviço de usuário:
-  unidade do systemd no Linux, LaunchAgent do launchd no macOS).
+### Para instalar a versão pronta
+
+- **macOS** ou **Linux com systemd** (o daemon roda como serviço de usuário:
+  LaunchAgent do launchd no macOS, unidade do systemd no Linux).
+- **curl**.
+- **Claude Code** ou **kiro-cli** (3.1 ou mais novo), instalado e autenticado.
+
+### Para compilar do código
+
+- **Linux com systemd** ou **macOS**.
 - **Go** na versão do `go.mod` (hoje 1.26.5) ou mais nova.
 - **Node.js** e **pnpm**, para compilar a interface (testado com Node 24 e
   pnpm 11).
 - **git** e **curl**.
-- **Claude Code** instalado e autenticado.
+- **Claude Code** ou **kiro-cli** instalado e autenticado.
 - Um terminal gráfico (gnome-terminal, konsole, xfce4-terminal, terminator,
   xterm, alacritty, kitty…) para o botão "Continuar" abrir janelas. No macOS
   ele usa o Terminal.app.
 
 ## Instalação
+
+Um comando instala a versão pronta (binários compilados da última release):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jacubovskib/nobreai-cockpit/main/install.sh | sh
+```
+
+O script faz, em ordem:
+
+1. descobre o sistema (macOS ou Linux) e a arquitetura (arm64 ou amd64);
+2. baixa o pacote da release e o `checksums.txt`;
+3. confere o sha256 e para se não bater;
+4. instala `nobre` e `nobred` em `~/.local/bin`;
+5. acrescenta `~/.local/bin` ao PATH do seu shell de login, se faltar;
+6. roda `nobre setup`: hooks, skill e serviço de usuário;
+7. se já havia um nobred rodando em outra versão, reinicia o serviço;
+8. espera a API responder e mostra `nobre version`.
+
+Variáveis opcionais:
+
+| Variável | Para quê |
+|---|---|
+| `NOBRE_VERSION` | Versão a instalar (ex.: `v0.1.0`). Padrão: a última release. |
+| `NOBRE_BINDIR` | Onde instalar. Padrão: `~/.local/bin`. |
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jacubovskib/nobreai-cockpit/main/install.sh | NOBRE_VERSION=v0.1.0 sh
+```
+
+Para usar o Kiro, instale o kiro-cli antes. Se ele não estiver instalado, o
+script avisa: instale-o e rode `nobre setup` de novo.
+
+### Compilar do código
 
 ```bash
 git clone https://github.com/jacubovskib/nobreai-cockpit.git
@@ -365,7 +406,7 @@ procurado em `NOBRE_ADDR` (padrão `127.0.0.1:7420`).
 | Alvo | O que faz |
 |---|---|
 | `make` / `make help` | Lista os alvos |
-| `make check` | Confere go, node, pnpm, git, curl, systemd (ou launchd), claude e o `PATH` |
+| `make check` | Confere go, node, pnpm, git, curl, systemd (ou launchd), claude ou kiro-cli e o `PATH` |
 | `make setup` | Compila, instala e configura (primeira instalação) |
 | `make setup-dry-run` | Mostra o que o setup mudaria, sem gravar nada |
 | `make build` | Compila `./nobre` e `./nobred` com a interface embutida |
@@ -401,6 +442,16 @@ com `make status`.
 
 ## Atualizar
 
+Rode o mesmo comando da instalação de novo. Ele baixa a última release e só
+reinicia o serviço se a versão em execução for outra:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jacubovskib/nobreai-cockpit/main/install.sh | sh
+nobre version    # confere as versões do nobre e do nobred
+```
+
+Quem compila do código:
+
 ```bash
 git pull
 make update
@@ -430,6 +481,15 @@ Para fazer backup dos seus dados, copie o `cockpit.db` com o daemon parado.
 
 ## Desinstalar
 
+Quem instalou pelo script:
+
+```bash
+nobre setup --remover
+rm ~/.local/bin/nobre ~/.local/bin/nobred
+```
+
+Quem compilou do código:
+
 ```bash
 make uninstall-dry-run   # mostra o que seria removido
 make uninstall
@@ -454,6 +514,15 @@ guarda os hooks de quando começou e continuaria chamando o `nobre` apagado.
 go run ./cmd/nobred          # daemon em :7420 (use NOBRE_ADDR para outra porta)
 pnpm -C web dev              # Vite em :5173, com proxy de /api para o daemon
 make test                    # go vet, go test e vitest
+make dist                    # empacota os binários de macOS e Linux em dist/
+make test-install            # testa o install.sh com binários falsos
+```
+
+Para publicar uma versão, crie e envie a tag. O CI roda os testes, empacota
+com `make dist` e publica a release com os pacotes e o `checksums.txt`:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 Estrutura:

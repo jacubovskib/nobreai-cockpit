@@ -46,7 +46,7 @@ help: ## mostra esta ajuda
 	@echo
 	@echo "Variáveis: PREFIX=$(PREFIX)  BINDIR=$(BINDIR)  NOBRE_ADDR=$(NOBRE_ADDR)"
 
-check: ## confere as dependências (go, node, pnpm, systemd ou launchd, claude, PATH)
+check: ## confere as dependências (go, node, pnpm, systemd ou launchd, claude ou kiro-cli, PATH)
 	@ok=1; \
 	for t in go node pnpm git curl $(SVC_TOOL); do \
 	  if command -v $$t >/dev/null 2>&1; then printf '✓ %-10s %s\n' $$t "$$(command -v $$t)"; \
@@ -60,8 +60,13 @@ check: ## confere as dependências (go, node, pnpm, systemd ou launchd, claude, 
 	if [ "$(UNAME)" = Darwin ]; then echo "✓ launchd (macOS): o nobred roda como LaunchAgent"; \
 	elif systemctl --user show-environment >/dev/null 2>&1; then echo "✓ systemd do usuário disponível"; \
 	else echo "! systemctl --user não responde (o nobred roda como serviço de usuário do systemd)"; ok=0; fi; \
-	if command -v claude >/dev/null 2>&1; then echo "✓ claude     $$(command -v claude)"; \
-	else echo "! claude não está no PATH deste terminal (instale o Claude Code ou ponha o diretório dele no PATH)"; ok=0; fi; \
+	ag=; for a in claude kiro-cli; do \
+	  p=$$(command -v $$a 2>/dev/null); \
+	  if [ -z "$$p" ] && [ -x "$$HOME/.local/bin/$$a" ]; then p="$$HOME/.local/bin/$$a"; fi; \
+	  if [ -n "$$p" ]; then ag="$$ag $$p"; fi; \
+	done; \
+	if [ -n "$$ag" ]; then printf '✓ %-10s%s\n' agente "$$ag"; \
+	else echo "! nenhum agente encontrado (instale o Claude Code ou o kiro-cli)"; ok=0; fi; \
 	case ":$$PATH:" in *":$(BINDIR):"*) echo "✓ $(BINDIR) está no PATH";; \
 	  *) echo "! $(BINDIR) não está no PATH (adicione ao seu ~/.zshrc ou ~/.bashrc)"; ok=0;; esac; \
 	if [ $$ok = 1 ]; then echo; echo "Tudo certo. Próximo passo: make setup"; \
