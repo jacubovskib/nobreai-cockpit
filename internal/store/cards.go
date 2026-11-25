@@ -21,7 +21,7 @@ type CardFilter struct {
 	Agent      string  // cards com alguma sessão desse agente
 }
 
-const cardCols = `id, key, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, project_id, col, created_at, updated_at, branch_head, branch_diverged, branch_merged_at, pause_reason, handoff_incomplete, blocked_by`
+const cardCols = `id, key, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, project_id, col, created_at, updated_at, branch_head, branch_diverged, branch_merged_at, pause_reason, handoff_incomplete, blocked_by, type, parent_id, priority, points, (SELECT group_concat(label, char(31)) FROM (SELECT label FROM card_labels WHERE card_id=cards.id ORDER BY rowid))`
 
 func requireAffected(res sql.Result) error {
 	n, err := res.RowsAffected()
@@ -44,10 +44,23 @@ func scanCard(sc interface{ Scan(...any) error }) (domain.Card, error) {
 	var stopAt sql.NullString
 	var created, updated string
 	var mergedAt sql.NullString
+	var parent sql.NullInt64
+	var points sql.NullFloat64
+	var labels sql.NullString
 	err := sc.Scan(&c.ID, &c.Key, &c.Title, &c.Goal, &c.DoneWhen, &c.WhereStopped, &stopAt,
-		&c.HowToTest, &c.Branch, &c.ProjectID, &c.Column, &created, &updated, &c.BranchHead, &c.BranchDiverged, &mergedAt, &c.PauseReason, &c.HandoffIncomplete, &c.BlockedBy)
+		&c.HowToTest, &c.Branch, &c.ProjectID, &c.Column, &created, &updated, &c.BranchHead, &c.BranchDiverged, &mergedAt, &c.PauseReason, &c.HandoffIncomplete, &c.BlockedBy,
+		&c.Type, &parent, &c.Priority, &points, &labels)
 	if err != nil {
 		return c, err
+	}
+	if parent.Valid {
+		c.ParentID = &parent.Int64
+	}
+	if points.Valid {
+		c.Points = &points.Float64
+	}
+	if labels.Valid && labels.String != "" {
+		c.Labels = strings.Split(labels.String, "\x1f")
 	}
 	if mergedAt.Valid {
 		t, err := time.Parse(time.RFC3339Nano, mergedAt.String)
@@ -119,11 +132,38 @@ func (s *Store) CreateCardAndAttach(c domain.Card, sessionID string) (domain.Car
 	return c, tx.Commit()
 }
 
+func nullableFloat(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// replaceLabelsTx apaga as labels do card e grava as novas (duplicadas são ignoradas).
+func replaceLabelsTx(tx *sql.Tx, cardID int64, labels []string) error {
+	if _, err := tx.Exec(`DELETE FROM card_labels WHERE card_id=?`, cardID); err != nil {
+		return err
+	}
+	for _, l := range labels {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO card_labels(card_id, label) VALUES (?, ?)`, cardID, l); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func createCardTx(tx *sql.Tx, c domain.Card, now time.Time) (domain.Card, error) {
-	res, err := tx.Exec(`INSERT INTO cards(key, project_id, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, col, created_at, updated_at)
-		VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	if c.Type == "" {
+		c.Type = domain.TypeTarefa
+	}
+	if c.Priority == "" {
+		c.Priority = domain.PrioMedia
+	}
+	res, err := tx.Exec(`INSERT INTO cards(key, project_id, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, col, created_at, updated_at, type, parent_id, priority, points)
+		VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ProjectID, c.Title, c.Goal, c.DoneWhen, c.WhereStopped, nullableTime(c.WhereStoppedAt),
-		c.HowToTest, c.Branch, string(c.Column), fmtTime(now), fmtTime(now))
+		c.HowToTest, c.Branch, string(c.Column), fmtTime(now), fmtTime(now),
+		string(c.Type), nullableInt(c.ParentID), string(c.Priority), nullableFloat(c.Points))
 	if err != nil {
 		return c, fmt.Errorf("criar card: %w", err)
 	}
@@ -135,7 +175,35 @@ func createCardTx(tx *sql.Tx, c domain.Card, now time.Time) (domain.Card, error)
 	if _, err := tx.Exec(`UPDATE cards SET key=? WHERE id=?`, c.Key, c.ID); err != nil {
 		return c, err
 	}
+	if err := replaceLabelsTx(tx, c.ID, c.Labels); err != nil {
+		return c, err
+	}
 	return c, nil
+}
+
+// ListChildren lista as filhas do card (por id), em qualquer projeto.
+func (s *Store) ListChildren(parentID int64) ([]domain.Card, error) {
+	rows, err := s.DB.Query(`SELECT `+cardCols+` FROM cards WHERE parent_id=? ORDER BY id`, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Card
+	for rows.Next() {
+		c, err := scanCard(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// CountChildren conta as filhas do card.
+func (s *Store) CountChildren(parentID int64) (int, error) {
+	var n int
+	err := s.DB.QueryRow(`SELECT count(*) FROM cards WHERE parent_id=?`, parentID).Scan(&n)
+	return n, err
 }
 
 // GetCard busca um card pela chave (ErrNotFound se não existir).
@@ -194,7 +262,7 @@ func (s *Store) ListCards(f CardFilter) ([]domain.Card, error) {
 // em_andamento, pausado ou revisao (inclusive os já integrados: o branch pode
 // ganhar commits novos e voltar a ser acompanhado).
 func (s *Store) ListIntegrationCandidates() ([]domain.Card, error) {
-	rows, err := s.DB.Query(`SELECT ` + cardCols + ` FROM cards WHERE col IN ('em_andamento','pausado','revisao') AND branch<>'' ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT ` + cardCols + ` FROM cards WHERE col IN ('em_andamento','pausado','revisao') AND branch<>'' AND type<>'epico' ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -212,13 +280,31 @@ func (s *Store) ListIntegrationCandidates() ([]domain.Card, error) {
 
 // UpdateCard grava os campos editáveis do card (identificado por ID).
 func (s *Store) UpdateCard(c domain.Card) error {
-	res, err := s.DB.Exec(`UPDATE cards SET title=?, goal=?, done_when=?, where_stopped=?, where_stopped_at=?, how_to_test=?, branch=?, project_id=?, col=?, pause_reason=?, handoff_incomplete=?, blocked_by=?, updated_at=? WHERE id=?`,
-		c.Title, c.Goal, c.DoneWhen, c.WhereStopped, nullableTime(c.WhereStoppedAt), c.HowToTest, c.Branch,
-		c.ProjectID, string(c.Column), c.PauseReason, c.HandoffIncomplete, c.BlockedBy, fmtTime(time.Now()), c.ID)
+	if c.Type == "" {
+		c.Type = domain.TypeTarefa
+	}
+	if c.Priority == "" {
+		c.Priority = domain.PrioMedia
+	}
+	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
-	return requireAffected(res)
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE cards SET title=?, goal=?, done_when=?, where_stopped=?, where_stopped_at=?, how_to_test=?, branch=?, project_id=?, col=?, pause_reason=?, handoff_incomplete=?, blocked_by=?, type=?, parent_id=?, priority=?, points=?, updated_at=? WHERE id=?`,
+		c.Title, c.Goal, c.DoneWhen, c.WhereStopped, nullableTime(c.WhereStoppedAt), c.HowToTest, c.Branch,
+		c.ProjectID, string(c.Column), c.PauseReason, c.HandoffIncomplete, c.BlockedBy,
+		string(c.Type), nullableInt(c.ParentID), string(c.Priority), nullableFloat(c.Points), fmtTime(time.Now()), c.ID)
+	if err != nil {
+		return err
+	}
+	if err := requireAffected(res); err != nil {
+		return err
+	}
+	if err := replaceLabelsTx(tx, c.ID, c.Labels); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SetCardBranch troca o branch do card se for diferente do atual; nesse caso
