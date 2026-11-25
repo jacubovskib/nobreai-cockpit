@@ -90,9 +90,10 @@ assert_no_file() {
 #
 # Binários falsos que vão dentro dos pacotes. O nobre grava as chamadas em
 # $T_LOG. O setup marca stdin-com-dados se ler algo do stdin, sobe o daemon
-# em vT se ele estava fora (a menos que T_SETUP_SEM_DAEMON=1) e, com
-# T_SETUP_REINICIA=1, troca para vT um daemon que já rodava (como o setup
-# real faz quando a unit ou o plist mudam). T_SETUP_EXIT dá o código de saída.
+# em vT se ele estava fora (a menos que T_SETUP_SEM_DAEMON=1; com
+# T_SETUP_SOBE=<versão>, sobe nessa versão) e, com T_SETUP_REINICIA=1, troca
+# para vT um daemon que já rodava (como o setup real faz quando a unit ou o
+# plist mudam). T_SETUP_EXIT dá o código de saída.
 escreve_falsos() { # <dir>
 	mkdir -p "$1"
 	cat >"$1/nobre" <<'EOF'
@@ -104,7 +105,7 @@ setup)
 	if [ -f "$T_STATE/daemon_version" ]; then
 		if [ "${T_SETUP_REINICIA:-}" = 1 ]; then printf vT >"$T_STATE/daemon_version"; fi
 	elif [ "${T_SETUP_SEM_DAEMON:-}" != 1 ]; then
-		printf vT >"$T_STATE/daemon_version"
+		printf '%s' "${T_SETUP_SOBE:-vT}" >"$T_STATE/daemon_version"
 	fi
 	exit "${T_SETUP_EXIT:-0}"
 	;;
@@ -122,16 +123,44 @@ EOF
 	chmod 755 "$1/nobre" "$1/nobred"
 }
 
-# Comandos falsos no começo do PATH.
+# Comandos falsos no começo do PATH. O curl decide pela URL (o último
+# argumento que não é opção): health do daemon falso, a última release
+# (responde .../releases/tag/vT; falha com T_SEM_REDE=1) e os arquivos da
+# release, copiados de $T_REL para o destino do -o.
 escreve_fakebin() { # <dir>
 	mkdir -p "$1"
 	cat >"$1/curl" <<'EOF'
 #!/bin/sh
 echo "curl $*" >>"$T_LOG"
-case "$*" in
-*/api/health*)
+out=
+url=
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-o) out=$2; shift ;;
+	-w | --connect-timeout | --max-time) shift ;;
+	-*) ;;
+	*) url=$1 ;;
+	esac
+	shift
+done
+case "$url" in
+*/api/health)
 	[ -f "$T_STATE/daemon_version" ] || exit 7
 	printf '{"ok":true,"version":"%s"}' "$(cat "$T_STATE/daemon_version")"
+	exit 0
+	;;
+https://github.com/*/releases/latest)
+	if [ "${T_SEM_REDE:-}" = 1 ]; then
+		echo "curl: (6) Could not resolve host: github.com" >&2
+		exit 6
+	fi
+	printf '%s' "${url%/latest}/tag/vT"
+	exit 0
+	;;
+https://github.com/*/releases/download/vT/*)
+	f=${url##*/}
+	[ -f "$T_REL/$f" ] || exit 22
+	cp "$T_REL/$f" "$out"
 	exit 0
 	;;
 esac
@@ -188,7 +217,7 @@ caso() {
 roda() {
 	OUT=$(printf 'dados\n' | env -i \
 		HOME="$H" PATH="$P" SHELL=/bin/zsh \
-		T_LOG="$T_LOG" T_STATE="$T_STATE" \
+		T_LOG="$T_LOG" T_STATE="$T_STATE" T_REL="$REL" \
 		NOBRE_BINDIR="$BINDIR" NOBRE_RELEASE_DIR="$REL" NOBRE_VERSION=vT \
 		NOBRE_ADDR=127.0.0.1:1 NOBRE_UNAME_S=Darwin NOBRE_UNAME_M=arm64 \
 		"$@" sh "$INSTALL" 2>&1)
@@ -274,6 +303,90 @@ caso setup_falha
 roda T_SETUP_EXIT=3
 assert_exit nao0
 assert_contains "$OUT" "pendências" "saída"
+assert_contains "$OUT" "rode o script de novo" "saída"
+assert_not_contains "$OUT" "não foi reiniciado" "saída"
+
+# Setup falha numa atualização: avisa que o daemon velho segue e não reinicia.
+caso setup_falha_atualizacao
+printf v0.0.1-velha >"$T_STATE/daemon_version"
+roda T_SETUP_EXIT=3
+assert_exit nao0
+assert_contains "$OUT" "O serviço não foi reiniciado" "saída"
+assert_contains "$OUT" "rode o script de novo" "saída"
+assert_count "$T_LOG" "kickstart" 0
+
+# O daemon não respondia antes da instalação, mas o setup o sobe numa versão
+# velha (serviço que estava parado): reinicia uma vez.
+caso daemon_fora_sobe_velho
+roda T_SETUP_SOBE=v0.0.1-velha
+assert_exit 0
+assert_count "$T_LOG" "launchctl kickstart -k gui/" 1
+assert_contains "$OUT" "Serviço reiniciado" "saída"
+
+caso setup_args
+roda NOBRE_SETUP_ARGS=--sem-statusline
+assert_exit 0
+assert_contains "$(log)" "nobre setup --sem-statusline" "log"
+
+# Terminal sob Rosetta num Mac Apple Silicon: uname -m diz x86_64, mas o
+# sysctl diz que a CPU é arm64.
+caso rosetta_prefere_arm64
+cat >"$FAKEBIN/uname" <<'EOF'
+#!/bin/sh
+case "$1" in -m) echo x86_64 ;; *) echo Darwin ;; esac
+EOF
+cat >"$FAKEBIN/sysctl" <<'EOF'
+#!/bin/sh
+echo "sysctl $*" >>"$T_LOG"
+echo "${T_ARM64:-1}"
+EOF
+chmod 755 "$FAKEBIN/uname" "$FAKEBIN/sysctl"
+roda NOBRE_UNAME_M=
+assert_exit 0
+assert_contains "$OUT" "(darwin/arm64)" "saída"
+assert_contains "$(log)" "sysctl -n hw.optional.arm64" "log"
+roda NOBRE_UNAME_M= T_ARM64=0
+assert_exit 0
+assert_contains "$OUT" "(darwin/amd64)" "saída sem arm64"
+: >"$T_LOG"
+roda NOBRE_UNAME_M=x86_64
+assert_exit 0
+assert_contains "$OUT" "(darwin/amd64)" "saída com NOBRE_UNAME_M"
+assert_not_contains "$(log)" "sysctl" "log com NOBRE_UNAME_M"
+
+# macOS com bash e só um ~/.profile: o PATH vai para ele, sem criar
+# ~/.bash_profile (que faria o bash ignorar o ~/.profile).
+caso darwin_bash_profile_existente
+printf 'export FOO=1\n' >"$H/.profile"
+roda SHELL=/bin/bash
+assert_exit 0
+assert_count "$H/.profile" "# nobreai-cockpit: PATH" 1
+assert_no_file "$H/.bash_profile"
+
+caso darwin_bash_sem_perfil
+roda SHELL=/bin/bash
+assert_exit 0
+assert_count "$H/.bash_profile" "# nobreai-cockpit: PATH" 1
+assert_no_file "$H/.profile"
+
+# Caminho real do download: sem NOBRE_RELEASE_DIR nem NOBRE_VERSION, pega a
+# última release no GitHub (curl falso) e baixa pacote e checksums.
+caso download_github
+roda NOBRE_RELEASE_DIR= NOBRE_VERSION= NOBRE_REPO=dono/repo
+assert_exit 0
+assert_file "$BINDIR/nobre"
+assert_contains "$OUT" "Instalando o NobreAI Cockpit vT (darwin/arm64)" "saída"
+assert_count "$T_LOG" "https://github.com/dono/repo/releases/latest" 1
+assert_count "$T_LOG" "https://github.com/dono/repo/releases/download/vT/nobreai-cockpit_vT_darwin_arm64.tar.gz" 1
+assert_count "$T_LOG" "https://github.com/dono/repo/releases/download/vT/checksums.txt" 1
+assert_count "$T_LOG" "--connect-timeout 15" 3
+
+caso download_offline
+roda NOBRE_RELEASE_DIR= NOBRE_VERSION= NOBRE_REPO=dono/repo T_SEM_REDE=1
+assert_exit nao0
+assert_contains "$OUT" "Could not resolve host" "saída (erro do curl)"
+assert_contains "$OUT" "Não achei a última versão em github.com/dono/repo/releases (sem rede ou sem release publicada?)." "saída"
+assert_no_file "$BINDIR/nobre"
 
 caso api_nao_sobe
 roda T_SETUP_SEM_DAEMON=1 NOBRE_HEALTH_TRIES=2

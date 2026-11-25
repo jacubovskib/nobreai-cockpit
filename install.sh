@@ -9,8 +9,11 @@
 #   NOBRE_RELEASE_DIR  diretório local com os pacotes e o checksums.txt; nada é
 #                      baixado e NOBRE_VERSION passa a ser obrigatória
 #   NOBRE_ADDR         endereço do nobred; padrão: 127.0.0.1:7420
+#   NOBRE_SETUP_ARGS   opções extras do nobre setup, separadas por espaço
+#                      (ex.: --sem-statusline); cada execução roda o setup
 # Só para teste:
-#   NOBRE_UNAME_S, NOBRE_UNAME_M  substituem uname -s e uname -m
+#   NOBRE_UNAME_S, NOBRE_UNAME_M  substituem uname -s e uname -m (com
+#                                 NOBRE_UNAME_M, o sysctl do Rosetta é pulado)
 #   NOBRE_HEALTH_TRIES            tentativas de 0,5 s no health; padrão: 20
 #   NOBRE_SKIP_SETUP=1            pula o nobre setup, o reinício e a espera
 #
@@ -26,14 +29,14 @@ die() {
 }
 
 # Responde 0 se o nobred atende em http://$ADDR/api/health.
-health() { curl -fsS -o /dev/null "http://$ADDR/api/health" >/dev/null 2>&1; }
+health() { curl -fsS --max-time 2 -o /dev/null "http://$ADDR/api/health" >/dev/null 2>&1; }
 
 # Espera o health por até TRIES × 0,5 s. Se responder, guarda em RUN_VER a
 # versão informada (vazia se o daemon não informa) e responde 0.
 espera_health() {
 	i=0
 	while [ "$i" -lt "$TRIES" ]; do
-		if BODY=$(curl -fsS "http://$ADDR/api/health" 2>/dev/null); then
+		if BODY=$(curl -fsS --max-time 2 "http://$ADDR/api/health" 2>/dev/null); then
 			RUN_VER=$(printf '%s\n' "$BODY" |
 				sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 			return 0
@@ -70,7 +73,7 @@ obtem() { # <arquivo>
 	if [ -n "$RELEASE_DIR" ]; then
 		[ -f "$RELEASE_DIR/$1" ] && cp "$RELEASE_DIR/$1" "$TMP/$1" && return 0
 	else
-		curl -fsSL -o "$TMP/$1" "https://github.com/$REPO/releases/download/$VER/$1" && return 0
+		curl -fsSL --connect-timeout 15 -o "$TMP/$1" "https://github.com/$REPO/releases/download/$VER/$1" && return 0
 	fi
 	die "Não consegui obter $1 da versão $VER."
 }
@@ -104,6 +107,12 @@ main() {
 	x86_64 | amd64) ARCH=amd64 ;;
 	*) ARCH= ;;
 	esac
+	# Mac com Apple Silicon num terminal sob Rosetta: uname -m diz x86_64, mas o
+	# pacote arm64 roda nativo.
+	if [ "$OS" = darwin ] && [ "$ARCH" = amd64 ] && [ -z "${NOBRE_UNAME_M:-}" ]; then
+		ARM64=$(sysctl -n hw.optional.arm64 2>/dev/null) || ARM64=
+		[ "$ARM64" != 1 ] || ARCH=arm64
+	fi
 	if [ -z "$OS" ] || [ -z "$ARCH" ]; then
 		die "Sistema $S $M sem pacote pronto. Pacotes: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64."
 	fi
@@ -111,11 +120,13 @@ main() {
 	# 2. Versão.
 	if [ -z "$VER" ]; then
 		[ -z "$RELEASE_DIR" ] || die "NOBRE_RELEASE_DIR exige NOBRE_VERSION."
-		URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null) || URL=
+		URL=$(curl -fsSLI --connect-timeout 15 -o /dev/null -w '%{url_effective}' \
+			"https://github.com/$REPO/releases/latest") || URL=
 		case "$URL" in
 		*/tag/*) VER=${URL##*/tag/} ;;
 		esac
-		[ -n "$VER" ] || die "Não achei a última versão em github.com/$REPO/releases."
+		[ -n "$VER" ] ||
+			die "Não achei a última versão em github.com/$REPO/releases (sem rede ou sem release publicada?)."
 	fi
 	PKG="nobreai-cockpit_${VER}_${OS}_${ARCH}.tar.gz"
 	say "Instalando o NobreAI Cockpit $VER ($OS/$ARCH) em $BINDIR."
@@ -153,7 +164,14 @@ main() {
 		case "$(basename "${SHELL:-sh}")" in
 		zsh) PROFILE="$HOME/.zprofile" ;;
 		bash)
-			if [ "$OS" = darwin ]; then PROFILE="$HOME/.bash_profile"; else PROFILE="$HOME/.bashrc"; fi
+			# No macOS o bash de login lê o .bash_profile; sem ele, o .profile.
+			if [ "$OS" != darwin ]; then
+				PROFILE="$HOME/.bashrc"
+			elif [ ! -f "$HOME/.bash_profile" ] && [ -f "$HOME/.profile" ]; then
+				PROFILE="$HOME/.profile"
+			else
+				PROFILE="$HOME/.bash_profile"
+			fi
 			;;
 		*) PROFILE="$HOME/.profile" ;;
 		esac
@@ -175,17 +193,23 @@ main() {
 
 	if [ "${NOBRE_SKIP_SETUP:-}" != 1 ]; then
 		# 7. Serviço e hooks. O stdin é o próprio script (curl | sh): /dev/null
-		# evita a pergunta interativa.
-		if ! "$BINDIR/nobre" setup </dev/null; then
-			die "O nobre setup terminou com pendências (veja acima)."
+		# evita a pergunta interativa. NOBRE_SETUP_ARGS é separado em palavras
+		# de propósito (ex.: --sem-statusline).
+		# shellcheck disable=SC2086
+		if ! "$BINDIR/nobre" setup ${NOBRE_SETUP_ARGS:-} </dev/null; then
+			if [ "$ERA_ATUALIZACAO" = 1 ]; then
+				die "O nobre setup terminou com pendências (veja acima). O serviço não foi reiniciado: o nobred antigo pode continuar rodando. Corrija e rode o script de novo."
+			fi
+			die "O nobre setup terminou com pendências (veja acima). Corrija e rode o script de novo."
 		fi
 
-		# 8. Atualização: se o daemon que já rodava não está na versão nova,
-		# reinicia. O setup às vezes já reinicia sozinho (quando a unit ou o
-		# plist mudam); aí a versão bate e não reinicia de novo.
+		# 8. Se o daemon que responde não está na versão nova, reinicia. O
+		# setup às vezes já reinicia sozinho (quando a unit ou o plist mudam) e,
+		# numa instalação nova, sobe o daemon já na versão nova; aí a versão
+		# bate e não reinicia. Se a API não responde, não há o que reiniciar.
 		RUN_VER=
 		if espera_health; then OK=1; else OK=0; fi
-		if [ "$ERA_ATUALIZACAO" = 1 ] && [ "$RUN_VER" != "$VER" ]; then
+		if [ "$OK" = 1 ] && [ "$RUN_VER" != "$VER" ]; then
 			if [ "$OS" = darwin ]; then
 				launchctl kickstart -k "gui/$(id -u)/io.nobretech.nobred" </dev/null ||
 					die "Não consegui reiniciar o serviço (launchctl kickstart)."
