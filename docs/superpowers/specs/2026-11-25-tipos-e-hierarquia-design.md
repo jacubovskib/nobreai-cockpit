@@ -149,6 +149,13 @@ constantes e validação no `internal/domain` (como `Column`).
   `epico` de um card que tem filhas. A mensagem diz o que fazer ("remova as 3
   filhas do épico antes" / "tire o card do épico antes").
 - `points` ≥ 0, aceita meio ponto (0.5).
+- **Projeto do épico:** como todo card, o épico pertence a um projeto. Ele pode
+  ficar num **grupo sem pasta** (o caso de front e back como sub-projetos de um
+  mesmo grupo), exceção feita só para épicos na regra que hoje recusa card em
+  grupo sem pasta. Um épico assim não aceita sessão (não há pasta onde abrir o
+  agente); o planejamento acontece pela web ou numa sessão num dos
+  sub-projetos. Quando os repositórios não estão num grupo, o épico fica num
+  deles e as filhas podem estar em qualquer projeto. **(escolha do Claude.)**
 - Label: sem espaços (como no Jira), sem vazio, até 50 caracteres, guardada
   como digitada; duplicada no mesmo card é ignorada.
 
@@ -157,27 +164,46 @@ constantes e validação no `internal/domain` (como `Column`).
 O épico nunca é movido por sessão. A coluna dele é recalculada sempre que uma
 filha muda de coluna, entra no épico ou sai dele:
 
-| situação das filhas | coluna do épico |
+A regra é uma função pura (filhas + coluna atual do épico → coluna nova), lida
+de cima para baixo; a primeira linha que vale decide:
+
+| situação | coluna do épico |
 |---|---|
-| nenhuma filha | não recalcula: fica onde está (Backlog ao nascer; o humano pode mover entre Backlog e Concluído) |
-| todas em Backlog | Backlog |
-| alguma fora de Backlog e nem todas Concluídas | Em andamento |
-| todas Concluídas | Revisão, **a não ser que o épico já esteja em Concluído** |
+| o épico está Concluído e todas as filhas estão Concluídas (ou não há filhas) | Concluído (fica) |
+| nenhuma filha | Backlog |
+| todas as filhas em Backlog | Backlog |
+| todas as filhas Concluídas | Revisão |
+| qualquer outro caso | Em andamento |
 
 - **Revisão no lugar de Concluído** quando as filhas terminam: o humano decide
   se o épico acabou ou se faltam histórias. É o que alimenta o "Esperando você".
   Aprovar move para Concluído (o `HumanApproved` de hoje).
-- Se o épico está Concluído e uma filha reabre ou entra uma filha nova não
-  concluída, ele volta para Em andamento.
-- O épico **nunca vai para Pausado**: pausa é estado de sessão.
-- Mover o épico à mão: com filhas, só é aceito Revisão → Concluído e
-  Concluído → (recalcula). Sem filhas, Backlog ↔ Concluído. Qualquer outro
-  movimento manual devolve 409 com o motivo ("a coluna do épico segue as
-  filhas").
+- Concluído só "gruda" enquanto todas as filhas estão concluídas. Se uma filha
+  reabre ou entra uma filha nova, a tabela vale de novo: um épico Concluído que
+  ganha a primeira filha em Backlog volta para Backlog; com filhas concluídas e
+  uma nova em Backlog, vai para Em andamento.
+- Quando a última filha sai, o épico volta para Backlog (a não ser que esteja
+  Concluído).
+- O épico **nunca vai para Pausado**: pausa é estado de sessão. `nobre card add
+  --type epico --column pausado` é recusado com mensagem.
+- Mover o épico à mão: só é aceito → Concluído (com todas as filhas concluídas
+  ou sem filhas) e Concluído → reabrir (recalcula pela tabela, ignorando a
+  primeira linha). Qualquer outro movimento manual devolve 409 com o motivo ("a
+  coluna do épico segue as filhas").
+- **Virar épico:** só é aceito para um card sem sessão ao vivo e sem pai. Ao
+  virar épico, o card perde `pause_reason`, `handoff_incomplete`, `blocked_by` e
+  `branch`, e a coluna é recalculada pela tabela. **(escolha do Claude: evita
+  épico preso em Pausado ou Em andamento.)**
 - **Sessão ligada a um épico** (sessão de planejamento com `nobre resume` ou
   `nobre start` num épico) é permitida e registra custo, notas e decisões no
   épico, mas não move a coluna dele. O fim dessa sessão também não move o épico
-  nem marca handoff incompleto.
+  nem marca handoff incompleto. **(escolhas do Claude, abaixo, evitam que o
+  épico seja concluído sem o humano:)**
+  - o épico não guarda branch: `syncBranch` ignora épicos, e eles ficam fora de
+    `ListIntegrationCandidates`, então merge de branch nunca conclui um épico;
+  - `nobre done` num épico não muda a coluna: registra o que veio (como testar,
+    onde parei) e responde "a coluna do épico segue as filhas";
+  - os caminhos de limite de custo pausam a sessão, mas não movem o épico.
 - O recálculo é uma função só do store, chamada na mesma transação de todo
   caminho que muda a coluna, o tipo ou o pai de um card: `moveCardTx`,
   `UpdateCard`, `MoveCard`, `RecordIntegration`, os caminhos de limite
@@ -202,7 +228,12 @@ filha muda de coluna, entra no épico ou sai dele:
 Filtro do board (e contagem no botão) com os cards que dependem de uma pessoa.
 Um card entra quando qualquer um vale:
 
-- sinal `aguardando_voce` (pergunta aberta) ou `aguardando_revisao`;
+- tem pergunta aberta (`nobre ask` sem resposta), em qualquer coluna menos
+  Concluído e mesmo com sessão ao vivo. **(escolha do Claude: o sinal
+  `aguardando_voce` de hoje só vale em Pausado, e aí a pergunta de uma sessão de
+  planejamento num épico nunca apareceria. O sinal em si não muda; o filtro
+  conta as perguntas direto.)**;
+- sinal `aguardando_revisao`;
 - está em Revisão (inclui o épico com todas as filhas concluídas);
 - `handoff_incomplete`;
 - pausado por limite de custo;
@@ -234,7 +265,7 @@ Board › app-pagamentos   [Épico: todos ▾] [Tipo: todos ▾] [Esperando voc�
 - Filtros novos: épico (inclui "sem épico"), tipo e "Esperando você". Eles se
   somam aos de projeto e agente que já existem. O filtro de épico mostra as
   filhas de todos os projetos quando o board está em "todos os projetos"; num
-  projeto, mostra só as filhas daquele projeto (e o épico, se for dele).
+  projeto, mostra só as filhas daquele projeto e o épico, se for dele ou do grupo acima dele.
 - **Página do card:** editores de tipo, épico (seletor dos épicos abertos de
   qualquer projeto), prioridade, labels e points. Na página do épico, a lista
   das filhas com coluna, projeto, agente da última sessão e custo, e o
@@ -254,15 +285,20 @@ Board › app-pagamentos   [Épico: todos ▾] [Tipo: todos ▾] [Esperando voc�
 - `GET /api/cards/{key}` de um épico traz as filhas.
 - API do agente (`/api/me/start`, `/api/me/cards`) aceita `type`, `epic`
   (chave), `priority`, `labels` e `points`. Um endpoint novo altera esses campos
-  no card da sessão.
+  no card da sessão ou num card indicado pela chave.
 
 ### Comando `nobre` e skill
 
 - `nobre start` e `nobre card add` ganham `--type`, `--epic <KEY>`,
   `--priority`, `--label` (repetível) e `--points`.
-- Comando novo para o card da sessão: `nobre card set [--type] [--epic <KEY> |
-  --no-epic] [--priority] [--label ...] [--points]`. **(escolha do Claude: um
-  comando só em vez de um por campo.)**
+- Comando novo: `nobre card set [<KEY>] [--type] [--epic <KEY> | --no-epic]
+  [--priority] [--label ...] [--points]`. Sem `<KEY>`, age no card da sessão;
+  com `<KEY>`, em qualquer card, para o agente poder pôr cards existentes sob um
+  épico. **(escolha do Claude: um comando só em vez de um por campo.)**
+- `nobre card add` continua criando no projeto da sessão. Criar uma filha em
+  outro repositório se faz pela web ("Nova filha" escolhe o projeto) ou numa
+  sessão naquele repositório. **(escolha do Claude: evita que o agente crie
+  cards em repositórios que não está vendo.)**
 - `nobre status` mostra tipo, prioridade, épico e, para épico, o progresso.
 - A skill do Claude (`internal/adapter/claude/skill.md`), o steering do Kiro
   (`internal/adapter/kiro/steering.md`) e o resumo de comandos injetado no
