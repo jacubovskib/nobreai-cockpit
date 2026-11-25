@@ -17,10 +17,8 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/rtk"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/version"
 )
-
-// Version é a versão do nobred informada em /api/health.
-const Version = "0.1.0"
 
 // Deps são as dependências do servidor. Campos nil recebem padrão em New
 // (Now = time.Now, Hub = NewHub()); Agents, Launcher e Git podem ficar nil.
@@ -76,7 +74,7 @@ func New(st *store.Store, deps Deps) http.Handler {
 	s := &server{st: st, deps: deps, hub: deps.Hub}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": Version})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Version})
 	})
 	mux.Handle("GET /api/stream", s.hub)
 	s.cardRoutes(mux)

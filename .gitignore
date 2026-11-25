@@ -8,3 +8,4 @@ web/dist/*
 # Notas locais de agentes
 .claude/
 napkin.md
+/dist/

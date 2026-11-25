@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/version"
 )
 
 func TestRejectsForeignHost(t *testing.T) {
@@ -30,6 +31,9 @@ func TestRejectsForeignHost(t *testing.T) {
 		a.h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("host %q = %d %s", host, rec.Code, rec.Body)
+		}
+		if v := decode[map[string]any](t, rec)["version"]; v != version.Version {
+			t.Fatalf("version = %v, quer %s", v, version.Version)
 		}
 	}
 

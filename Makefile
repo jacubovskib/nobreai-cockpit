@@ -6,6 +6,10 @@ BINDIR     ?= $(PREFIX)/bin
 NOBRE_ADDR ?= 127.0.0.1:7420
 DEMO_ADDR  ?= 127.0.0.1:7421
 
+# Versão gravada nos binários (git describe; "dev" fora de um repositório).
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+GO_LDFLAGS  = -X github.com/nobretech/nobreai-cockpit/internal/version.Version=$(VERSION)
+
 # Serviço do nobred: launchd no macOS (o `nobre setup` grava o LaunchAgent
 # com este rótulo), systemd do usuário nos demais.
 UNAME         := $(shell uname -s)
@@ -30,7 +34,7 @@ SVC_LOGS       = journalctl --user -u nobred -f
 endif
 
 .DEFAULT_GOAL := help
-.PHONY: help check web build install setup setup-dry-run update restart status logs demo dev test clean uninstall uninstall-dry-run
+.PHONY: help check web build install setup setup-dry-run update restart status logs demo dev test test-install dist clean uninstall uninstall-dry-run
 
 help: ## mostra esta ajuda
 	@echo "NobreAI Cockpit"
@@ -42,7 +46,7 @@ help: ## mostra esta ajuda
 	@echo
 	@echo "Variáveis: PREFIX=$(PREFIX)  BINDIR=$(BINDIR)  NOBRE_ADDR=$(NOBRE_ADDR)"
 
-check: ## confere as dependências (go, node, pnpm, systemd ou launchd, claude, PATH)
+check: ## confere as dependências (go, node, pnpm, systemd ou launchd, claude ou kiro-cli, PATH)
 	@ok=1; \
 	for t in go node pnpm git curl $(SVC_TOOL); do \
 	  if command -v $$t >/dev/null 2>&1; then printf '✓ %-10s %s\n' $$t "$$(command -v $$t)"; \
@@ -56,8 +60,13 @@ check: ## confere as dependências (go, node, pnpm, systemd ou launchd, claude, 
 	if [ "$(UNAME)" = Darwin ]; then echo "✓ launchd (macOS): o nobred roda como LaunchAgent"; \
 	elif systemctl --user show-environment >/dev/null 2>&1; then echo "✓ systemd do usuário disponível"; \
 	else echo "! systemctl --user não responde (o nobred roda como serviço de usuário do systemd)"; ok=0; fi; \
-	if command -v claude >/dev/null 2>&1; then echo "✓ claude     $$(command -v claude)"; \
-	else echo "! claude não está no PATH deste terminal (instale o Claude Code ou ponha o diretório dele no PATH)"; ok=0; fi; \
+	ag=; for a in claude kiro-cli; do \
+	  p=$$(command -v $$a 2>/dev/null); \
+	  if [ -z "$$p" ] && [ -x "$$HOME/.local/bin/$$a" ]; then p="$$HOME/.local/bin/$$a"; fi; \
+	  if [ -n "$$p" ]; then ag="$$ag $$p"; fi; \
+	done; \
+	if [ -n "$$ag" ]; then printf '✓ %-10s%s\n' agente "$$ag"; \
+	else echo "! nenhum agente encontrado (instale o Claude Code ou o kiro-cli)"; ok=0; fi; \
 	case ":$$PATH:" in *":$(BINDIR):"*) echo "✓ $(BINDIR) está no PATH";; \
 	  *) echo "! $(BINDIR) não está no PATH (adicione ao seu ~/.zshrc ou ~/.bashrc)"; ok=0;; esac; \
 	if [ $$ok = 1 ]; then echo; echo "Tudo certo. Próximo passo: make setup"; \
@@ -67,8 +76,8 @@ web: ## compila a interface web (web/dist, embutida no nobred)
 	pnpm -C web install && pnpm -C web build
 
 build: web ## compila ./nobre e ./nobred (com a interface embutida)
-	go build -o nobre ./cmd/nobre
-	go build -o nobred ./cmd/nobred
+	go build -ldflags "$(GO_LDFLAGS)" -o nobre ./cmd/nobre
+	go build -ldflags "$(GO_LDFLAGS)" -o nobred ./cmd/nobred
 
 install: build ## instala nobre e nobred em BINDIR (não reinicia o daemon)
 	install -d "$(BINDIR)"
@@ -121,9 +130,34 @@ demo: build ## sobe um nobred com dados de demonstração em DEMO_ADDR (banco se
 dev: ## explica como rodar daemon e interface em modo de desenvolvimento
 	@echo "Rode 'go run ./cmd/nobred' em um terminal e 'pnpm -C web dev' em outro."
 
-test: ## roda go vet, testes Go e testes da interface
+test: ## roda go vet, testes Go, testes da interface e do install.sh
 	go vet ./... && go test ./... && pnpm -C web test --run
+	@$(MAKE) --no-print-directory test-install
 
-clean: ## apaga os binários e o build da interface
+test-install: ## testa o install.sh com binários falsos
+	bash scripts/test-install.sh
+
+# Pacotes da release: um tar.gz por plataforma e o checksums.txt.
+DIST_TARGETS = darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
+
+dist: web ## empacota nobre e nobred para macOS e Linux em dist/ (VERSION=v0.1.0)
+	rm -rf dist
+	mkdir -p dist/work
+	@set -e; for t in $(DIST_TARGETS); do \
+	  os=$${t%/*}; arch=$${t#*/}; w=dist/work/$${os}_$${arch}; \
+	  pkg=nobreai-cockpit_$(VERSION)_$${os}_$${arch}.tar.gz; \
+	  echo "==> $$pkg"; \
+	  mkdir -p $$w; \
+	  for c in nobre nobred; do \
+	    CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w $(GO_LDFLAGS)" -o $$w/$$c ./cmd/$$c; \
+	  done; \
+	  tar -C $$w -czf dist/$$pkg nobre nobred; \
+	done
+	rm -rf dist/work
+	@cd dist && if command -v sha256sum >/dev/null 2>&1; then sha256sum *.tar.gz; else shasum -a 256 *.tar.gz; fi > checksums.txt
+	@echo "Pacotes e checksums.txt em dist/."
+
+clean: ## apaga os binários, os pacotes e o build da interface
+	rm -rf dist
 	rm -f nobre nobred
 	find web/dist -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
