@@ -34,7 +34,7 @@ SVC_LOGS       = journalctl --user -u nobred -f
 endif
 
 .DEFAULT_GOAL := help
-.PHONY: help check web build install setup setup-dry-run update restart status logs demo dev test dist clean uninstall uninstall-dry-run
+.PHONY: help check web build install setup setup-dry-run update restart status logs demo dev test test-install dist clean uninstall uninstall-dry-run
 
 help: ## mostra esta ajuda
 	@echo "NobreAI Cockpit"
@@ -125,8 +125,12 @@ demo: build ## sobe um nobred com dados de demonstração em DEMO_ADDR (banco se
 dev: ## explica como rodar daemon e interface em modo de desenvolvimento
 	@echo "Rode 'go run ./cmd/nobred' em um terminal e 'pnpm -C web dev' em outro."
 
-test: ## roda go vet, testes Go e testes da interface
+test: ## roda go vet, testes Go, testes da interface e do install.sh
 	go vet ./... && go test ./... && pnpm -C web test --run
+	@$(MAKE) --no-print-directory test-install
+
+test-install: ## testa o install.sh com binários falsos
+	bash scripts/test-install.sh
 
 # Pacotes da release: um tar.gz por plataforma e o checksums.txt.
 DIST_TARGETS = darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
