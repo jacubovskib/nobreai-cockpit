@@ -82,7 +82,7 @@ func DetectAgentPID() int {
 			return n
 		}
 	}
-	return findAgentPID("/proc", os.Getppid(), agents.Static())
+	return findAgentPID(proc.Root, os.Getppid(), agents.Static())
 }
 
 // findAgentPID sobe a árvore de processos de root a partir de start.

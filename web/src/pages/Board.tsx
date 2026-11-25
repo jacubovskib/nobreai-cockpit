@@ -10,7 +10,7 @@ import { ReadinessPips } from '../ui/ReadinessPips'
 import { ProjectTag } from '../ui/ProjectTag'
 import { useProjectFilter, useWithProject } from '../app/project'
 import { NewTask } from './NewTask'
-import { COLUMNS, cardMarks, groupByColumn, minutesSince, plural, signalColor, signalText } from './board'
+import { COLUMNS, cardMarks, groupByColumn, minutesSince, plural, signalColor, signalText } from './boardModel'
 
 const FILTERS = [
   { id: 'todos', label: 'Todos' },

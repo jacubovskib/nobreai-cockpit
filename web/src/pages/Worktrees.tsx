@@ -6,7 +6,7 @@ import type { Project, ProjectWorktrees, Worktree, WorktreeResources, WorktreeSe
 import { AgentSwatch } from '../ui/AgentSwatch'
 import { StatusBadge } from '../ui/StatusBadge'
 import { formatBytes, formatPct } from '../ui/bytes'
-import { plural } from './board'
+import { plural } from './boardModel'
 import { h2, muted, panel } from './card/shared'
 import { BranchIcon, CardLink, SessionStatus, WorktreeTags, agoText, baseName, detailHref, machinePct, mono } from './worktreeUI'
 

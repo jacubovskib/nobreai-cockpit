@@ -4,7 +4,7 @@ import { OtherWindowTag } from '../../ui/OtherWindowTag'
 import { Credits, Money } from '../../ui/Money'
 import { Tokens } from '../../ui/Tokens'
 import { WorktreeTag } from '../../ui/WorktreeTag'
-import { minutesSince } from '../board'
+import { minutesSince } from '../boardModel'
 import { h2, muted, panel } from './shared'
 
 const cell = { padding: '8px 10px', textAlign: 'left' as const, whiteSpace: 'nowrap' as const }

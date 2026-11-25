@@ -109,7 +109,7 @@ func TestDeleteWorktreeBranchIntegratedCases(t *testing.T) {
 	})
 	t.Run("branch em uso em outro worktree", func(t *testing.T) {
 		a, p, main, wt := rmSetup(t)
-		other := filepath.Join(t.TempDir(), "outro")
+		other := filepath.Join(realTempDir(t), "outro")
 		gitRun(t, main, "worktree", "add", "-q", "--force", other, "feat/wt")
 		ch, cancel := a.hub.Subscribe()
 		defer cancel()

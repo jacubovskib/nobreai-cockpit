@@ -1,4 +1,4 @@
-import { buildRows, contextLine, stateLabel, timeline } from './projects'
+import { buildRows, contextLine, stateLabel, timeline } from './projectsModel'
 import type { CardSummary, Project, SessionWithUsage, Total } from '../api/types'
 
 const T = '2026-11-10T12:00:00Z'

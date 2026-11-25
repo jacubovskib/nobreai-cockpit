@@ -2,14 +2,17 @@
 package launch
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Launcher inicia um processo e o solta do daemon.
@@ -83,8 +86,14 @@ func (e Exec) Start(argv []string) error {
 		return fmt.Errorf("comando vazio")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Env = withGraphicalEnv(os.Environ(), e.ShowEnv)
+	cmd.Env = os.Environ()
+	if runtime.GOOS == "linux" { // o ambiente gráfico do systemd só existe no Linux
+		cmd.Env = withGraphicalEnv(cmd.Env, e.ShowEnv)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if filepath.Base(argv[0]) == "osascript" {
+		return startOsascript(cmd)
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -96,6 +105,55 @@ func (e Exec) Start(argv []string) error {
 	return nil
 }
 
+// osascriptWait é quanto o Start espera o osascript responder: ele sai logo
+// depois de abrir a janela, e com erro quando o macOS nega ao nobred o
+// controle do Terminal (Automação). Enquanto o pedido de permissão está na
+// tela ele não sai; passado o prazo, o Start conta como aberto.
+var osascriptWait = 5 * time.Second
+
+func startOsascript(cmd *exec.Cmd) error {
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("o Terminal não abriu (%v: %s). No macOS, permita que o nobred controle o Terminal em Ajustes do Sistema → Privacidade e Segurança → Automação",
+				err, strings.TrimSpace(stderr.String()))
+		}
+		return nil
+	case <-time.After(osascriptWait):
+		go func() {
+			if err := <-done; err != nil {
+				log.Printf("launch: osascript terminou com erro: %v: %s", err, strings.TrimSpace(stderr.String()))
+			}
+		}()
+		return nil
+	}
+}
+
+// writeScript grava script num arquivo temporário (0600) que se apaga ao
+// rodar, e devolve o caminho.
+func writeScript(script string) (string, error) {
+	f, err := os.CreateTemp("", "nobre-continuar-*.sh")
+	if err != nil {
+		return "", err
+	}
+	_, werr := f.WriteString("rm -f \"$0\"\n" + script + "\n")
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(f.Name())
+		return "", werr
+	}
+	return f.Name(), nil
+}
+
 // quote protege s para o shell com aspas simples.
 func quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
@@ -105,9 +163,17 @@ func quote(s string) string {
 type Resolver func(name string) (string, error)
 
 // ResolveBinary acha name no PATH e segue os symlinks (x-terminal-emulator →
-// /usr/bin/terminator, por exemplo).
+// /usr/bin/terminator, por exemplo). No macOS, sem x-terminal-emulator (o
+// terminal padrão da Configuração), resolve o osascript: o Terminal.app.
 func ResolveBinary(name string) (string, error) {
+	return resolveBinaryOn(runtime.GOOS, name)
+}
+
+func resolveBinaryOn(goos, name string) (string, error) {
 	p, err := exec.LookPath(name)
+	if err != nil && goos == "darwin" && name == "x-terminal-emulator" {
+		p, err = exec.LookPath("osascript")
+	}
 	if err != nil {
 		return "", err
 	}
@@ -164,11 +230,17 @@ func TerminalArgv(terminalCmd []string, path, dir string, env map[string]string,
 	return TerminalArgvWith(ResolveBinary, terminalCmd, path, dir, env, agentArgv)
 }
 
+// appleScriptString devolve s como literal de string do AppleScript.
+func appleScriptString(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}
+
 // TerminalArgvWith resolve terminalCmd[0] e, pelo nome do binário, usa o
 // formato de execução de comando do terminal: terminator aceita -e com uma
 // string (rodada por $SHELL -c, também na partida a frio); gnome-terminal usa
 // "-- sh -c" (o wrapper da Debian usa -e); xfce4-terminal usa "-x sh -c";
-// konsole, xterm, alacritty e kitty usam "-e sh -c". Desconhecido: terminalCmd + o script como último argumento.
+// konsole, xterm, alacritty e kitty usam "-e sh -c"; osascript (macOS) abre o
+// Terminal.app com "do script". Desconhecido: terminalCmd + o script como último argumento.
 // PATH, diretório e variáveis vão dentro do script porque o terminator e o
 // gnome-terminal reaproveitam uma instância aberta via DBus e descartam o
 // cwd e o env de quem chamou.
@@ -193,6 +265,21 @@ func TerminalArgvWith(resolve Resolver, terminalCmd []string, path, dir string, 
 				return []string{bin, "--", "/bin/sh", "-c", script}
 			case base == "konsole", base == "xterm", base == "alacritty", base == "kitty":
 				return []string{bin, "-e", "/bin/sh", "-c", script}
+			case base == "osascript":
+				// macOS: o "do script" do Terminal.app DIGITA o texto no shell
+				// interativo da janela nova (zsh, bash ou fish). O script vai
+				// num arquivo e só um comando curto é digitado: o pacote de
+				// retomada tem quebras de linha, tabs e vários KB. Na primeira
+				// vez o macOS pede para o nobred controlar o Terminal.
+				cmd := "/bin/sh -c " + quote(script)
+				if f, err := writeScript(script); err == nil {
+					cmd = "exec /bin/sh " + quote(f)
+				}
+				return []string{bin,
+					"-e", `tell application "Terminal"`,
+					"-e", "do script " + appleScriptString(cmd),
+					"-e", "activate",
+					"-e", "end tell"}
 			}
 		}
 	}

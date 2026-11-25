@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
@@ -17,7 +16,7 @@ import (
 const IdleNoPID = 2 * time.Hour
 
 // Liveness decide se o processo de uma sessão ainda é o agente dela: o PID
-// existe em ProcRoot (/proc) e, para agente que está em Names, o nome do
+// existe em ProcRoot (proc.Root) e, para agente que está em Names, o nome do
 // processo (comm) é um dos nomes dele, a mesma checagem do roteamento dos
 // hooks. Um PID reaproveitado por outro programa conta como morto. Agente
 // fora de Names (ou Names vazio, como na demonstração): basta o PID existir.
@@ -35,7 +34,7 @@ func (l Liveness) Alive(x domain.Session) bool {
 	if !ok {
 		return true
 	}
-	return slices.Contains(names, proc.Comm(l.ProcRoot, x.PID))
+	return proc.HasName(l.ProcRoot, x.PID, names)
 }
 
 // Reconcile confere as sessões vivas com o processo de cada uma (live). Sessão

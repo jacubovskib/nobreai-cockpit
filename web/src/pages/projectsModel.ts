@@ -1,5 +1,5 @@
 import type { CardSummary, Project, SessionWithUsage, Total } from '../api/types'
-import { signalText } from './board'
+import { signalText } from './boardModel'
 
 export interface ProjectRow {
   project: Project | null

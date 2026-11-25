@@ -1,7 +1,7 @@
 // Peças compartilhadas pela lista e pelo detalhe de worktrees.
 import { Link } from 'react-router-dom'
 import type { CardRef, Worktree, WorktreeResources, WorktreeSession } from '../api/types'
-import { minutesSince } from './board'
+import { minutesSince } from './boardModel'
 import { muted } from './card/shared'
 import { useWithProject } from '../app/project'
 

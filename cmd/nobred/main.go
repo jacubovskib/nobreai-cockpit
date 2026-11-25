@@ -25,6 +25,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/integration"
 	"github.com/nobretech/nobreai-cockpit/internal/launch"
+	"github.com/nobretech/nobreai-cockpit/internal/proc"
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/resources"
 	"github.com/nobretech/nobreai-cockpit/internal/rtk"
@@ -134,7 +135,7 @@ func run(dbPath string, seedDemo bool) error {
 	defer claudeAdapter.Wait()
 	// Recursos dos worktrees: processos a cada 5 s (só em memória) e disco
 	// medido em segundo plano, com cache de 10 min.
-	monitor := resources.Monitor{Sampler: resources.NewSampler("/proc", time.Now), Meter: resources.NewDiskMeter(10*time.Minute, time.Now)}
+	monitor := resources.Monitor{Sampler: resources.NewSampler(proc.Root, time.Now), Meter: resources.NewDiskMeter(10*time.Minute, time.Now)}
 	// Ordem no desligamento: o servidor HTTP para primeiro (Shutdown, no corpo
 	// de run), depois os terminais morrem (Close), depois o Wait do adaptador
 	// e por fim o banco.
@@ -169,7 +170,7 @@ func run(dbPath string, seedDemo bool) error {
 	handler := api.New(st, api.Deps{
 		Integration: integ,
 		Now:         time.Now,
-		ProcRoot:    "/proc",
+		ProcRoot:    proc.Root,
 		Git:         git,
 		Launcher:    launch.Exec{},
 		Hub:         hub,
@@ -201,7 +202,7 @@ func run(dbPath string, seedDemo bool) error {
 	// Reconciliação a cada 30 s: encerra sessões de processos que morreram (ou
 	// cujo PID passou para outro programa). A demonstração usa o PID do próprio
 	// nobred nas sessões vivas: lá basta o PID existir.
-	live := board.Liveness{ProcRoot: "/proc"}
+	live := board.Liveness{ProcRoot: proc.Root}
 	if !seedDemo {
 		live.Names = registry.ProcessNames()
 	}
