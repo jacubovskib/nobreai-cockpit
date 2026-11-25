@@ -82,4 +82,10 @@ describe('applyBoardFilter e epicOptions', () => {
   it('epicOptions lista só os épicos', () => {
     expect(epicOptions(cards)).toEqual([{ key: 'NAC-60', title: 'Checkout novo' }])
   })
+  it('epicOptions inclui o épico citado pelas filhas visíveis e o selecionado sem dados', () => {
+    const filhas = [c({ key: 'NAC-71', parent_key: 'NAC-70', parent_title: 'De outro projeto' }), c({ key: 'NAC-72', parent_key: 'NAC-70', parent_title: 'De outro projeto' })]
+    expect(epicOptions(filhas)).toEqual([{ key: 'NAC-70', title: 'De outro projeto' }])
+    expect(epicOptions(filhas, 'NAC-99')).toEqual([{ key: 'NAC-70', title: 'De outro projeto' }, { key: 'NAC-99', title: '' }])
+    expect(epicOptions(cards, 'none')).toHaveLength(1)
+  })
 })

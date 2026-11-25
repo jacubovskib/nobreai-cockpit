@@ -177,7 +177,7 @@ export function Board() {
   const groupEpics = all.filter((c) => c.type === 'epico' && !inProject(c) && parentIds.has(c.project_id)
     && (c.key === filter.epic || visibleParents.has(c.key)))
   const scoped = [...groupEpics, ...byProject]
-  const options = epicOptions(scoped)
+  const options = epicOptions(scoped, filter.epic)
   const withoutWaiting = applyBoardFilter(scoped.filter((c) => c.type === 'epico' || agent === 'todos' || c.agent === agent), { ...filter, waiting: false })
   const waitingCount = withoutWaiting.filter((c) => c.waiting_on_you).length
   const cards = filter.waiting ? withoutWaiting.filter((c) => c.waiting_on_you) : withoutWaiting
@@ -216,7 +216,7 @@ export function Board() {
           <select aria-label="Filtrar por épico" value={filter.epic} onChange={(e) => setParam('epico', e.target.value)} style={selectStyle}>
             <option value="">Todos</option>
             <option value="none">Sem épico</option>
-            {options.map((o) => <option key={o.key} value={o.key}>{o.key} {o.title}</option>)}
+            {options.map((o) => <option key={o.key} value={o.key}>{o.title ? `${o.key} ${o.title}` : o.key}</option>)}
           </select>
         </label>
         <label style={{ fontSize: 13, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6 }}>

@@ -99,6 +99,14 @@ describe('NewTask · tipo e épico', () => {
     expect(screen.getByRole('option', { name: 'grupo' })).toBeInTheDocument()
     expect(screen.queryByLabelText('Épico')).toBeNull()
   })
+  it('Nova filha de épico concluído mostra o épico escolhido, não "sem épico"', async () => {
+    wrap('/?projeto=1', { epic: 'NAC-8', label: 'Nova filha' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova filha' }))
+    await screen.findByRole('option', { name: 'NAC-8 · Velho' })
+    const sel = screen.getByLabelText('Épico') as HTMLSelectElement
+    expect(sel.value).toBe('NAC-8')
+    expect(sel.selectedOptions[0].textContent).toBe('NAC-8 · Velho')
+  })
   it('Nova filha abre com o épico preenchido e o projeto escolhível', async () => {
     wrap('/?projeto=1', { epic: 'NAC-7', label: 'Nova filha' })
     fireEvent.click(await screen.findByRole('button', { name: 'Nova filha' }))

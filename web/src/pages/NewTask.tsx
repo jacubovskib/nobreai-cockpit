@@ -27,7 +27,7 @@ export function NewTask({ epic = '', label = 'Nova tarefa' }: { epic?: string; l
   // Só épico pode ir para um grupo sem pasta.
   const choices = (projects ?? []).filter((p) => type === 'epico' || !isGroup(p) || p.path !== '')
   const repos = choices
-  const epics = (cards ?? []).filter((c) => c.type === 'epico' && c.column !== 'concluido')
+  const epics = (cards ?? []).filter((c) => c.type === 'epico' && (c.column !== 'concluido' || c.key === epic))
   const chosen = project || String(repos.find((p) => p.id === projectId)?.id ?? repos[0]?.id ?? '')
   const create = useMutation({
     mutationFn: () =>

@@ -75,6 +75,12 @@ export function applyBoardFilter(cards: CardSummary[], f: BoardFilter): CardSumm
   })
 }
 
-export function epicOptions(cards: CardSummary[]): { key: string; title: string }[] {
-  return cards.filter((c) => c.type === 'epico').map((c) => ({ key: c.key, title: c.title }))
+// epicOptions: os épicos da lista e os citados por parent_key das filhas dela
+// (o épico pode estar em outro projeto). `selected` não encontrado entra só com a chave.
+export function epicOptions(cards: CardSummary[], selected = ''): { key: string; title: string }[] {
+  const out = new Map<string, string>()
+  for (const c of cards) if (c.type === 'epico') out.set(c.key, c.title)
+  for (const c of cards) if (c.parent_key && !out.has(c.parent_key)) out.set(c.parent_key, c.parent_title || '')
+  if (selected && selected !== 'none' && !out.has(selected)) out.set(selected, '')
+  return [...out].map(([key, title]) => ({ key, title }))
 }

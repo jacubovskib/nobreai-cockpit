@@ -204,4 +204,31 @@ describe('Board tipos e hierarquia', () => {
     wrap(<Board />, '/board?projeto=2')
     expect(await screen.findByRole('article', { name: /NAC-10/ })).toBeInTheDocument()
   })
+  it('o select de épico oferece o épico de outro projeto cujas filhas estão visíveis', async () => {
+    mock({
+      '/api/projects': [
+        { id: 1, name: 'api', path: '/w/api', capture: true, parent_id: null },
+        { id: 2, name: 'web', path: '/w/web', capture: true, parent_id: null },
+      ],
+      '/api/cards': [
+        card({ ...base, id: 10, key: 'NAC-10', title: 'Épico da api', type: 'epico', project_id: 1, children: { total: 2, done: 0 }, tree_totals: t(1) }),
+        card({ ...base, id: 11, key: 'NAC-11', title: 'Filha do web', project_id: 2, parent_id: 10, parent_key: 'NAC-10', parent_title: 'Épico da api' }),
+        card({ ...base, id: 12, key: 'NAC-12', title: 'Solta do web', project_id: 2 }),
+      ],
+    })
+    wrap(<Board />, '/board?projeto=2')
+    expect(await screen.findByText('Solta do web')).toBeInTheDocument()
+    const sel = screen.getByLabelText('Filtrar por épico') as HTMLSelectElement
+    expect(within(sel).getByRole('option', { name: 'NAC-10 Épico da api' })).toBeInTheDocument()
+    fireEvent.change(sel, { target: { value: 'NAC-10' } })
+    expect(await screen.findByText('Filha do web')).toBeInTheDocument()
+    expect(screen.queryByText('Solta do web')).toBeNull()
+  })
+  it('?epico= fora das opções mostra uma opção com a chave', async () => {
+    mock(tree)
+    wrap(<Board />, '/board?epico=NAC-99')
+    const sel = (await screen.findByLabelText('Filtrar por épico')) as HTMLSelectElement
+    expect(sel.value).toBe('NAC-99')
+    expect(within(sel).getByRole('option', { name: 'NAC-99' })).toBeInTheDocument()
+  })
 })
