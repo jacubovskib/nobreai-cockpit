@@ -37,6 +37,7 @@ const (
 func (s *server) meRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/start", s.withSession(s.meStart))
 	mux.HandleFunc("POST /api/me/cards", s.withSession(s.meCards))
+	mux.HandleFunc("POST /api/me/card-set", s.withSession(s.meCardSet))
 	mux.HandleFunc("POST /api/me/resume", s.withSession(s.meResume))
 	mux.HandleFunc("GET /api/me/status", s.withSession(s.meStatus))
 	mux.HandleFunc("POST /api/me/note", s.withSessionCard(s.meNote))
@@ -209,6 +210,7 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		Title    string `json:"title"`
 		Goal     string `json:"goal"`
 		DoneWhen string `json:"done_when"`
+		hierarchyInput
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -221,8 +223,13 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 	if !ok {
 		return
 	}
-	c, err := s.st.CreateCardAndAttach(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
-		ProjectID: projectID}, sess.ID) // o branch vem do syncBranch: a base nunca vira branch do card
+	nc := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, ProjectID: projectID}
+	if code, msg := s.applyHierarchy(&nc, in.hierarchyInput, true); code != 0 {
+		writeError(w, code, msg)
+		return
+	}
+	// o branch vem do syncBranch: a base nunca vira branch do card
+	c, err := s.st.CreateCardAndAttach(nc, sess.ID)
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
@@ -242,12 +249,17 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		Branch       string `json:"branch"`
 		WhereStopped string `json:"where_stopped"`
 		Column       string `json:"column"`
+		hierarchyInput
 	}
 	if !readJSON(w, r, &in) {
 		return
 	}
 	if strings.TrimSpace(in.Title) == "" {
 		writeError(w, http.StatusBadRequest, "título obrigatório")
+		return
+	}
+	if in.wantsEpic() && in.Column == string(domain.Pausado) {
+		writeError(w, http.StatusBadRequest, "um épico não vai para Pausado; crie em backlog")
 		return
 	}
 	col := domain.Column(in.Column)
@@ -286,6 +298,10 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		now := s.now()
 		card.WhereStopped, card.WhereStoppedAt = w, &now
 	}
+	if code, msg := s.applyHierarchy(&card, in.hierarchyInput, true); code != 0 {
+		writeError(w, code, msg)
+		return
+	}
 	c, err := s.st.CreateCard(card)
 	if err != nil {
 		writeStoreError(w, err, "")
@@ -293,6 +309,76 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 	}
 	s.publish("cards")
 	s.writeCard(w, http.StatusCreated, c.Key)
+}
+
+// meCardSet muda tipo, pai, prioridade, labels e points de um card: o da
+// sessão ou, com key, qualquer um. Valida tudo antes de gravar.
+func (s *server) meCardSet(w http.ResponseWriter, r *http.Request, sess domain.Session) {
+	var in struct {
+		Key string `json:"key"`
+		hierarchyInput
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	var c domain.Card
+	if key := normKey(in.Key); key != "" {
+		var err error
+		if c, err = s.st.GetCard(key); err != nil {
+			writeStoreError(w, err, "card "+key+" não encontrado")
+			return
+		}
+	} else {
+		var ok bool
+		if c, ok = s.sessionCard(w, sess); !ok {
+			return
+		}
+	}
+	oldType, oldBranch := c.Type, c.Branch
+	if code, msg := s.applyHierarchy(&c, in.hierarchyInput, false); code != 0 {
+		writeError(w, code, msg)
+		return
+	}
+	// Épico que deixa de ser épico não pode ficar num grupo sem pasta.
+	if oldType == domain.TypeEpico && c.Type != domain.TypeEpico {
+		p, err := s.projectByID(c.ProjectID)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if p != nil && p.IsGroup() && p.Path == "" {
+			writeError(w, http.StatusBadRequest, msgGroupNoCards)
+			return
+		}
+	}
+	// Daqui em diante só gravações.
+	if oldBranch != "" && c.Branch == "" {
+		if _, err := s.st.SetCardBranch(c.ID, ""); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+	}
+	if err := s.st.UpdateCard(c); err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	s.publish("cards")
+	got, err := s.st.GetCardByID(c.ID)
+	if err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	got.Labels = nonNil(got.Labels)
+	out := struct {
+		domain.Card
+		ParentKey string `json:"parent_key"`
+	}{Card: got}
+	if got.ParentID != nil {
+		if p, err := s.st.GetCardByID(*got.ParentID); err == nil {
+			out.ParentKey = p.Key
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *server) meResume(w http.ResponseWriter, r *http.Request, sess domain.Session) {
@@ -681,6 +767,10 @@ func (s *server) meDone(w http.ResponseWriter, r *http.Request, sess domain.Sess
 		Force bool `json:"force"`
 	}
 	if !readJSON(w, r, &in) { // corpo vazio é aceito (force=false)
+		return
+	}
+	if c.Type == domain.TypeEpico {
+		writeError(w, http.StatusConflict, c.Key+" é um épico: a coluna do épico segue as filhas (nada mudou)")
 		return
 	}
 	limitPaused := c.Column == domain.Pausado && c.PauseReason == domain.PauseReasonLimit &&
