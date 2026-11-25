@@ -5,6 +5,9 @@ export type Column = 'backlog' | 'em_andamento' | 'pausado' | 'revisao' | 'concl
 
 export type Signal = '' | 'parado' | 'aguardando_revisao' | 'aguardando_voce' | 'bloqueado' | 'pronto_para_retomar'
 
+export type CardType = 'epico' | 'historia' | 'tarefa' | 'bug'
+export type Priority = 'mais_alta' | 'alta' | 'media' | 'baixa' | 'mais_baixa'
+
 export interface Health { ok: boolean; version: string }
 
 export interface Project { id: number; name: string; path: string; capture: boolean; base_branch: string; parent_id: number | null; kind: 'repo' | 'group' }
@@ -28,6 +31,11 @@ export interface Card {
   blocked_by: string
   project_id: number
   column: Column
+  type: CardType
+  parent_id: number | null
+  priority: Priority
+  points: number | null
+  labels: string[]
   created_at: string
   updated_at: string
 }
@@ -217,6 +225,16 @@ export interface CardSummary extends Card {
   signal: Signal
   signal_since: string | null
   plan: Plan | null
+  // Hierarquia: parent_key vazio sem pai; children só em épico (total e concluídas);
+  // tree_totals = o épico mais as filhas.
+  parent_key: string
+  parent_title: string
+  children: { total: number; done: number } | null
+  children_totals: Total | null
+  tree_totals: Total | null
+  // waiting_on_you: o card espera uma ação sua; waiting_reason diz qual.
+  waiting_on_you: boolean
+  waiting_reason: string
 }
 
 // GET /api/cards/{key}
@@ -229,6 +247,13 @@ export interface CardDetail extends Card {
   totals: Total
   live: Session | null
   touched_files: TouchedFile[]
+  parent_key: string
+  parent_title: string
+  children: { total: number; done: number } | null
+  children_totals: Total | null
+  tree_totals: Total | null
+  // child_cards: filhas do épico; [] para épico sem filhas, null para os demais.
+  child_cards: CardSummary[] | null
 }
 
 // Sessão não encerrada; com pid_dead_at o processo já sumiu (não é viva).

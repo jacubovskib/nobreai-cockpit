@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppRoutes } from './routes'
@@ -71,7 +71,7 @@ describe('Seletor de projeto', () => {
     renderApp('/board')
     const sel = await screen.findByRole('combobox', { name: 'Projeto' })
     await screen.findByRole('option', { name: 'site' })
-    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Todos os projetos', 'cockpit', 'site'])
+    expect(within(sel).getAllByRole('option').map((o) => o.textContent)).toEqual(['Todos os projetos', 'cockpit', 'site'])
     fireEvent.change(sel, { target: { value: '2' } })
     await waitFor(() => expect(hrefs().every((h) => h!.endsWith('?projeto=2'))).toBe(true))
     expect(screen.getByRole('link', { name: /Board/ })).toHaveAttribute('aria-current', 'page')
@@ -112,7 +112,7 @@ describe('Seletor de projeto', () => {
       renderApp('/board')
       const sel = await screen.findByRole('combobox', { name: 'Projeto' })
       await screen.findByRole('option', { name: 'site' })
-      expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Todos os projetos', 'bravonix', 'site'])
+      expect(within(sel).getAllByRole('option').map((o) => o.textContent)).toEqual(['Todos os projetos', 'bravonix', 'site'])
       expect(screen.queryByRole('combobox', { name: 'App' })).not.toBeInTheDocument()
       fireEvent.change(sel, { target: { value: '1' } })
       const app = await screen.findByRole('combobox', { name: 'App' })

@@ -1,4 +1,4 @@
-import type { Card, CardSummary, Column } from '../api/types'
+import type { Card, CardSummary, CardType, Column, Priority } from '../api/types'
 
 export const COLUMNS: { id: Column; label: string; rule: string; dot: string }[] = [
   { id: 'backlog', label: 'Backlog', rule: 'Criado por você ou por um agente, sem sessão ainda', dot: '#6B7280' },
@@ -53,4 +53,28 @@ export function cardMarks(card: Pick<Card, 'column' | 'pause_reason' | 'handoff_
   if (card.pause_reason === 'limite de custo') out.push('pausado por limite de custo')
   if (card.handoff_incomplete && !ready && card.column === 'pausado') out.push('handoff incompleto')
   return out
+}
+
+export const TYPE_LABEL: Record<CardType, string> = { epico: 'Épico', historia: 'História', tarefa: 'Tarefa', bug: 'Bug' }
+export const TYPE_ICON: Record<CardType, string> = { epico: '◆', historia: '■', tarefa: '●', bug: '▲' }
+export const PRIORITY_LABEL: Record<Priority, string> = {
+  mais_alta: 'Mais alta', alta: 'Alta', media: 'Média', baixa: 'Baixa', mais_baixa: 'Mais baixa',
+}
+
+// epic: chave do épico, 'none' (sem pai e não-épico) ou '' (todos).
+export interface BoardFilter { epic: string | 'none' | ''; type: CardType | ''; waiting: boolean }
+
+// applyBoardFilter: épico mantém o épico e as filhas; 'none' = sem pai e não-épico.
+export function applyBoardFilter(cards: CardSummary[], f: BoardFilter): CardSummary[] {
+  return cards.filter((c) => {
+    if (f.epic === 'none') { if (c.parent_key || c.type === 'epico') return false }
+    else if (f.epic && c.key !== f.epic && c.parent_key !== f.epic) return false
+    if (f.type && c.type !== f.type) return false
+    if (f.waiting && !c.waiting_on_you) return false
+    return true
+  })
+}
+
+export function epicOptions(cards: CardSummary[]): { key: string; title: string }[] {
+  return cards.filter((c) => c.type === 'epico').map((c) => ({ key: c.key, title: c.title }))
 }
