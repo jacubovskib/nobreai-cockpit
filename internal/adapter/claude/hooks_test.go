@@ -1653,3 +1653,21 @@ func TestSessionEndReasonTranslated(t *testing.T) {
 		}
 	}
 }
+
+// A lista de pausados mostra o tipo depois da chave, só quando não é tarefa.
+func TestSessionStartPausedListShowsTypeWhenNotTarefa(t *testing.T) {
+	e := newEnv(t)
+	p := e.project(t)
+	for _, c := range []domain.Card{
+		{Title: "Pagar com Pix", ProjectID: p.ID, Column: domain.Pausado, Type: domain.TypeHistoria},
+		{Title: "Ajuste simples", ProjectID: p.ID, Column: domain.Pausado},
+	} {
+		if _, err := e.st.CreateCard(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := additionalContext(t, e.call(t, "session_start"))
+	if !strings.Contains(ctx, "NAC-1 (História) · Pagar com Pix") || !strings.Contains(ctx, "\n- NAC-2 · Ajuste simples") {
+		t.Fatalf("contexto:\n%s", ctx)
+	}
+}

@@ -161,9 +161,15 @@ func (c *Client) Hook(ctx context.Context, agent string, call adapter.HookCall) 
 // StatusCard é o card do agente em `nobre status`.
 type StatusCard struct {
 	domain.Card
-	ProjectName string                 `json:"project_name"`
-	Readiness   domain.ReadinessResult `json:"readiness"`
-	Content     domain.Content         `json:"content"`
+	ProjectName string `json:"project_name"`
+	ParentKey   string `json:"parent_key"`
+	ParentTitle string `json:"parent_title"`
+	Children    *struct {
+		Total int `json:"total"`
+		Done  int `json:"done"`
+	} `json:"children"`
+	Readiness domain.ReadinessResult `json:"readiness"`
+	Content   domain.Content         `json:"content"`
 }
 
 // Status é a resposta de GET /api/me/status.
@@ -178,11 +184,68 @@ func (c *Client) Status(ctx context.Context) (Status, error) {
 	return s, c.Do(ctx, "GET", "/api/me/status", nil, &s)
 }
 
+// CardFields são os campos de tipo, pai, prioridade, labels e points de um card.
+// Campo vazio não vai no corpo (o servidor não muda); ParentKey "" tira o pai;
+// ClearLabels esvazia a lista de labels; ClearPoints tira a estimativa.
+type CardFields struct {
+	Type, Priority string
+	ParentKey      *string
+	Labels         []string
+	Points         *float64
+	ClearLabels    bool
+	ClearPoints    bool
+}
+
+func (f CardFields) body() map[string]any {
+	b := map[string]any{}
+	if f.Type != "" {
+		b["type"] = f.Type
+	}
+	if f.Priority != "" {
+		b["priority"] = f.Priority
+	}
+	if f.ParentKey != nil {
+		b["parent_key"] = *f.ParentKey
+	}
+	switch {
+	case f.ClearLabels:
+		b["labels"] = []string{}
+	case len(f.Labels) > 0:
+		b["labels"] = f.Labels
+	}
+	switch {
+	case f.ClearPoints:
+		b["points"] = nil
+	case f.Points != nil:
+		b["points"] = *f.Points
+	}
+	return b
+}
+
 // Start cria um card e liga a sessão a ele.
-func (c *Client) Start(ctx context.Context, title, goal, doneWhen string) (domain.Card, error) {
+func (c *Client) Start(ctx context.Context, title, goal, doneWhen string, f CardFields) (domain.Card, error) {
 	var card domain.Card
-	err := c.Do(ctx, "POST", "/api/me/start", map[string]string{"title": title, "goal": goal, "done_when": doneWhen}, &card)
+	body := f.body()
+	body["title"], body["goal"], body["done_when"] = title, goal, doneWhen
+	err := c.Do(ctx, "POST", "/api/me/start", body, &card)
 	return card, err
+}
+
+// CardSetResult é o card depois de `nobre card set`, com a chave do épico pai.
+type CardSetResult struct {
+	domain.Card
+	ParentKey string `json:"parent_key"`
+}
+
+// CardSet muda tipo, pai, prioridade, labels e points do card key (vazio = o
+// card da sessão).
+func (c *Client) CardSet(ctx context.Context, key string, f CardFields) (CardSetResult, error) {
+	var out CardSetResult
+	body := f.body()
+	if key != "" {
+		body["key"] = key
+	}
+	return out, c.Do(ctx, "POST", "/api/me/card-set", body, &out)
 }
 
 // Resume liga a sessão ao card e devolve o pacote em markdown.
@@ -380,9 +443,13 @@ func (c *Client) DismissSuggestions(ctx context.Context, id int64, rels []string
 }
 
 // AddCard cria um card no projeto da sessão sem ligar a sessão a ele.
-func (c *Client) AddCard(ctx context.Context, in map[string]string) (domain.Card, error) {
+func (c *Client) AddCard(ctx context.Context, in map[string]string, f CardFields) (domain.Card, error) {
 	var card domain.Card
-	return card, c.Do(ctx, "POST", "/api/me/cards", in, &card)
+	body := f.body()
+	for k, v := range in {
+		body[k] = v
+	}
+	return card, c.Do(ctx, "POST", "/api/me/cards", body, &card)
 }
 
 // Prompts lista os prompts.

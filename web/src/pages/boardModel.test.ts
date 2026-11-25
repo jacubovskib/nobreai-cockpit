@@ -1,4 +1,4 @@
-import { groupByColumn, COLUMNS, cardMarks, signalText } from './boardModel'
+import { groupByColumn, COLUMNS, cardMarks, signalText, applyBoardFilter, epicOptions } from './boardModel'
 import type { CardSummary } from '../api/types'
 
 describe('groupByColumn', () => {
@@ -50,5 +50,42 @@ describe('cardMarks', () => {
   })
   it('limite de custo', () => {
     expect(cardMarks({ column: 'pausado', pause_reason: 'limite de custo', handoff_incomplete: false }, false)).toEqual(['pausado por limite de custo'])
+  })
+})
+
+describe('applyBoardFilter e epicOptions', () => {
+  const c = (o: object) => ({ type: 'tarefa', parent_key: '', waiting_on_you: false, ...o }) as CardSummary
+  const cards = [
+    c({ key: 'NAC-60', type: 'epico', title: 'Checkout novo' }),
+    c({ key: 'NAC-61', parent_key: 'NAC-60' }),
+    c({ key: 'NAC-62', parent_key: 'NAC-60', type: 'bug', waiting_on_you: true }),
+    c({ key: 'NAC-63' }),
+    c({ key: 'NAC-64', type: 'bug' }),
+  ]
+  const none = { epic: '', type: '', waiting: false } as const
+  const keys = (l: CardSummary[]) => l.map((x) => x.key)
+  it('sem filtro devolve tudo', () => expect(applyBoardFilter(cards, none)).toHaveLength(5))
+  it('épico mantém o épico e as filhas', () => {
+    expect(keys(applyBoardFilter(cards, { ...none, epic: 'NAC-60' }))).toEqual(['NAC-60', 'NAC-61', 'NAC-62'])
+  })
+  it('none mantém só quem não tem pai e não é épico', () => {
+    expect(keys(applyBoardFilter(cards, { ...none, epic: 'none' }))).toEqual(['NAC-63', 'NAC-64'])
+  })
+  it('filtra por tipo e por esperando você, e combina', () => {
+    expect(keys(applyBoardFilter(cards, { ...none, type: 'bug' }))).toEqual(['NAC-62', 'NAC-64'])
+    expect(keys(applyBoardFilter(cards, { ...none, waiting: true }))).toEqual(['NAC-62'])
+    expect(keys(applyBoardFilter(cards, { epic: 'NAC-60', type: 'bug', waiting: true }))).toEqual(['NAC-62'])
+  })
+  it('a entrada já filtrada por projeto sem o épico não o inventa', () => {
+    expect(keys(applyBoardFilter(cards.slice(1), { ...none, epic: 'NAC-60' }))).toEqual(['NAC-61', 'NAC-62'])
+  })
+  it('epicOptions lista só os épicos', () => {
+    expect(epicOptions(cards)).toEqual([{ key: 'NAC-60', title: 'Checkout novo' }])
+  })
+  it('epicOptions inclui o épico citado pelas filhas visíveis e o selecionado sem dados', () => {
+    const filhas = [c({ key: 'NAC-71', parent_key: 'NAC-70', parent_title: 'De outro projeto' }), c({ key: 'NAC-72', parent_key: 'NAC-70', parent_title: 'De outro projeto' })]
+    expect(epicOptions(filhas)).toEqual([{ key: 'NAC-70', title: 'De outro projeto' }])
+    expect(epicOptions(filhas, 'NAC-99')).toEqual([{ key: 'NAC-70', title: 'De outro projeto' }, { key: 'NAC-99', title: '' }])
+    expect(epicOptions(cards, 'none')).toHaveLength(1)
   })
 })

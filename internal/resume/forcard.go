@@ -53,5 +53,16 @@ func ForCard(st *store.Store, git gitinfo.GitInfo, c domain.Card, exclude string
 			}
 		}
 	}
-	return BuildIn(c, label, ct, sessions, totals, diff), nil
+	var fam Family
+	if c.ParentID != nil {
+		if e, err := st.GetCardByID(*c.ParentID); err == nil {
+			fam.Epic = &e
+		}
+	}
+	if c.Type == domain.TypeEpico {
+		if fam.Children, err = st.ListChildren(c.ID); err != nil {
+			return "", err
+		}
+	}
+	return BuildWith(c, label, ct, sessions, totals, diff, fam), nil
 }

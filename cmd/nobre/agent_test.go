@@ -448,3 +448,81 @@ func TestStatusListsPlan(t *testing.T) {
 		}
 	}
 }
+
+func TestStartAndCardFlagsSendHierarchyFields(t *testing.T) {
+	var path, body string
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		bs, _ := json.Marshal(b)
+		path, body = r.URL.Path, string(bs)
+		w.Write([]byte(`{"key":"NAC-2","type":"historia","priority":"alta","parent_key":"NAC-1"}`))
+	})
+	cases := []struct {
+		args       []string
+		path, body string
+	}{
+		{[]string{"start", "x", "--type", "historia", "--epic", "NAC-1", "--priority", "alta", "--label", "front", "--label", "api", "--points", "2"},
+			"/api/me/start", `{"done_when":"","goal":"","labels":["front","api"],"parent_key":"NAC-1","points":2,"priority":"alta","title":"x","type":"historia"}`},
+		{[]string{"card", "add", "y", "--type", "bug", "--points", "0.5"},
+			"/api/me/cards", `{"branch":"","column":"","done_when":"","goal":"","points":0.5,"title":"y","type":"bug","where_stopped":""}`},
+		{[]string{"card", "set", "NAC-2", "--no-epic"}, "/api/me/card-set", `{"key":"NAC-2","parent_key":""}`},
+		{[]string{"card", "set", "--no-points"}, "/api/me/card-set", `{"points":null}`},
+		{[]string{"card", "set", "--no-labels"}, "/api/me/card-set", `{"labels":[]}`},
+		{[]string{"card", "set", "--priority", "baixa", "--label", "x"}, "/api/me/card-set", `{"labels":["x"],"priority":"baixa"}`},
+	}
+	for _, c := range cases {
+		r := runCLI(t, addr, "", nil, c.args...)
+		if r.code != 0 || path != c.path || body != c.body {
+			t.Fatalf("%v: %+v\npath=%s body=%s", c.args, r, path, body)
+		}
+	}
+}
+
+func TestCardSetOutputAndUsage(t *testing.T) {
+	resp := ""
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(resp)) })
+	for _, c := range []struct{ resp, want string }{
+		{`{"key":"NAC-2","type":"historia","priority":"alta","parent_key":"NAC-1"}`, "Card NAC-2 atualizado: História · Alta · épico NAC-1.\n"},
+		{`{"key":"NAC-3","type":"bug","priority":"media","parent_key":""}`, "Card NAC-3 atualizado: Bug.\n"},
+	} {
+		resp = c.resp
+		if r := runCLI(t, addr, "", nil, "card", "set", "NAC-2", "--type", "bug"); r.code != 0 || r.stdout != c.want {
+			t.Fatalf("%+v, quer %q", r, c.want)
+		}
+	}
+	for _, args := range [][]string{
+		{"card", "set"}, {"card", "set", "NAC-1", "--epic", "NAC-2", "--no-epic"}, {"card", "set", "--points", "1", "--no-points"},
+		{"card", "set", "--label", "a", "--no-labels"}, {"card", "set", "--points", "NaN"}, {"card", "set", "--points", "Inf"}, {"card", "set", "--points", "-1"},
+	} {
+		if r := runCLI(t, "127.0.0.1:1", "", nil, args...); r.code != 2 || r.stdout != "" {
+			t.Fatalf("%v: %+v", args, r)
+		}
+	}
+}
+
+func TestStatusOmitsKindLineForPlainTask(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"session":{},"card":{"key":"NAC-7","title":"T","type":"tarefa","priority":"media","readiness":{"met":0,"total":0}}}`))
+	})
+	if r := runCLI(t, addr, "", nil, "status"); strings.Contains(r.stdout, "Tipo:") {
+		t.Fatalf("linha Tipo inesperada:\n%s", r.stdout)
+	}
+}
+
+func TestStatusShowsKindLine(t *testing.T) {
+	card := ""
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"session":{},"card":{"key":"NAC-7","title":"T",` + card + `"readiness":{"met":0,"total":0}}}`))
+	})
+	for _, c := range []struct{ card, want string }{
+		{`"type":"historia","priority":"alta","parent_key":"NAC-1","parent_title":"Checkout novo",`, "Tipo: História · Prioridade: Alta · Épico: NAC-1 · Checkout novo\n"},
+		{`"type":"tarefa","priority":"alta",`, "Tipo: Tarefa · Prioridade: Alta\n"},
+		{`"type":"epico","priority":"media","children":{"total":7,"done":4},`, "Tipo: Épico · Filhas: 4/7 concluídas\n"},
+	} {
+		card = c.card
+		if r := runCLI(t, addr, "", nil, "status"); !strings.Contains(r.stdout, c.want) {
+			t.Fatalf("falta %q em:\n%s", c.want, r.stdout)
+		}
+	}
+}

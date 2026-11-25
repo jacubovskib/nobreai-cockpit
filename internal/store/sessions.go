@@ -306,23 +306,35 @@ func (s *Store) SessionProjects(ids []string) (map[string]*int64, error) {
 	return out, rows.Err()
 }
 
-// moveCardTx aplica a transição ao card dentro da transação.
+// moveCardTx aplica a transição ao card dentro da transação. Épico não é
+// movido por sessão (a coluna dele segue as filhas); a filha que muda de
+// coluna recalcula o épico pai.
 func moveCardTx(tx *sql.Tx, cardID int64, ev domain.Transition) error {
 	var cur domain.Column
-	if err := tx.QueryRow(`SELECT col FROM cards WHERE id=?`, cardID).Scan(&cur); err != nil {
+	var typ domain.CardType
+	var parent sql.NullInt64
+	if err := tx.QueryRow(`SELECT col, type, parent_id FROM cards WHERE id=?`, cardID).Scan(&cur, &typ, &parent); err != nil {
 		return err
+	}
+	if typ == domain.TypeEpico {
+		return nil
 	}
 	next := domain.NextColumn(cur, ev)
 	if next == cur && next != domain.EmAndamento {
 		return nil
 	}
+	q := `UPDATE cards SET col=?, updated_at=? WHERE id=?`
 	if next == domain.EmAndamento {
 		// Novo dono vivo: as marcas da pausa e do handoff anterior caem.
-		_, err := tx.Exec(`UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, blocked_by='', updated_at=? WHERE id=?`, string(next), fmtTime(time.Now()), cardID)
+		q = `UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, blocked_by='', updated_at=? WHERE id=?`
+	}
+	if _, err := tx.Exec(q, string(next), fmtTime(time.Now()), cardID); err != nil {
 		return err
 	}
-	_, err := tx.Exec(`UPDATE cards SET col=?, updated_at=? WHERE id=?`, string(next), fmtTime(time.Now()), cardID)
-	return err
+	if next == cur || !parent.Valid {
+		return nil
+	}
+	return recalcEpicTx(tx, parent.Int64)
 }
 
 // AttachSession liga a sessão ao card, move o card para em_andamento e copia

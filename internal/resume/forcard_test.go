@@ -73,3 +73,28 @@ func TestForCardDiffSincePreviousSession(t *testing.T) {
 		t.Fatalf("%v\n%s", err, md)
 	}
 }
+
+func TestForCardIncludesEpicAndChildren(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	p, _ := st.CreateProject("api", "/w/api")
+	epic, err := st.CreateCard(domain.Card{Title: "Checkout novo", ProjectID: p.ID, Type: domain.TypeEpico, Goal: "Pagar sem sair"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := st.CreateCard(domain.Card{Title: "Pagar com Pix", ProjectID: p.ID, Type: domain.TypeHistoria, ParentID: &epic.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := ForCard(st, nil, child, "")
+	if err != nil || !strings.Contains(out, "Épico: "+epic.Key+" · Checkout novo — Pagar sem sair") {
+		t.Fatalf("filha: %v\n%s", err, out)
+	}
+	out, err = ForCard(st, nil, epic, "")
+	if err != nil || !strings.Contains(out, "## Filhas\n- "+child.Key+" · História · Pagar com Pix · Backlog") {
+		t.Fatalf("épico: %v\n%s", err, out)
+	}
+}

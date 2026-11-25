@@ -16,7 +16,9 @@ import { CliPanel } from './card/CliPanel'
 import { ContinuePanel } from './card/ContinuePanel'
 import { Decisions } from './card/Decisions'
 import { Files } from './card/Files'
+import { EpicChildren } from './card/EpicChildren'
 import { Goal } from './card/Goal'
+import { Hierarchy } from './card/Hierarchy'
 import { LimitPanel } from './card/LimitPanel'
 import { Questions } from './card/Questions'
 import { ReadinessPanel } from './card/ReadinessPanel'
@@ -106,6 +108,7 @@ export function CardPage() {
           <span>{formatTokens(tokens)} tokens</span>
           <span><Money usd={t.cost_usd} unpriced={t.unpriced} currency={currency} rate={rate} /><Credits credits={t.credits} /> no total</span>
         </div>
+        <Hierarchy key={`${c.key}:${c.type}:${c.parent_key}:${c.priority}:${(c.labels ?? []).join(',')}:${c.points}`} card={c} />
         <BlockedBy key={`${c.key}:${c.blocked_by}`} card={c} />
         {c.column === 'revisao' && (
           <div>
@@ -119,6 +122,7 @@ export function CardPage() {
       </header>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <div style={{ flex: '2 1 480px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {c.type === 'epico' && <EpicChildren card={c} />}
           <CardTerminal cardKey={c.key} focusId={focusTerminal} />
           <CardContext card={c} />
           <WhereStopped card={c} />
@@ -133,7 +137,7 @@ export function CardPage() {
         <aside aria-label="Handoff" style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <ContinuePanel cardKey={c.key} enabled onTerminal={setFocusTerminal} lastAgent={lastAgent} />
           <CliPanel cardKey={c.key} previewOpen={preview} onTogglePreview={() => setPreview(!preview)} />
-          <ReadinessPanel readiness={c.readiness} />
+          {c.type !== 'epico' && <ReadinessPanel readiness={c.readiness} />}
           <LimitPanel card={c} limits={limits.data ?? []} currency={currency} rate={rate} />
         </aside>
       </div>

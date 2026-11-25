@@ -41,13 +41,20 @@ type Card struct {
 	// PauseReason diz por que o card está pausado ("" = pausa comum);
 	// HandoffIncomplete marca sessão encerrada sem "Onde parei"; BlockedBy é a
 	// chave do card que bloqueia este.
-	PauseReason       string    `json:"pause_reason"`
-	HandoffIncomplete bool      `json:"handoff_incomplete"`
-	BlockedBy         string    `json:"blocked_by"`
-	ProjectID         int64     `json:"project_id"`
-	Column            Column    `json:"column"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	PauseReason       string `json:"pause_reason"`
+	HandoffIncomplete bool   `json:"handoff_incomplete"`
+	BlockedBy         string `json:"blocked_by"`
+	ProjectID         int64  `json:"project_id"`
+	Column            Column `json:"column"`
+	// Type, ParentID (card pai, sempre um épico), Priority, Points (nil = sem
+	// estimativa) e Labels classificam o card.
+	Type      CardType  `json:"type"`
+	ParentID  *int64    `json:"parent_id"`
+	Priority  Priority  `json:"priority"`
+	Points    *float64  `json:"points"`
+	Labels    []string  `json:"labels"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Session struct {

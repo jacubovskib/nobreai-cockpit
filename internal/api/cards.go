@@ -99,7 +99,7 @@ func (s *server) listCards(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]CardSummary, 0, len(cards))
 	for _, c := range cards {
-		sum, err := s.cardSummary(c, byCard[c.Key])
+		sum, err := s.cardSummary(c, byCard)
 		if err != nil {
 			writeStoreError(w, err, "")
 			return
@@ -116,6 +116,7 @@ type cardInput struct {
 	HowToTest string `json:"how_to_test"`
 	Branch    string `json:"branch"`
 	ProjectID int64  `json:"project_id"`
+	hierarchyInput
 }
 
 func (s *server) createCard(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +141,8 @@ func (s *server) createCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "projeto não encontrado")
 		return
 	}
-	if p.IsGroup() && p.Path == "" {
+	// Grupo sem pasta só recebe épico (que não tem sessão nem branch).
+	if p.IsGroup() && p.Path == "" && !in.wantsEpic() {
 		writeError(w, http.StatusBadRequest, msgGroupNoCards)
 		return
 	}
@@ -148,13 +150,19 @@ func (s *server) createCard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgGroupNoBranch)
 		return
 	}
-	c, err := s.st.CreateCard(domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
-		HowToTest: in.HowToTest, Branch: in.Branch, ProjectID: in.ProjectID})
+	nc := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen,
+		HowToTest: in.HowToTest, Branch: in.Branch, ProjectID: in.ProjectID}
+	if code, msg := s.applyHierarchy(&nc, in.hierarchyInput, true); code != 0 {
+		writeError(w, code, msg)
+		return
+	}
+	c, err := s.st.CreateCard(nc)
 	if err != nil {
 		writeStoreError(w, err, "")
 		return
 	}
 	s.publish("cards")
+	c.Labels = nonNil(c.Labels)
 	writeJSON(w, http.StatusCreated, c)
 }
 
@@ -182,6 +190,7 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		Column       *domain.Column `json:"column"`
 		BlockedBy    *string        `json:"blocked_by"`
 		ProjectID    *int64         `json:"project_id"`
+		hierarchyInput
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -191,34 +200,10 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
-	oldColumn := c.Column
-	if in.Column != nil {
-		if !validColumn(*in.Column) {
-			writeError(w, http.StatusBadRequest, "coluna inválida")
-			return
-		}
-		// Em andamento é "uma sessão viva é dona do card": mover para lá à mão
-		// sem sessão viva deixaria o card preso, sem nada que o reconcilie.
-		if *in.Column == domain.EmAndamento && c.Column != domain.EmAndamento {
-			live, err := s.st.HasLiveSession(c.ID)
-			if err != nil {
-				writeStoreError(w, err, "")
-				return
-			}
-			if !live {
-				writeError(w, http.StatusConflict, msgInProgressNeedsLive)
-				return
-			}
-		}
-		// Mudar de coluna derruba o motivo da pausa e, saindo de Pausado, a
-		// marca de handoff incompleto (ela só vale enquanto o card está pausado).
-		if *in.Column != c.Column {
-			c.PauseReason, c.HandoffIncomplete = "", false
-			if *in.Column == domain.EmAndamento {
-				c.BlockedBy = ""
-			}
-		}
-		c.Column = *in.Column
+	oldColumn, oldType, oldBranch := c.Column, c.Type, c.Branch
+	if in.Column != nil && !validColumn(*in.Column) {
+		writeError(w, http.StatusBadRequest, "coluna inválida")
+		return
 	}
 	if in.Title != nil {
 		if strings.TrimSpace(*in.Title) == "" {
@@ -255,16 +240,78 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		now := s.now()
 		c.WhereStopped, c.WhereStoppedAt = *in.WhereStopped, &now
 	}
-	if in.ProjectID != nil && *in.ProjectID != c.ProjectID {
-		dest, err := s.projectByID(*in.ProjectID)
-		if err != nil {
+	moving := in.ProjectID != nil && *in.ProjectID != c.ProjectID
+	var dest *domain.Project
+	if moving {
+		if dest, err = s.projectByID(*in.ProjectID); err != nil {
 			writeStoreError(w, err, "")
 			return
 		}
-		if dest != nil && dest.IsGroup() && dest.Path == "" {
-			writeError(w, http.StatusBadRequest, msgGroupNoCards)
+		if dest == nil {
+			writeError(w, http.StatusNotFound, "projeto não encontrado")
 			return
 		}
+	}
+	if code, msg := s.applyHierarchy(&c, in.hierarchyInput, false); code != 0 {
+		writeError(w, code, msg)
+		return
+	}
+	epic := c.Type == domain.TypeEpico
+	// Grupo sem pasta só guarda épico: nem recebe card comum, nem deixa o
+	// épico de lá virar card comum.
+	target := dest
+	if !moving && oldType == domain.TypeEpico && !epic {
+		if target, err = s.projectByID(c.ProjectID); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+	}
+	if !epic && target != nil && target.IsGroup() && target.Path == "" {
+		writeError(w, http.StatusBadRequest, msgGroupNoCards)
+		return
+	}
+	if in.Column != nil && *in.Column != c.Column {
+		if epic {
+			// A coluna do épico segue as filhas: à mão, só concluir ou reabrir.
+			cols, err := s.childColumns(c.ID)
+			if err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+			to, err := domain.EpicManualMove(c.Column, *in.Column, cols)
+			if err != nil {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+			c.Column = to
+		} else {
+			// Em andamento é "uma sessão viva é dona do card": mover para lá à mão
+			// sem sessão viva deixaria o card preso, sem nada que o reconcilie.
+			if *in.Column == domain.EmAndamento {
+				live, err := s.st.HasLiveSession(c.ID)
+				if err != nil {
+					writeStoreError(w, err, "")
+					return
+				}
+				if !live {
+					writeError(w, http.StatusConflict, msgInProgressNeedsLive)
+					return
+				}
+			}
+			// Mudar de coluna derruba o motivo da pausa e, saindo de Pausado, a
+			// marca de handoff incompleto (ela só vale enquanto o card está
+			// pausado); entrar em Em andamento derruba o bloqueio, salvo se o
+			// mesmo pedido trouxe um.
+			c.PauseReason, c.HandoffIncomplete = "", false
+			if *in.Column == domain.EmAndamento && in.BlockedBy == nil {
+				c.BlockedBy = ""
+			}
+			c.Column = *in.Column
+		}
+	}
+	// Daqui em diante só gravações. SetCardProject vem primeiro: a checagem de
+	// família falha antes de gravar qualquer coisa.
+	if moving {
 		err = s.st.SetCardProject(c.ID, *in.ProjectID)
 		switch {
 		case errors.Is(err, store.ErrFamily):
@@ -278,13 +325,17 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c.ProjectID = *in.ProjectID
-		// Card de grupo nunca tem branch: zera também as marcas do branch.
-		if dest != nil && dest.IsGroup() && c.Branch != "" {
-			if _, err := s.st.SetCardBranch(c.ID, ""); err != nil {
-				writeStoreError(w, err, "")
-				return
-			}
+		// Card de grupo nunca tem branch.
+		if dest.IsGroup() {
 			c.Branch = ""
+		}
+	}
+	// Branch tirado (card de grupo ou que virou épico): zera também as marcas
+	// do branch (head, divergência, merge).
+	if oldBranch != "" && c.Branch == "" {
+		if _, err := s.st.SetCardBranch(c.ID, ""); err != nil {
+			writeStoreError(w, err, "")
+			return
 		}
 	}
 	if err := s.st.UpdateCard(c); err != nil {
@@ -308,6 +359,7 @@ func (s *server) writeCard(w http.ResponseWriter, code int, key string) {
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
+	c.Labels = nonNil(c.Labels)
 	writeJSON(w, code, c)
 }
 

@@ -988,3 +988,136 @@ func TestMePlanAndTask(t *testing.T) {
 		}
 	}
 }
+
+// epic cria um épico no projeto p.
+func (a *testAPI) epic(t *testing.T, p domain.Project) domain.Card {
+	t.Helper()
+	e, err := a.st.CreateCard(domain.Card{Title: "Épico", ProjectID: p.ID, Type: domain.TypeEpico})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestMeStartWithEpic(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	e := a.epic(t, p)
+	a.liveSession(t, "claude:s", 4242, "")
+	rec := a.do(t, "POST", "/api/me/start", map[string]any{"title": "Filha", "type": "historia", "parent_key": e.Key}, 4242)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("start = %d %s", rec.Code, rec.Body)
+	}
+	k := decode[domain.Card](t, rec)
+	if k.Type != domain.TypeHistoria || k.ParentID == nil || *k.ParentID != e.ID || k.Column != domain.EmAndamento {
+		t.Fatalf("card = %+v", k)
+	}
+	if s, _ := a.st.GetSession("claude:s"); s.CardID == nil || *s.CardID != k.ID {
+		t.Fatalf("sessão não ligada: %+v", s)
+	}
+	if got, _ := a.st.GetCard(e.Key); got.Column != domain.EmAndamento {
+		t.Fatalf("épico em %s", got.Column)
+	}
+}
+
+func TestMeCardsEpicPausedRefused(t *testing.T) {
+	a := newTestAPI(t)
+	a.project(t)
+	a.liveSession(t, "claude:s", 4242, "")
+	rec := a.do(t, "POST", "/api/me/cards", map[string]any{"title": "E", "type": "epico", "column": "pausado"}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "um épico não vai para Pausado; crie em backlog" {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if rec := a.do(t, "POST", "/api/me/cards", map[string]any{"title": "E", "type": "epico"}, 4242); rec.Code != http.StatusCreated {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMeCardSetOtherCard(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	e := a.epic(t, p)
+	c, err := a.st.CreateCard(domain.Card{Title: "x", ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, "")
+	// Sem key e sem card na sessão: 409.
+	if rec := a.do(t, "POST", "/api/me/card-set", map[string]any{"priority": "alta"}, 4242); rec.Code != http.StatusConflict {
+		t.Fatalf("sem card = %d %s", rec.Code, rec.Body)
+	}
+	rec := a.do(t, "POST", "/api/me/card-set", map[string]any{"key": c.Key, "parent_key": e.Key, "priority": "alta", "points": 0.5}, 4242)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("card-set = %d %s", rec.Code, rec.Body)
+	}
+	if pk := decode[map[string]any](t, rec)["parent_key"]; pk != e.Key {
+		t.Fatalf("parent_key = %v", pk)
+	}
+	got, _ := a.st.GetCard(c.Key)
+	if got.ParentID == nil || *got.ParentID != e.ID || got.Priority != domain.PrioAlta || got.Points == nil || *got.Points != 0.5 {
+		t.Fatalf("card = %+v", got)
+	}
+	// Pedido inválido não grava nada.
+	rec = a.do(t, "POST", "/api/me/card-set", map[string]any{"key": c.Key, "priority": "baixa", "type": "xyz"}, 4242)
+	if rec.Code != http.StatusBadRequest || decode[map[string]string](t, rec)["error"] != "tipo inválido (use epico, historia, tarefa ou bug)" {
+		t.Fatalf("inválido = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.Priority != domain.PrioAlta {
+		t.Fatalf("gravou apesar do erro: %+v", got)
+	}
+	// O card da sessão é o padrão.
+	a.liveSession(t, "claude:t", 4343, c.Key)
+	rec = a.do(t, "POST", "/api/me/card-set", map[string]any{"parent_key": ""}, 4343)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("card-set = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(c.Key); got.ParentID != nil {
+		t.Fatalf("pai não saiu: %+v", got)
+	}
+}
+
+func TestMeDoneOnEpic(t *testing.T) {
+	a := newTestAPI(t)
+	e := a.epic(t, a.project(t))
+	a.liveSession(t, "claude:s", 4242, e.Key)
+	rec := a.do(t, "POST", "/api/me/done", nil, 4242)
+	want := e.Key + " é um épico: a coluna do épico segue as filhas (nada mudou)"
+	if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != want {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if evs, _ := a.st.RecentEvents(5); len(evs) != 0 {
+		t.Fatalf("evento gravado: %+v", evs)
+	}
+}
+
+func TestEpicSkipsBranchSync(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	if err := a.st.SetProjectBase(p.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.StartSession(domain.Session{ID: "claude:s", Agent: "claude", PID: 4242, Cwd: "/w/api", Branch: "feat/x", StartedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/me/start", map[string]any{"title": "E", "type": "epico"}, 4242)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("start = %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[domain.Card](t, rec); got.Type != domain.TypeEpico || got.Branch != "" {
+		t.Fatalf("card = %+v", got)
+	}
+	if got, _ := a.st.GetCard("NAC-1"); got.Branch != "" {
+		t.Fatalf("branch = %q", got.Branch)
+	}
+}
+
+func TestMeBranchRefusesEpic(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	e := a.postCard(t, map[string]any{"title": "E", "type": "epico", "project_id": p.ID})
+	a.liveSession(t, "claude:e", 4242, e.Key)
+	rec := a.do(t, "POST", "/api/me/branch", map[string]string{"branch": "feat/x"}, 4242)
+	if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != "o épico não guarda branch" {
+		t.Fatalf("branch = %d %s", rec.Code, rec.Body)
+	}
+}

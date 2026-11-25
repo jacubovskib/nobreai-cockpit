@@ -3,26 +3,88 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
+	"github.com/nobretech/nobreai-cockpit/internal/client"
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 )
 
+// fieldFlags são as flags de tipo, épico, prioridade, labels e points.
+type fieldFlags struct {
+	typ, epic, priority *string
+	noEpic, noPoints    *bool
+	noLabels            *bool
+	labels              *listFlag
+	points              *float64
+}
+
+func addFieldFlags(fs *flag.FlagSet) fieldFlags {
+	f := fieldFlags{labels: &listFlag{}}
+	f.typ = fs.String("type", "", "tipo: epico, historia, tarefa ou bug")
+	f.epic = fs.String("epic", "", "chave do épico pai")
+	f.noEpic = fs.Bool("no-epic", false, "tira o card do épico")
+	f.priority = fs.String("priority", "", "prioridade: mais_alta, alta, media, baixa ou mais_baixa")
+	fs.Var(f.labels, "label", "label (repetível); define a lista completa de labels do card")
+	f.noLabels = fs.Bool("no-labels", false, "tira todas as labels")
+	f.points = fs.Float64("points", 0, "estimativa em pontos")
+	f.noPoints = fs.Bool("no-points", false, "tira a estimativa")
+	return f
+}
+
+// fields monta o CardFields a partir das flags dadas em fs.
+func (f fieldFlags) fields(fs *flag.FlagSet) (client.CardFields, error) {
+	set := map[string]bool{}
+	fs.Visit(func(x *flag.Flag) { set[x.Name] = true })
+	if set["epic"] && *f.noEpic {
+		return client.CardFields{}, usagef("%s: --epic e --no-epic não combinam", fs.Name())
+	}
+	if set["points"] && *f.noPoints {
+		return client.CardFields{}, usagef("%s: --points e --no-points não combinam", fs.Name())
+	}
+	if len(*f.labels) > 0 && *f.noLabels {
+		return client.CardFields{}, usagef("%s: --label e --no-labels não combinam", fs.Name())
+	}
+	if set["points"] && (math.IsNaN(*f.points) || math.IsInf(*f.points, 0) || *f.points < 0) {
+		return client.CardFields{}, usagef("%s: --points precisa ser um número maior ou igual a zero", fs.Name())
+	}
+	cf := client.CardFields{Type: *f.typ, Priority: *f.priority, Labels: []string(*f.labels), ClearLabels: *f.noLabels, ClearPoints: *f.noPoints}
+	switch {
+	case *f.noEpic:
+		empty := ""
+		cf.ParentKey = &empty
+	case set["epic"]:
+		k := *f.epic
+		cf.ParentKey = &k
+	}
+	if set["points"] {
+		p := *f.points
+		cf.Points = &p
+	}
+	return cf, nil
+}
+
 func (c *cli) start(args []string) error {
+	const u = `uso: nobre start "<título>" [--goal ...] [--done-when ...] [--type epico|historia|tarefa|bug] [--epic <KEY>] [--priority ...] [--label ... | --no-labels] [--points n]`
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	goal := fs.String("goal", "", "objetivo do card")
 	done := fs.String("done-when", "", "critério de pronto")
+	ff := addFieldFlags(fs)
 	pos, err := c.parse(fs, args)
 	if err != nil {
 		return err
 	}
 	title := joinText(pos)
 	if title == "" {
-		return usagef(`uso: nobre start "<título>" [--goal ...] [--done-when ...]`)
+		return usagef(u)
 	}
-	card, err := c.client().Start(ctx(), title, *goal, *done)
+	cf, err := ff.fields(fs)
+	if err != nil {
+		return err
+	}
+	card, err := c.client().Start(ctx(), title, *goal, *done, cf)
 	if err != nil {
 		return err
 	}
@@ -31,7 +93,11 @@ func (c *cli) start(args []string) error {
 }
 
 func (c *cli) card(args []string) error {
-	const u = `uso: nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado]`
+	const u = `uso: nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado] [--type ...] [--epic <KEY>] [--priority ...] [--label ... | --no-labels] [--points n]
+     nobre card set [<KEY>] [--type ...] [--epic <KEY> | --no-epic] [--priority ...] [--label ... | --no-labels] [--points n | --no-points]`
+	if len(args) > 0 && args[0] == "set" {
+		return c.cardSet(args[1:], u)
+	}
 	if len(args) == 0 || args[0] != "add" {
 		return usagef(u)
 	}
@@ -41,6 +107,7 @@ func (c *cli) card(args []string) error {
 	branch := fs.String("branch", "", "branch do card")
 	where := fs.String("where", "", `"Onde parei" do card`)
 	column := fs.String("column", "", "backlog (padrão) ou pausado")
+	ff := addFieldFlags(fs)
 	pos, err := c.parse(fs, args[1:])
 	if err != nil {
 		return err
@@ -49,12 +116,53 @@ func (c *cli) card(args []string) error {
 	if title == "" {
 		return usagef(u)
 	}
+	cf, err := ff.fields(fs)
+	if err != nil {
+		return err
+	}
 	card, err := c.client().AddCard(ctx(), map[string]string{"title": title, "goal": *goal, "done_when": *done,
-		"branch": *branch, "where_stopped": *where, "column": *column})
+		"branch": *branch, "where_stopped": *where, "column": *column}, cf)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(c.out, "Card %s criado no %s (sessão não ligada).\n", card.Key, card.Column)
+	return nil
+}
+
+// cardSet muda tipo, épico, prioridade, labels e points do card (o da sessão sem KEY).
+func (c *cli) cardSet(args []string, u string) error {
+	fs := flag.NewFlagSet("card set", flag.ContinueOnError)
+	ff := addFieldFlags(fs)
+	pos, err := c.parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 1 {
+		return usagef("%s", u)
+	}
+	cf, err := ff.fields(fs)
+	if err != nil {
+		return err
+	}
+	if cf.Type == "" && cf.Priority == "" && cf.ParentKey == nil && len(cf.Labels) == 0 && !cf.ClearLabels && cf.Points == nil && !cf.ClearPoints {
+		return usagef("%s", u)
+	}
+	key := ""
+	if len(pos) == 1 {
+		key = pos[0]
+	}
+	card, err := c.client().CardSet(ctx(), key, cf)
+	if err != nil {
+		return err
+	}
+	parts := []string{domain.TypeLabel(card.Type)}
+	if card.Priority != domain.PrioMedia {
+		parts = append(parts, domain.PriorityLabel(card.Priority))
+	}
+	if card.ParentKey != "" {
+		parts = append(parts, "épico "+card.ParentKey)
+	}
+	fmt.Fprintf(c.out, "Card %s atualizado: %s.\n", card.Key, strings.Join(parts, " · "))
 	return nil
 }
 
@@ -281,6 +389,9 @@ func (c *cli) status() error {
 		fmt.Fprintf(c.out, "Projeto: %s\n", k.ProjectName)
 	}
 	fmt.Fprintf(c.out, "Onde parei: %s\n", where)
+	if line := statusKind(k); line != "" {
+		fmt.Fprintln(c.out, line)
+	}
 	fmt.Fprintf(c.out, "Prontidão: %d/%d\n", k.Readiness.Met, k.Readiness.Total)
 	for _, it := range k.Readiness.Items {
 		if !it.OK {
@@ -300,6 +411,28 @@ func (c *cli) status() error {
 		fmt.Fprintf(c.out, "Plano:\n%s\n", plan)
 	}
 	return nil
+}
+
+// statusKind é a linha "Tipo: ..." do nobre status.
+func statusKind(k *client.StatusCard) string {
+	if (k.Type == domain.TypeTarefa || k.Type == "") && (k.Priority == domain.PrioMedia || k.Priority == "") && k.ParentKey == "" && k.Children == nil {
+		return ""
+	}
+	parts := []string{"Tipo: " + domain.TypeLabel(k.Type)}
+	if k.Priority != domain.PrioMedia && k.Priority != "" {
+		parts = append(parts, "Prioridade: "+domain.PriorityLabel(k.Priority))
+	}
+	if k.ParentKey != "" {
+		e := "Épico: " + k.ParentKey
+		if k.ParentTitle != "" {
+			e += " · " + k.ParentTitle
+		}
+		parts = append(parts, e)
+	}
+	if k.Children != nil {
+		parts = append(parts, fmt.Sprintf("Filhas: %d/%d concluídas", k.Children.Done, k.Children.Total))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (c *cli) app(args []string) error {
@@ -399,7 +532,7 @@ func (c *cli) memorias(args []string) error {
 	return nil
 }
 
-// listFlag é uma flag repetível: cada --task soma um item.
+// listFlag é uma flag repetível: cada --task ou --label soma um item.
 type listFlag []string
 
 func (l *listFlag) String() string     { return strings.Join(*l, ",") }

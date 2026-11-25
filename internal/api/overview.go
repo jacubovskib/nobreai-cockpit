@@ -241,7 +241,8 @@ func (s *server) buildOverview() (Overview, error) {
 			continue
 		}
 		c, ok := byID[*x.CardID]
-		if !ok || c.Column != domain.EmAndamento {
+		// Épico em andamento é só reflexo das filhas: não fica "sem sessão viva".
+		if !ok || c.Column != domain.EmAndamento || c.Type == domain.TypeEpico {
 			continue
 		}
 		staleSeen[c.ID] = true
@@ -305,7 +306,7 @@ func (s *server) buildOverview() (Overview, error) {
 		switch c.Column {
 		case domain.EmAndamento:
 			t.CardsInProgress++
-			if !liveCards[c.ID] {
+			if !liveCards[c.ID] && c.Type != domain.TypeEpico {
 				t.CardsWithoutLive++
 			}
 		case domain.Pausado:

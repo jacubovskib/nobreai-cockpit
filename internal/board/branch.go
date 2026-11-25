@@ -28,7 +28,7 @@ func RepoBase(st *store.Store, git gitinfo.BranchReader, p domain.Project) (stri
 
 // SyncCardBranch faz o branch do card acompanhar o branch de trabalho da
 // sessão. Ignora "", "HEAD" (detached) e a base do projeto, para o card nunca
-// ficar na base (sem git, só a base configurada conta). Devolve se o branch do card mudou.
+// ficar na base (sem git, só a base configurada conta). Épico nunca guarda branch. Devolve se o branch do card mudou.
 func SyncCardBranch(st *store.Store, git gitinfo.BranchReader, cardID int64, branch string) (bool, error) {
 	if branch == "" || branch == "HEAD" {
 		return false, nil
@@ -36,6 +36,9 @@ func SyncCardBranch(st *store.Store, git gitinfo.BranchReader, cardID int64, bra
 	c, err := st.GetCardByID(cardID)
 	if err != nil {
 		return false, err
+	}
+	if c.Type == domain.TypeEpico {
+		return false, nil // o épico nunca guarda branch
 	}
 	ps, err := st.ListProjects()
 	if err != nil {
