@@ -70,6 +70,13 @@ Quando o início da sessão trouxer o bloco de memórias do Cockpit ("Memórias 
 - O escopo padrão é o projeto (`--escopo raiz` para o monorepo todo); use `--escopo global` só para algo que vale em todo projeto: ela só passa a valer depois que o usuário aprovar na página Memórias.
 - Busque com `nobre memorias <termo>` (também mostra as que ficaram fora do limite).
 
+## Épicos e tipos
+
+- Use `--type historia|bug|tarefa|epico` e `--epic <KEY>` (em `nobre start`, `nobre card add` ou depois com `nobre card set [<KEY>] ...`) quando o usuário falar em épico ou história, ou quando o trabalho for parte de um épico existente. `--no-epic` solta o card do épico; `--priority`, `--label` e `--points` também valem.
+- Para quebrar um épico, crie uma filha por entrega: `nobre card add "<título>" --epic NAC-60 --type historia`.
+- A sessão num épico é de planejamento: não marque o épico como done; a coluna dele segue as filhas.
+- Nunca crie épicos nem mude o tipo de um card sem o usuário pedir.
+
 ## Como manter o card útil
 
 - Atualize "Onde parei" com `nobre note` a cada passo relevante e antes de parar. Escreva o essencial: o que está feito, o que vem agora e qualquer armadilha.

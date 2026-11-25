@@ -119,3 +119,55 @@ func TestBuildInPlan(t *testing.T) {
 		t.Fatalf("ordem:\n%s", out)
 	}
 }
+
+func epicFixture() (epic, story domain.Card) {
+	epic = domain.Card{ID: 60, Key: "NAC-60", Title: "Checkout novo", Type: domain.TypeEpico, Goal: "Pagar sem sair do app\nsegunda linha"}
+	story = domain.Card{ID: 61, Key: "NAC-61", Title: "Pagar com Pix", Type: domain.TypeHistoria, Priority: domain.PrioAlta}
+	return
+}
+
+func TestBuildWithEpicParent(t *testing.T) {
+	epic, story := epicFixture()
+	out := BuildWith(story, "", domain.Content{}, nil, nil, "", Family{Epic: &epic})
+	lines := strings.Split(out, "\n")
+	if lines[0] != "# NAC-61 · Pagar com Pix" || lines[1] != "Épico: NAC-60 · Checkout novo — Pagar sem sair do app" {
+		t.Fatalf("cabeçalho:\n%s", out)
+	}
+	if !strings.HasPrefix(lines[2], "História · prioridade Alta · 0 sessões") {
+		t.Fatalf("meta: %q", lines[2])
+	}
+	// média não aparece; épico sem objetivo não ganha " — ".
+	story.Priority = domain.PrioMedia
+	epic.Goal = ""
+	out = BuildWith(story, "", domain.Content{}, nil, nil, "", Family{Epic: &epic})
+	if !strings.Contains(out, "\nÉpico: NAC-60 · Checkout novo\n") || strings.Contains(out, "prioridade") {
+		t.Fatalf("sem objetivo/prioridade média:\n%s", out)
+	}
+}
+
+func TestBuildWithEpicChildren(t *testing.T) {
+	epic, _ := epicFixture()
+	var kids []domain.Card
+	for i := 0; i < 12; i++ {
+		kids = append(kids, domain.Card{Key: "NAC-" + string(rune('A'+i)), Title: "Filha", Type: domain.TypeHistoria, Column: domain.EmAndamento})
+	}
+	kids[0] = domain.Card{Key: "NAC-61", Title: "Pagar com Pix", Type: domain.TypeHistoria, Column: domain.EmAndamento}
+	out := BuildWith(epic, "", domain.Content{}, nil, nil, "", Family{Children: kids})
+	if !strings.Contains(out, "## Filhas\n- NAC-61 · História · Pagar com Pix · Em andamento\n") {
+		t.Fatalf("filhas:\n%s", out)
+	}
+	if n := strings.Count(out, "\n- NAC-"); n != 10 || !strings.Contains(out, "\n… e mais 2\n") {
+		t.Fatalf("%d filhas listadas:\n%s", n, out)
+	}
+}
+
+func TestBuildInUnchangedForTarefa(t *testing.T) {
+	c, ct := fixture()
+	c.Type, c.Priority = domain.TypeTarefa, domain.PrioMedia
+	s := []domain.Session{{Cwd: "/w/app", StartedAt: time.Now()}}
+	// Saída do BuildIn antes dos tipos: quem não usa tipos não sente diferença.
+	const want = "# NAC-42 · Login OAuth2\nloja › web · feat/oauth2 · 1 sessões\n\n## Onde parei\nImplementar o callback\n\n## Objetivo\nEntrar com Google\nPronto quando: teste e2e passa\n\n## Falta\n- [ ] callback\n\n## Feito\n- [x] config\n\n## Decisões\n- usar PKCE — porquê: sem segredo no cliente\n\n## Arquivos essenciais\n- auth/cb.go:10-40: callback\n- auth/x.go: helpers\n\n## Como testar\ngo test ./auth\n\n## Desde a última sessão\nsem mudanças registradas\n"
+	if got := BuildIn(c, "loja › web", ct, s, nil, ""); got != want {
+		t.Fatalf("saída mudou:\n%q", got)
+	}
+}

@@ -14,6 +14,23 @@ const (
 // Columns lista as colunas do board na ordem de exibição.
 var Columns = []Column{Backlog, EmAndamento, Pausado, Revisao, Concluido}
 
+// ColumnLabel é o nome da coluna como aparece no board.
+func ColumnLabel(c Column) string {
+	switch c {
+	case Backlog:
+		return "Backlog"
+	case EmAndamento:
+		return "Em andamento"
+	case Pausado:
+		return "Pausado"
+	case Revisao:
+		return "Revisão"
+	case Concluido:
+		return "Concluído"
+	}
+	return string(c)
+}
+
 // Tipos de evento.
 const (
 	EvSessionStart  = "session_start"

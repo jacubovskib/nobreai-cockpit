@@ -20,10 +20,39 @@ func Build(c domain.Card, ct domain.Content, sessions []domain.Session, totals [
 // BuildIn é o Build com o nome exibido do projeto ("loja › web"), que no
 // cabeçalho substitui o nome da pasta quando não é vazio.
 func BuildIn(c domain.Card, project string, ct domain.Content, sessions []domain.Session, totals []store.Total, diffStat string) string {
+	return BuildWith(c, project, ct, sessions, totals, diffStat, Family{})
+}
+
+// maxChildrenListed é quantas filhas do épico o pacote lista.
+const maxChildrenListed = 10
+
+// Family é a família do card: o épico pai (se houver) e as filhas (se o card
+// for um épico).
+type Family struct {
+	Epic     *domain.Card
+	Children []domain.Card
+}
+
+// BuildWith é o BuildIn com a família do card: o tipo e a prioridade na meta
+// (só quando fogem do padrão), o épico pai logo após o cabeçalho e as filhas.
+func BuildWith(c domain.Card, project string, ct domain.Content, sessions []domain.Session, totals []store.Total, diffStat string, fam Family) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s · %s\n", c.Key, c.Title)
+	if e := fam.Epic; e != nil {
+		line := fmt.Sprintf("Épico: %s · %s", e.Key, e.Title)
+		if g := firstLine(e.Goal); g != "" {
+			line += " — " + g
+		}
+		b.WriteString(line + "\n")
+	}
 
 	meta := []string{}
+	if c.Type != "" && c.Type != domain.TypeTarefa {
+		meta = append(meta, domain.TypeLabel(c.Type))
+	}
+	if c.Priority != "" && c.Priority != domain.PrioMedia {
+		meta = append(meta, "prioridade "+domain.PriorityLabel(c.Priority))
+	}
 	if project != "" {
 		meta = append(meta, project)
 	} else if repo := repoName(sessions); repo != "" {
@@ -59,6 +88,16 @@ func BuildIn(c domain.Card, project string, ct domain.Content, sessions []domain
 		goal = append(goal, "Pronto quando: "+d)
 	}
 	section("Objetivo", strings.Join(goal, "\n"))
+
+	var kids []string
+	for i, k := range fam.Children {
+		if i == maxChildrenListed {
+			kids = append(kids, fmt.Sprintf("… e mais %d", len(fam.Children)-maxChildrenListed))
+			break
+		}
+		kids = append(kids, fmt.Sprintf("- %s · %s · %s · %s", k.Key, domain.TypeLabel(k.Type), k.Title, domain.ColumnLabel(k.Column)))
+	}
+	section("Filhas", strings.Join(kids, "\n"))
 
 	var open, done []string
 	for _, t := range ct.Todos {
@@ -103,6 +142,16 @@ func BuildIn(c domain.Card, project string, ct domain.Content, sessions []domain
 	}
 	section("Desde a última sessão", diffStat)
 	return b.String()
+}
+
+// firstLine é a primeira linha não vazia do texto.
+func firstLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
 }
 
 // repoName usa o diretório da sessão mais recente (maior StartedAt) como nome

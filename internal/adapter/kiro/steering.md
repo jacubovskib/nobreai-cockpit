@@ -60,6 +60,13 @@ Quando o contexto trouxer a frase "NobreAI Cockpit: esta pasta não está cadast
 - `nobre project add <pasta>`: numa pasta que não é git e tem repositórios dentro, cadastra um grupo com pasta e lista os repositórios como sub-projetos sugeridos. Pergunte ao usuário antes de cadastrar a pasta; depois, mostre a lista e só cadastre um deles (`nobre project add <repo> --pai <id do grupo>`) se ele pedir.
 - `nobre status`: mostra o card, "Onde parei" e o que falta para o handoff.
 
+## Épicos e tipos
+
+- Use `--type historia|bug|tarefa|epico` e `--epic <KEY>` (em `nobre start`, `nobre card add` ou depois com `nobre card set [<KEY>] ...`) quando o usuário falar em épico ou história, ou quando o trabalho for parte de um épico existente. `--no-epic` solta o card do épico; `--priority`, `--label` e `--points` também valem.
+- Para quebrar um épico, crie uma filha por entrega: `nobre card add "<título>" --epic NAC-60 --type historia`.
+- A sessão num épico é de planejamento: não marque o épico como done; a coluna dele segue as filhas.
+- Nunca crie épicos nem mude o tipo de um card sem o usuário pedir.
+
 ## Como manter o card útil
 
 - Atualize "Onde parei" com `nobre note` a cada passo relevante e antes de parar. Escreva o essencial: o que está feito, o que vem agora e qualquer armadilha.
