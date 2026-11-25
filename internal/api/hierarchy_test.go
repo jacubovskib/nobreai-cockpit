@@ -135,6 +135,18 @@ func TestEpicOnGroupWithoutFolder(t *testing.T) {
 	// O épico no grupo sem pasta não pode virar card comum lá.
 	a.wantErr(t, "PATCH", "/api/cards/"+epic.Key, map[string]any{"type": "tarefa"},
 		http.StatusBadRequest, msgGroupNoCards)
+	// Épico de um repositório do grupo pode ir para o grupo sem pasta.
+	repo, _, err := a.st.CreateChild("api", "/r/loja/api", g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := a.postCard(t, map[string]any{"title": "Épico do repo", "project_id": repo.ID, "type": "epico"})
+	if rec := a.do(t, "PATCH", "/api/cards/"+moved.Key, map[string]any{"project_id": g.ID}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("mover épico para o grupo = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(moved.Key); got.ProjectID != g.ID {
+		t.Fatalf("épico ficou no projeto %d", got.ProjectID)
+	}
 }
 
 func TestHierarchyValidation(t *testing.T) {

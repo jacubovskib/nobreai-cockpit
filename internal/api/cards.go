@@ -247,6 +247,10 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, err, "")
 			return
 		}
+		if dest == nil {
+			writeError(w, http.StatusNotFound, "projeto não encontrado")
+			return
+		}
 	}
 	// Por último entre as validações: virar épico já limpa o branch no banco.
 	if code, msg := s.applyHierarchy(&c, in.hierarchyInput, false); code != 0 {
