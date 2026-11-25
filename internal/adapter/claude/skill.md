@@ -72,7 +72,7 @@ Quando o início da sessão trouxer o bloco de memórias do Cockpit ("Memórias 
 
 ## Épicos e tipos
 
-- Use `--type historia|bug|tarefa|epico` e `--epic <KEY>` (em `nobre start`, `nobre card add` ou depois com `nobre card set [<KEY>] ...`) quando o usuário falar em épico ou história, ou quando o trabalho for parte de um épico existente. `--no-epic` solta o card do épico; `--priority`, `--label` e `--points` também valem.
+- Use `--type historia|bug|tarefa|epico` e `--epic <KEY>` (em `nobre start`, `nobre card add` ou depois com `nobre card set [<KEY>] ...`) quando o usuário falar em épico ou história, ou quando o trabalho for parte de um épico existente. `--no-epic` solta o card do épico; `--priority` e `--points` também valem. `--label` define a lista completa de labels do card (repita a flag para várias; ao mudar labels de um card existente, inclua as que ficam) e `--no-labels` limpa todas.
 - Para quebrar um épico, crie uma filha por entrega: `nobre card add "<título>" --epic NAC-60 --type historia`.
 - A sessão num épico é de planejamento: não marque o épico como done; a coluna dele segue as filhas.
 - Nunca crie épicos nem mude o tipo de um card sem o usuário pedir.

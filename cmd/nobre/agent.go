@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 type fieldFlags struct {
 	typ, epic, priority *string
 	noEpic, noPoints    *bool
+	noLabels            *bool
 	labels              *listFlag
 	points              *float64
 }
@@ -25,7 +27,8 @@ func addFieldFlags(fs *flag.FlagSet) fieldFlags {
 	f.epic = fs.String("epic", "", "chave do épico pai")
 	f.noEpic = fs.Bool("no-epic", false, "tira o card do épico")
 	f.priority = fs.String("priority", "", "prioridade: mais_alta, alta, media, baixa ou mais_baixa")
-	fs.Var(f.labels, "label", "label (repetível)")
+	fs.Var(f.labels, "label", "label (repetível); define a lista completa de labels do card")
+	f.noLabels = fs.Bool("no-labels", false, "tira todas as labels")
 	f.points = fs.Float64("points", 0, "estimativa em pontos")
 	f.noPoints = fs.Bool("no-points", false, "tira a estimativa")
 	return f
@@ -41,7 +44,13 @@ func (f fieldFlags) fields(fs *flag.FlagSet) (client.CardFields, error) {
 	if set["points"] && *f.noPoints {
 		return client.CardFields{}, usagef("%s: --points e --no-points não combinam", fs.Name())
 	}
-	cf := client.CardFields{Type: *f.typ, Priority: *f.priority, Labels: []string(*f.labels), ClearPoints: *f.noPoints}
+	if len(*f.labels) > 0 && *f.noLabels {
+		return client.CardFields{}, usagef("%s: --label e --no-labels não combinam", fs.Name())
+	}
+	if set["points"] && (math.IsNaN(*f.points) || math.IsInf(*f.points, 0) || *f.points < 0) {
+		return client.CardFields{}, usagef("%s: --points precisa ser um número maior ou igual a zero", fs.Name())
+	}
+	cf := client.CardFields{Type: *f.typ, Priority: *f.priority, Labels: []string(*f.labels), ClearLabels: *f.noLabels, ClearPoints: *f.noPoints}
 	switch {
 	case *f.noEpic:
 		empty := ""
@@ -58,7 +67,7 @@ func (f fieldFlags) fields(fs *flag.FlagSet) (client.CardFields, error) {
 }
 
 func (c *cli) start(args []string) error {
-	const u = `uso: nobre start "<título>" [--goal ...] [--done-when ...] [--type epico|historia|tarefa|bug] [--epic <KEY>] [--priority ...] [--label ...] [--points n]`
+	const u = `uso: nobre start "<título>" [--goal ...] [--done-when ...] [--type epico|historia|tarefa|bug] [--epic <KEY>] [--priority ...] [--label ... | --no-labels] [--points n]`
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	goal := fs.String("goal", "", "objetivo do card")
 	done := fs.String("done-when", "", "critério de pronto")
@@ -84,8 +93,8 @@ func (c *cli) start(args []string) error {
 }
 
 func (c *cli) card(args []string) error {
-	const u = `uso: nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado] [--type ...] [--epic <KEY>] [--priority ...] [--label ...] [--points n]
-     nobre card set [<KEY>] [--type ...] [--epic <KEY> | --no-epic] [--priority ...] [--label ...] [--points n | --no-points]`
+	const u = `uso: nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado] [--type ...] [--epic <KEY>] [--priority ...] [--label ... | --no-labels] [--points n]
+     nobre card set [<KEY>] [--type ...] [--epic <KEY> | --no-epic] [--priority ...] [--label ... | --no-labels] [--points n | --no-points]`
 	if len(args) > 0 && args[0] == "set" {
 		return c.cardSet(args[1:], u)
 	}
@@ -135,7 +144,7 @@ func (c *cli) cardSet(args []string, u string) error {
 	if err != nil {
 		return err
 	}
-	if cf.Type == "" && cf.Priority == "" && cf.ParentKey == nil && len(cf.Labels) == 0 && cf.Points == nil && !cf.ClearPoints {
+	if cf.Type == "" && cf.Priority == "" && cf.ParentKey == nil && len(cf.Labels) == 0 && !cf.ClearLabels && cf.Points == nil && !cf.ClearPoints {
 		return usagef("%s", u)
 	}
 	key := ""
@@ -380,7 +389,9 @@ func (c *cli) status() error {
 		fmt.Fprintf(c.out, "Projeto: %s\n", k.ProjectName)
 	}
 	fmt.Fprintf(c.out, "Onde parei: %s\n", where)
-	fmt.Fprintln(c.out, statusKind(k))
+	if line := statusKind(k); line != "" {
+		fmt.Fprintln(c.out, line)
+	}
 	fmt.Fprintf(c.out, "Prontidão: %d/%d\n", k.Readiness.Met, k.Readiness.Total)
 	for _, it := range k.Readiness.Items {
 		if !it.OK {
@@ -404,6 +415,9 @@ func (c *cli) status() error {
 
 // statusKind é a linha "Tipo: ..." do nobre status.
 func statusKind(k *client.StatusCard) string {
+	if (k.Type == domain.TypeTarefa || k.Type == "") && (k.Priority == domain.PrioMedia || k.Priority == "") && k.ParentKey == "" && k.Children == nil {
+		return ""
+	}
 	parts := []string{"Tipo: " + domain.TypeLabel(k.Type)}
 	if k.Priority != domain.PrioMedia && k.Priority != "" {
 		parts = append(parts, "Prioridade: "+domain.PriorityLabel(k.Priority))

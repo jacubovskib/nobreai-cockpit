@@ -186,12 +186,13 @@ func (c *Client) Status(ctx context.Context) (Status, error) {
 
 // CardFields são os campos de tipo, pai, prioridade, labels e points de um card.
 // Campo vazio não vai no corpo (o servidor não muda); ParentKey "" tira o pai;
-// ClearPoints tira a estimativa.
+// ClearLabels esvazia a lista de labels; ClearPoints tira a estimativa.
 type CardFields struct {
 	Type, Priority string
 	ParentKey      *string
 	Labels         []string
 	Points         *float64
+	ClearLabels    bool
 	ClearPoints    bool
 }
 
@@ -206,7 +207,10 @@ func (f CardFields) body() map[string]any {
 	if f.ParentKey != nil {
 		b["parent_key"] = *f.ParentKey
 	}
-	if len(f.Labels) > 0 {
+	switch {
+	case f.ClearLabels:
+		b["labels"] = []string{}
+	case len(f.Labels) > 0:
 		b["labels"] = f.Labels
 	}
 	switch {

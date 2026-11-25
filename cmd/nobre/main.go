@@ -22,9 +22,9 @@ const defaultAddr = "127.0.0.1:7420"
 const usage = `nobre: CLI do NobreAI Cockpit
 
 Agente (use dentro de uma sessão de agente):
-  nobre start "<título>" [--goal ...] [--done-when ...] [--type epico|historia|tarefa|bug] [--epic <KEY>] [--priority mais_alta|alta|media|baixa|mais_baixa] [--label <x>]... [--points <n>]   cria um card e liga esta sessão
-  nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado] [--type ...] [--epic <KEY>] [--priority ...] [--label <x>]... [--points <n>]  cria um card sem ligar esta sessão
-  nobre card set [<KEY>] [--type ...] [--epic <KEY> | --no-epic] [--priority ...] [--label <x>]... [--points <n> | --no-points]  muda tipo, épico, prioridade, labels e pontos (sem KEY, o card desta sessão)
+  nobre start "<título>" [--goal ...] [--done-when ...] [--type epico|historia|tarefa|bug] [--epic <KEY>] [--priority mais_alta|alta|media|baixa|mais_baixa] [--label <x>... | --no-labels] [--points <n>]   cria um card e liga esta sessão
+  nobre card add "<título>" [--goal ...] [--done-when ...] [--branch ...] [--where "<onde parei>"] [--column backlog|pausado] [--type ...] [--epic <KEY>] [--priority ...] [--label <x>... | --no-labels] [--points <n>]  cria um card sem ligar esta sessão
+  nobre card set [<KEY>] [--type ...] [--epic <KEY> | --no-epic] [--priority ...] [--label <x>... | --no-labels] [--points <n> | --no-points]  muda tipo, épico, prioridade, labels e pontos (sem KEY, o card desta sessão)
   nobre resume <KEY> [--force]                            liga esta sessão ao card e imprime o pacote
   nobre note "<onde parei>"                               atualiza "Onde parei"
   nobre decide "<decisão>" --why "<porquê>"               registra uma decisão

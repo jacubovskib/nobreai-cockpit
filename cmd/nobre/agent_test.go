@@ -468,6 +468,7 @@ func TestStartAndCardFlagsSendHierarchyFields(t *testing.T) {
 			"/api/me/cards", `{"branch":"","column":"","done_when":"","goal":"","points":0.5,"title":"y","type":"bug","where_stopped":""}`},
 		{[]string{"card", "set", "NAC-2", "--no-epic"}, "/api/me/card-set", `{"key":"NAC-2","parent_key":""}`},
 		{[]string{"card", "set", "--no-points"}, "/api/me/card-set", `{"points":null}`},
+		{[]string{"card", "set", "--no-labels"}, "/api/me/card-set", `{"labels":[]}`},
 		{[]string{"card", "set", "--priority", "baixa", "--label", "x"}, "/api/me/card-set", `{"labels":["x"],"priority":"baixa"}`},
 	}
 	for _, c := range cases {
@@ -492,10 +493,20 @@ func TestCardSetOutputAndUsage(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"card", "set"}, {"card", "set", "NAC-1", "--epic", "NAC-2", "--no-epic"}, {"card", "set", "--points", "1", "--no-points"},
+		{"card", "set", "--label", "a", "--no-labels"}, {"card", "set", "--points", "NaN"}, {"card", "set", "--points", "Inf"}, {"card", "set", "--points", "-1"},
 	} {
 		if r := runCLI(t, "127.0.0.1:1", "", nil, args...); r.code != 2 || r.stdout != "" {
 			t.Fatalf("%v: %+v", args, r)
 		}
+	}
+}
+
+func TestStatusOmitsKindLineForPlainTask(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"session":{},"card":{"key":"NAC-7","title":"T","type":"tarefa","priority":"media","readiness":{"met":0,"total":0}}}`))
+	})
+	if r := runCLI(t, addr, "", nil, "status"); strings.Contains(r.stdout, "Tipo:") {
+		t.Fatalf("linha Tipo inesperada:\n%s", r.stdout)
 	}
 }
 
@@ -506,7 +517,7 @@ func TestStatusShowsKindLine(t *testing.T) {
 	})
 	for _, c := range []struct{ card, want string }{
 		{`"type":"historia","priority":"alta","parent_key":"NAC-1","parent_title":"Checkout novo",`, "Tipo: História · Prioridade: Alta · Épico: NAC-1 · Checkout novo\n"},
-		{`"type":"tarefa","priority":"media",`, "Tipo: Tarefa\n"},
+		{`"type":"tarefa","priority":"alta",`, "Tipo: Tarefa · Prioridade: Alta\n"},
 		{`"type":"epico","priority":"media","children":{"total":7,"done":4},`, "Tipo: Épico · Filhas: 4/7 concluídas\n"},
 	} {
 		card = c.card
