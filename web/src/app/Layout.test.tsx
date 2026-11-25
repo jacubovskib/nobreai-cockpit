@@ -24,12 +24,22 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe('Layout', () => {
   it('mostra a faixa de demonstração e o daemon ativo', async () => {
-    mockApi({ '/api/health': { ok: true, version: '0.1.0' }, '/api/settings': { demo: true } })
+    mockApi({ '/api/health': { ok: true, version: 'v0.1.0' }, '/api/settings': { demo: true } })
     renderApp()
     expect(await screen.findByText('Dados de demonstração')).toBeInTheDocument()
     expect(await screen.findByText('nobred ativo')).toBeInTheDocument()
     expect(screen.getByText('127.0.0.1:7420 · v0.1.0')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Board/ })).toHaveAttribute('aria-current', 'page')
+  })
+  it('versão sem "v" ganha o "v"; outras aparecem como vêm', async () => {
+    mockApi({ '/api/health': { ok: true, version: '0.2.0' }, '/api/settings': { demo: false } })
+    renderApp()
+    expect(await screen.findByText('127.0.0.1:7420 · v0.2.0')).toBeInTheDocument()
+  })
+  it('versão de build do código aparece sem "v"', async () => {
+    mockApi({ '/api/health': { ok: true, version: 'dev' }, '/api/settings': { demo: false } })
+    renderApp()
+    expect(await screen.findByText('127.0.0.1:7420 · dev')).toBeInTheDocument()
   })
   it('sem demo não mostra a faixa; daemon fora do ar fica vermelho', async () => {
     mockApi({ '/api/health': new Error('x'), '/api/settings': { demo: false } })
@@ -41,7 +51,7 @@ describe('Layout', () => {
 
 describe('Navegação', () => {
   it('tem a página de worktrees no menu', async () => {
-    mockApi({ '/api/health': { ok: true, version: '0.1.0' }, '/api/settings': { demo: false }, '/api/worktrees': [] })
+    mockApi({ '/api/health': { ok: true, version: 'v0.1.0' }, '/api/settings': { demo: false }, '/api/worktrees': [] })
     renderApp('/worktrees')
     expect(await screen.findByRole('heading', { name: 'Worktrees' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Worktrees/ })).toHaveAttribute('aria-current', 'page')
@@ -50,7 +60,7 @@ describe('Navegação', () => {
 
 describe('Seletor de projeto', () => {
   const base = {
-    '/api/health': { ok: true, version: '0.1.0' }, '/api/settings': { demo: false },
+    '/api/health': { ok: true, version: 'v0.1.0' }, '/api/settings': { demo: false },
     '/api/projects': [{ id: 1, name: 'cockpit', path: '/w/cockpit', capture: true }, { id: 2, name: 'site', path: '/w/site', capture: true }],
     '/api/cards': [], '/api/usage/totals?group=project': [],
   }

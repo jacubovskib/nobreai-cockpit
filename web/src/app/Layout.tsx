@@ -54,6 +54,12 @@ const NAV: { to: string; label: string; end?: boolean; icon: ReactNode }[] = [
   },
 ]
 
+// A API manda a tag com o "v" (v0.1.0), "dev" ou a saída do git describe.
+// Só põe o "v" quando a versão começa com dígito.
+function versionLabel(v: string): string {
+  return /^\d/.test(v) ? `v${v}` : v
+}
+
 function DaemonStatus() {
   const { data, isError, isPending } = useHealth()
   if (isPending) return <div className="daemon" aria-live="polite"><span className="daemon-status">verificando…</span></div>
@@ -73,7 +79,7 @@ function DaemonStatus() {
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="var(--ok)" /></svg>
         nobred ativo
       </div>
-      <span className="mono">127.0.0.1:7420 · v{data.version}</span>
+      <span className="mono">127.0.0.1:7420 · {versionLabel(data.version)}</span>
     </div>
   )
 }
