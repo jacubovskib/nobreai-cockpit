@@ -1110,3 +1110,14 @@ func TestEpicSkipsBranchSync(t *testing.T) {
 		t.Fatalf("branch = %q", got.Branch)
 	}
 }
+
+func TestMeBranchRefusesEpic(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	e := a.postCard(t, map[string]any{"title": "E", "type": "epico", "project_id": p.ID})
+	a.liveSession(t, "claude:e", 4242, e.Key)
+	rec := a.do(t, "POST", "/api/me/branch", map[string]string{"branch": "feat/x"}, 4242)
+	if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != "o épico não guarda branch" {
+		t.Fatalf("branch = %d %s", rec.Code, rec.Body)
+	}
+}

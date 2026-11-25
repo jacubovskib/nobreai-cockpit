@@ -423,3 +423,19 @@ func TestOverviewIgnoresEpicWithoutLive(t *testing.T) {
 		}
 	}
 }
+
+func TestLeaveEpicLiveIsConflict(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	epic := a.postCard(t, map[string]any{"title": "E", "type": "epico", "project_id": p.ID})
+	a.liveSession(t, "claude:ep", 7, epic.Key)
+	want := "o épico tem uma sessão ao vivo; encerre a sessão antes de mudar o tipo"
+	a.wantErr(t, "PATCH", "/api/cards/"+epic.Key, map[string]any{"type": "tarefa"}, http.StatusConflict, want)
+	rec := a.do(t, "POST", "/api/me/card-set", map[string]any{"key": epic.Key, "type": "tarefa"}, 7)
+	if rec.Code != http.StatusConflict || decode[map[string]string](t, rec)["error"] != want {
+		t.Fatalf("card-set = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := a.st.GetCard(epic.Key); got.Type != domain.TypeEpico {
+		t.Fatalf("tipo = %s", got.Type)
+	}
+}

@@ -489,6 +489,10 @@ func (s *server) meBranch(w http.ResponseWriter, r *http.Request, sess domain.Se
 	if !readJSON(w, r, &in) {
 		return
 	}
+	if c.Type == domain.TypeEpico {
+		writeError(w, http.StatusConflict, "o épico não guarda branch")
+		return
+	}
 	b := strings.TrimSpace(in.Branch)
 	if b == "" {
 		writeError(w, http.StatusBadRequest, "branch obrigatório")

@@ -105,6 +105,9 @@ func NormalizeLabels(in []string) ([]string, error) {
 		if strings.IndexFunc(l, unicode.IsSpace) >= 0 {
 			return nil, fmt.Errorf("label sem espaços: %q", l)
 		}
+		if strings.IndexFunc(l, func(r rune) bool { return unicode.IsControl(r) || r == ',' }) >= 0 {
+			return nil, fmt.Errorf("label sem vírgula nem caractere de controle: %q", l)
+		}
 		if utf8.RuneCountInString(l) > maxLabelRunes {
 			return nil, fmt.Errorf("label passa de %d caracteres: %q", maxLabelRunes, l)
 		}
@@ -166,6 +169,9 @@ func CheckHierarchy(h HierarchyCheck) error {
 	}
 	if becomingEpic && !h.New && h.Live {
 		return errors.New("o card tem uma sessão ao vivo; encerre a sessão antes de transformá-lo em épico")
+	}
+	if h.OldType == TypeEpico && h.Card.Type != TypeEpico && !h.New && h.Live {
+		return errors.New("o épico tem uma sessão ao vivo; encerre a sessão antes de mudar o tipo")
 	}
 	return nil
 }

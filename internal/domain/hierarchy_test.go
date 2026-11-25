@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -92,6 +93,7 @@ func TestCheckHierarchy(t *testing.T) {
 		{"virar épico com pai", ok(HierarchyCheck{Card: Card{Type: TypeEpico}, OldType: TypeTarefa, Parent: epic}), "tire o card do épico antes"},
 		{"deixar de ser épico com filhas", ok(HierarchyCheck{Card: Card{Type: TypeTarefa}, OldType: TypeEpico, ChildCount: 3}), "remova as 3 filhas do épico antes"},
 		{"virar épico ao vivo", ok(HierarchyCheck{Card: Card{Type: TypeEpico}, OldType: TypeTarefa, Live: true}), "o card tem uma sessão ao vivo; encerre a sessão antes de transformá-lo em épico"},
+		{"deixar de ser épico ao vivo", ok(HierarchyCheck{Card: Card{Type: TypeTarefa}, OldType: TypeEpico, Live: true}), "o épico tem uma sessão ao vivo; encerre a sessão antes de mudar o tipo"},
 		{"card novo épico ao vivo", ok(HierarchyCheck{Card: Card{Type: TypeEpico}, OldType: TypeEpico, Live: true, New: true}), ""},
 	}
 	for _, c := range cases {
@@ -120,6 +122,12 @@ func TestNormalizeLabels(t *testing.T) {
 	}
 	if _, err := NormalizeLabels([]string{"a b"}); err == nil || err.Error() != `label sem espaços: "a b"` {
 		t.Fatalf("espaço interno: %v", err)
+	}
+	for _, bad := range []string{"a,b", "a\x1fb", "a\x00"} {
+		want := fmt.Sprintf("label sem vírgula nem caractere de controle: %q", bad)
+		if _, err := NormalizeLabels([]string{bad}); err == nil || err.Error() != want {
+			t.Fatalf("%q: erro = %v", bad, err)
+		}
 	}
 	if _, err := NormalizeLabels([]string{""}); err == nil {
 		t.Fatal("vazia deveria dar erro")
