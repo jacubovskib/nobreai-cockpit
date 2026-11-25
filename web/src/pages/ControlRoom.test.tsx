@@ -167,7 +167,7 @@ describe('ControlRoom', () => {
     fireEvent.change(screen.getByLabelText('Título'), { target: { value: 'Webhook' } })
     await screen.findByRole('option', { name: 'portal-api' })
     fireEvent.click(screen.getByRole('button', { name: 'Criar tarefa' }))
-    await waitFor(() => expect(calls(fn, 'POST', '/api/cards')).toEqual([{ title: 'Webhook', goal: '', project_id: 3 }]))
+    await waitFor(() => expect(calls(fn, 'POST', '/api/cards')).toEqual([{ title: 'Webhook', goal: '', project_id: 3, type: 'tarefa' }]))
   })
 
   it('Nova tarefa sem projeto orienta a cadastrar', async () => {

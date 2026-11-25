@@ -330,3 +330,71 @@ describe('CardPage plano', () => {
     expect(await screen.findByText('Sem plano registrado. O agente registra com nobre plan.')).toBeInTheDocument()
   })
 })
+
+describe('CardPage · hierarquia', () => {
+  const cardsRoute = [
+    { key: 'NAC-7', title: 'Plataforma', type: 'epico', column: 'backlog', project_id: 2 },
+    { key: 'NAC-8', title: 'Velho', type: 'epico', column: 'concluido', project_id: 1 },
+    { key: 'NAC-42', title: 'Migrar autenticação', type: 'tarefa', column: 'revisao', project_id: 1 },
+  ]
+  const typed = { ...detail, type: 'tarefa', priority: 'media', labels: [], points: null, parent_key: '', parent_title: '', child_cards: null, children: null }
+
+  it('salva tipo, épico, prioridade, labels e pontos pelo PATCH', async () => {
+    const fn = mock({ ...base, '/api/cards': cardsRoute, '/api/cards/NAC-42': typed, 'PATCH /api/cards/NAC-42': {} })
+    wrap(<CardPage />)
+    await screen.findByRole('option', { name: 'NAC-7 · Plataforma' })
+    expect(screen.queryByRole('option', { name: /NAC-8/ })).toBeNull()
+    expect(screen.getByRole('option', { name: 'sem épico' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Tipo'), { target: { value: 'bug' } })
+    fireEvent.change(screen.getByLabelText('Épico'), { target: { value: 'NAC-7' } })
+    fireEvent.change(screen.getByLabelText('Prioridade'), { target: { value: 'alta' } })
+    fireEvent.change(screen.getByLabelText('Labels'), { target: { value: 'api, urgente  web' } })
+    fireEvent.change(screen.getByLabelText('Pontos'), { target: { value: '0.5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar classificação' }))
+    await waitFor(() => expect(bodies(fn, 'PATCH', '/api/cards/NAC-42')).toEqual([
+      { type: 'bug', parent_key: 'NAC-7', priority: 'alta', labels: ['api', 'urgente', 'web'], points: 0.5 },
+    ]))
+  })
+
+  it('"sem épico" remove o pai e pontos vazios enviam null', async () => {
+    const fn = mock({ ...base, '/api/cards': cardsRoute, '/api/cards/NAC-42': { ...typed, parent_key: 'NAC-7', parent_title: 'Plataforma', points: 3 }, 'PATCH /api/cards/NAC-42': {} })
+    wrap(<CardPage />)
+    await screen.findByRole('option', { name: 'NAC-7 · Plataforma' })
+    fireEvent.change(screen.getByLabelText('Épico'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('Pontos'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar classificação' }))
+    await waitFor(() => expect(bodies(fn, 'PATCH', '/api/cards/NAC-42')).toEqual([{ parent_key: '', points: null }]))
+  })
+
+  it('mostra o erro do servidor no ErrorLine', async () => {
+    mock({ ...base, '/api/cards': cardsRoute, '/api/cards/NAC-42': typed, 'PATCH /api/cards/NAC-42': { status: 409, body: { error: 'só épico pode ser pai' } } })
+    wrap(<CardPage />)
+    await screen.findByRole('option', { name: 'NAC-7 · Plataforma' })
+    fireEvent.change(screen.getByLabelText('Prioridade'), { target: { value: 'baixa' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar classificação' }))
+    expect(await screen.findByText('só épico pode ser pai')).toBeInTheDocument()
+  })
+
+  it('página de épico mostra as filhas, o resumo de custo e Nova filha; sem prontidão', async () => {
+    const kid = {
+      key: 'NAC-50', title: 'Filha um', type: 'bug', column: 'em_andamento', project_id: 1, agent: 'claude', live: false,
+      totals: tot({ cost_usd: 1.5 }),
+    }
+    const epic = {
+      ...typed, key: 'NAC-7', type: 'epico', title: 'Plataforma', child_cards: [kid], children: { total: 1, done: 0 },
+      totals: tot({ cost_usd: 1 }), children_totals: tot({ cost_usd: 1.5 }), tree_totals: tot({ cost_usd: 2.5 }),
+      readiness: { met: 0, total: 0, ready: false, items: [] },
+    }
+    mock({ ...base, '/api/cards': cardsRoute, '/api/cards/NAC-7': epic })
+    wrap(<CardPage />, '/cards/NAC-7')
+    const row = (await screen.findByText('Filha um')).closest('tr')!
+    expect(within(row).getByText('NAC-50')).toBeInTheDocument()
+    expect(within(row).getByText('Bug')).toBeInTheDocument()
+    expect(within(row).getByText('portal-api')).toBeInTheDocument()
+    expect(within(row).getByText('US$ 1,50')).toBeInTheDocument()
+    expect(screen.getByText(/custo do épico/)).toHaveTextContent(/custo do épico US\$\s1,00 · das filhas US\$\s1,50 · total US\$\s2,50/)
+    expect(screen.getByRole('button', { name: 'Nova filha' })).toBeInTheDocument()
+    expect(screen.queryByText('Prontidão')).toBeNull()
+    expect(screen.queryByLabelText('Épico')).toBeNull()
+  })
+})

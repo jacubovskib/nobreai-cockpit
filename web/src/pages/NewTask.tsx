@@ -1,30 +1,42 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useProjects } from '../api/queries'
+import { useCards, useProjects } from '../api/queries'
 import { post } from '../api/client'
+import type { CardType } from '../api/types'
+import { TYPE_LABEL } from './boardModel'
 import { displayName, isGroup, useProjectFilter } from '../app/project'
 
 const field: React.CSSProperties = { minHeight: 40, padding: '0 10px', borderRadius: 8, border: '1px solid #2E333E', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' }
 const btn: React.CSSProperties = { minHeight: 40, padding: '0 14px', borderRadius: 8, border: '1px solid #3A3F4B', background: 'transparent', color: 'var(--text)', font: 'inherit', cursor: 'pointer' }
 
 // NewTask: botão "Nova tarefa" que abre um formulário inline e cria o card no Backlog.
-export function NewTask() {
+// Com `epic`, o épico já vem escolhido (botão "Nova filha"); o projeto segue escolhível.
+export function NewTask({ epic = '', label = 'Nova tarefa' }: { epic?: string; label?: string } = {}) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [goal, setGoal] = useState('')
   const [project, setProject] = useState('')
+  const [type, setType] = useState<CardType>('tarefa')
+  const [parent, setParent] = useState(epic)
   const [error, setError] = useState('')
   const qc = useQueryClient()
   const projects = useProjects().data
   const { projectId } = useProjectFilter()
-  const repos = (projects ?? []).filter((p) => !isGroup(p) || p.path !== '')
+  const cards = useCards().data
+  // Só épico pode ir para um grupo sem pasta.
+  const choices = (projects ?? []).filter((p) => type === 'epico' || !isGroup(p) || p.path !== '')
+  const repos = choices
+  const epics = (cards ?? []).filter((c) => c.type === 'epico' && c.column !== 'concluido')
   const chosen = project || String(repos.find((p) => p.id === projectId)?.id ?? repos[0]?.id ?? '')
   const create = useMutation({
     mutationFn: () =>
-      post('/api/cards', { title: title.trim(), goal: goal.trim(), project_id: Number(chosen) }),
+      post('/api/cards', {
+        title: title.trim(), goal: goal.trim(), project_id: Number(chosen), type,
+        ...(type !== 'epico' && parent ? { parent_key: parent } : {}),
+      }),
     onSuccess: () => {
-      setOpen(false); setTitle(''); setGoal(''); setError('')
+      setOpen(false); setTitle(''); setGoal(''); setType('tarefa'); setParent(epic); setError('')
       qc.invalidateQueries({ queryKey: ['cards'] }); qc.invalidateQueries({ queryKey: ['overview'] })
     },
     onError: (e: Error) => setError(e.message),
@@ -33,7 +45,7 @@ export function NewTask() {
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} style={{ ...btn, minHeight: 44, padding: '0 18px', border: 0, background: 'var(--text)', color: 'var(--bg)', fontWeight: 600 }}>
-        Nova tarefa
+        {label}
       </button>
     )
   }
@@ -61,9 +73,24 @@ export function NewTask() {
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-2)' }}>
         Projeto
         <select value={chosen} onChange={(e) => setProject(e.target.value)} style={field}>
-          {(projects ?? []).filter((p) => !isGroup(p) || p.path !== '').map((p) => <option key={p.id} value={p.id}>{displayName(p, projects ?? [])}</option>)}
+          {choices.map((p) => <option key={p.id} value={p.id}>{displayName(p, projects ?? [])}</option>)}
         </select>
       </label>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-2)' }}>
+        Tipo
+        <select value={type} onChange={(e) => setType(e.target.value as CardType)} style={field}>
+          {(Object.keys(TYPE_LABEL) as CardType[]).map((k) => <option key={k} value={k}>{TYPE_LABEL[k]}</option>)}
+        </select>
+      </label>
+      {type !== 'epico' && (
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-2)' }}>
+          Épico
+          <select value={parent} onChange={(e) => setParent(e.target.value)} style={field}>
+            <option value="">sem épico</option>
+            {epics.map((c) => <option key={c.key} value={c.key}>{c.key} · {c.title}</option>)}
+          </select>
+        </label>
+      )}
       <button type="submit" style={{ ...btn, background: '#2A2F3A', color: '#fff' }} disabled={create.isPending || !title.trim()}>Criar tarefa</button>
       <button type="button" style={btn} onClick={() => { setOpen(false); setError('') }}>Cancelar</button>
       {error && <span role="alert" style={{ color: 'var(--err)', fontSize: 13, flexBasis: '100%' }}>{error}</span>}

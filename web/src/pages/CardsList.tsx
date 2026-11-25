@@ -5,6 +5,8 @@ import { AgentSwatch } from '../ui/AgentSwatch'
 import { Credits, Money } from '../ui/Money'
 import { StatusBadge } from '../ui/StatusBadge'
 import { ProjectTag } from '../ui/ProjectTag'
+import { TYPE_ICON, TYPE_LABEL } from './boardModel'
+import type { CardType } from '../api/types'
 import { useProjectFilter, useWithProject } from '../app/project'
 
 export function CardsList() {
@@ -13,15 +15,28 @@ export function CardsList() {
   const { ids } = useProjectFilter()
   const projects = useProjects().data ?? []
   const [q, setQ] = useState('')
+  const [type, setType] = useState<CardType | ''>('')
   const term = q.trim().toLowerCase()
-  const rows = (data ?? []).filter((c) => ids === null || (c.project_id !== null && ids.includes(c.project_id))).filter(
+  const rows = (data ?? []).filter((c) => !type || (c.type ?? 'tarefa') === type).filter((c) => ids === null || (c.project_id !== null && ids.includes(c.project_id))).filter(
     (c) => !term || c.key.toLowerCase().includes(term) || c.title.toLowerCase().includes(term),
   )
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1180 }}>
       <header style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 }}>
         <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em' }}>Cards</h1>
-        <div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <label htmlFor="filtro-tipo" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+            Filtrar por tipo
+          </label>
+          <select
+            id="filtro-tipo"
+            value={type}
+            onChange={(e) => setType(e.target.value as CardType | '')}
+            style={{ minHeight: 44, padding: '0 10px', borderRadius: 8, border: '1px solid #2E333E', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' }}
+          >
+            <option value="">Todos os tipos</option>
+            {(Object.keys(TYPE_LABEL) as CardType[]).map((k) => <option key={k} value={k}>{TYPE_LABEL[k]}</option>)}
+          </select>
           <label htmlFor="busca-cards" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
             Buscar cards
           </label>
@@ -44,6 +59,7 @@ export function CardsList() {
             <thead>
               <tr style={{ textAlign: 'left', color: 'var(--text-2)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 <th style={{ padding: '8px 12px' }}>Chave</th>
+                <th style={{ padding: '8px 12px' }}>Tipo</th>
                 <th style={{ padding: '8px 12px' }}>Título</th>
                 <th style={{ padding: '8px 12px' }}>Projeto</th>
                 <th style={{ padding: '8px 12px' }}>Coluna</th>
@@ -55,6 +71,7 @@ export function CardsList() {
               {rows.map((c) => (
                 <tr key={c.key} style={{ borderTop: '1px solid var(--border)' }}>
                   <td className="mono" style={{ padding: '10px 12px', color: 'var(--text-2)' }}>{c.key}</td>
+                  <td style={{ padding: '10px 12px' }}><span aria-hidden="true">{TYPE_ICON[c.type ?? 'tarefa']}</span> {TYPE_LABEL[c.type ?? 'tarefa']}</td>
                   <td style={{ padding: '10px 12px' }}><Link to={withP(`/cards/${c.key}`)}>{c.title}</Link></td>
                   <td style={{ padding: '10px 12px' }}><ProjectTag project={projects.find((p) => p.id === c.project_id) ?? null} projects={projects} /></td>
                   <td style={{ padding: '10px 12px' }}><StatusBadge column={c.column} live={c.live} /></td>

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CardsList } from './CardsList'
@@ -37,6 +37,23 @@ describe('CardsList · projeto', () => {
     wrap('/cards?projeto=1')
     expect(await screen.findByText('Título NAC-1')).toBeInTheDocument()
     expect(screen.queryByText('Título NAC-2')).toBeNull()
+    expect(screen.queryByText('Título NAC-3')).toBeNull()
+  })
+})
+
+describe('CardsList · tipo', () => {
+  it('tem a coluna Tipo e filtra por tipo', async () => {
+    mock({
+      ...routes,
+      '/api/cards': [{ ...card(1, 'NAC-1', 1), type: 'epico' }, { ...card(2, 'NAC-2', 1), type: 'bug' }, card(3, 'NAC-3', 1)],
+    })
+    wrap('/cards')
+    expect(await screen.findByRole('columnheader', { name: 'Tipo' })).toBeInTheDocument()
+    expect(within((await screen.findByText('Título NAC-1')).closest('tr')!).getByText('Épico')).toBeInTheDocument()
+    expect(within(screen.getByText('Título NAC-3').closest('tr')!).getByText('Tarefa')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Filtrar por tipo'), { target: { value: 'bug' } })
+    expect(screen.getByText('Título NAC-2')).toBeInTheDocument()
+    expect(screen.queryByText('Título NAC-1')).toBeNull()
     expect(screen.queryByText('Título NAC-3')).toBeNull()
   })
 })
