@@ -200,7 +200,7 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, msgCardNotFound)
 		return
 	}
-	oldColumn, oldType := c.Column, c.Type
+	oldColumn, oldType, oldBranch := c.Column, c.Type, c.Branch
 	if in.Column != nil && !validColumn(*in.Column) {
 		writeError(w, http.StatusBadRequest, "coluna inválida")
 		return
@@ -252,7 +252,6 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Por último entre as validações: virar épico já limpa o branch no banco.
 	if code, msg := s.applyHierarchy(&c, in.hierarchyInput, false); code != 0 {
 		writeError(w, code, msg)
 		return
@@ -310,6 +309,8 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 			c.Column = *in.Column
 		}
 	}
+	// Daqui em diante só gravações. SetCardProject vem primeiro: a checagem de
+	// família falha antes de gravar qualquer coisa.
 	if moving {
 		err = s.st.SetCardProject(c.ID, *in.ProjectID)
 		switch {
@@ -324,13 +325,17 @@ func (s *server) patchCard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c.ProjectID = *in.ProjectID
-		// Card de grupo nunca tem branch: zera também as marcas do branch.
-		if dest != nil && dest.IsGroup() && c.Branch != "" {
-			if _, err := s.st.SetCardBranch(c.ID, ""); err != nil {
-				writeStoreError(w, err, "")
-				return
-			}
+		// Card de grupo nunca tem branch.
+		if dest.IsGroup() {
 			c.Branch = ""
+		}
+	}
+	// Branch tirado (card de grupo ou que virou épico): zera também as marcas
+	// do branch (head, divergência, merge).
+	if oldBranch != "" && c.Branch == "" {
+		if _, err := s.st.SetCardBranch(c.ID, ""); err != nil {
+			writeStoreError(w, err, "")
+			return
 		}
 	}
 	if err := s.st.UpdateCard(c); err != nil {

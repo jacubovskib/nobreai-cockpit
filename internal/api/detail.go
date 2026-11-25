@@ -227,6 +227,10 @@ func (s *server) cardSummary(c domain.Card, byCard map[string]store.Total) (Card
 		}
 	}
 	sig := domain.CardStatusSignal(in)
+	if c.Type == domain.TypeEpico && sig == domain.SignalParado {
+		// O épico não tem sessão própria: a atividade está nas filhas.
+		sig = domain.SignalNone
+	}
 	// Esperando você usa o sinal cru: pergunta aberta conta mesmo com sessão viva.
 	sum.WaitingOnYou, sum.WaitingReason = domain.WaitingOnYou(domain.WaitingInput{
 		Column: c.Column, OpenQuestions: in.OpenQuestions, HandoffIncomplete: c.HandoffIncomplete,

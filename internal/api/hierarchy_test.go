@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
 )
@@ -24,6 +25,7 @@ type hierCard struct {
 	PauseReason  string   `json:"pause_reason"`
 	WaitingOnYou bool     `json:"waiting_on_you"`
 	WaitingWhy   string   `json:"waiting_reason"`
+	Signal       string   `json:"signal"`
 	Children     *struct {
 		Total int `json:"total"`
 		Done  int `json:"done"`
@@ -329,6 +331,95 @@ func TestWaitingOnYouAPI(t *testing.T) {
 		got := a.boardCard(t, key)
 		if got.WaitingOnYou != (want != "") || got.WaitingWhy != want {
 			t.Fatalf("%s: waiting = %v %q, want %q", key, got.WaitingOnYou, got.WaitingWhy, want)
+		}
+	}
+}
+
+// Virar épico não grava nada (nem limpa o branch) se o pedido falha depois.
+func TestBecomeEpicNoPartialWrite(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	other, err := a.st.CreateProject("outro", "/w/outro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := a.postCard(t, map[string]any{"title": "com branch", "project_id": p.ID, "branch": "feat/x"})
+	a.wantErr(t, "PATCH", "/api/cards/"+c.Key, map[string]any{"type": "epico", "column": "em_andamento"},
+		http.StatusConflict, "a coluna do épico segue as filhas")
+	a.wantErr(t, "PATCH", "/api/cards/"+c.Key, map[string]any{"type": "epico", "project_id": other.ID},
+		http.StatusBadRequest, "o card só pode ir para um projeto da mesma família")
+	got, err := a.st.GetCard(c.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Branch != "feat/x" || got.Type != domain.TypeTarefa || got.ProjectID != p.ID {
+		t.Fatalf("PATCH recusado gravou: %+v", got)
+	}
+}
+
+// O épico não fica "parado": a atividade dele está nas filhas. Revisão e
+// bloqueio continuam valendo.
+func TestEpicSignal(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	old := testNow.Add(-72 * time.Hour)
+	doing := a.postCard(t, map[string]any{"title": "E andamento", "project_id": p.ID, "type": "epico"})
+	kid := a.postCard(t, map[string]any{"title": "F", "project_id": p.ID, "parent_key": doing.Key})
+	if err := a.st.MoveCard(kid.Key, domain.EmAndamento); err != nil {
+		t.Fatal(err)
+	}
+	review := a.postCard(t, map[string]any{"title": "E revisão", "project_id": p.ID, "type": "epico"})
+	done := a.postCard(t, map[string]any{"title": "F2", "project_id": p.ID, "parent_key": review.Key})
+	if err := a.st.MoveCard(done.Key, domain.Concluido); err != nil {
+		t.Fatal(err)
+	}
+	blocker := a.postCard(t, map[string]any{"title": "bloqueador", "project_id": p.ID})
+	blocked := a.postCard(t, map[string]any{"title": "E bloqueado", "project_id": p.ID, "type": "epico"})
+	if rec := a.do(t, "PATCH", "/api/cards/"+blocked.Key, map[string]any{"blocked_by": blocker.Key}, 0); rec.Code != http.StatusOK {
+		t.Fatalf("bloquear épico = %d %s", rec.Code, rec.Body)
+	}
+	a.setCard(t, doing.Key, domain.EmAndamento, old)
+	a.setCard(t, review.Key, domain.Revisao, old)
+	for key, want := range map[string]string{doing.Key: "", review.Key: "aguardando_revisao", blocked.Key: "bloqueado"} {
+		if got := a.boardCard(t, key); got.Signal != want {
+			t.Fatalf("%s: signal = %q, want %q", key, got.Signal, want)
+		}
+	}
+}
+
+// Épico em andamento sem sessão viva não conta nem vira alerta no overview.
+func TestOverviewIgnoresEpicWithoutLive(t *testing.T) {
+	a := newTestAPI(t)
+	p := a.project(t)
+	epic := a.postCard(t, map[string]any{"title": "E", "project_id": p.ID, "type": "epico"})
+	kid := a.postCard(t, map[string]any{"title": "F", "project_id": p.ID, "parent_key": epic.Key})
+	a.liveSession(t, "claude:f", 1, kid.Key)
+	if err := a.st.MoveCard(kid.Key, domain.EmAndamento); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.StartSession(domain.Session{ID: "claude:e", Agent: "claude", PID: 111, StartedAt: testNow.Add(-time.Hour), LastEventAt: testNow.Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.AttachSession("claude:e", epic.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.MarkPIDDead("claude:e", testNow.Add(-7*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.getHier(t, epic.Key); got.Column != "em_andamento" {
+		t.Fatalf("épico = %+v", got)
+	}
+	rec := a.do(t, "GET", "/api/overview", nil, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET = %d %s", rec.Code, rec.Body)
+	}
+	o := decode[overviewResp](t, rec)
+	if o.Today.CardsInProgress != 2 || o.Today.CardsWithoutLive != 0 {
+		t.Fatalf("today = %+v", o.Today)
+	}
+	for _, al := range o.Alerts {
+		if al.Kind == "stale" {
+			t.Fatalf("alerta stale para o épico: %+v", al)
 		}
 	}
 }

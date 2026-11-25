@@ -109,14 +109,11 @@ func (s *server) applyHierarchy(c *domain.Card, in hierarchyInput, isNew bool) (
 		c.ParentID = nil
 	}
 	if c.Type == domain.TypeEpico && oldType != domain.TypeEpico {
-		// O épico nunca pausa nem guarda branch; a coluna vem das filhas (nenhuma ainda).
+		// O épico nunca pausa nem guarda branch; a coluna vem das filhas
+		// (nenhuma ainda). Só em memória: quem grava (patchCard) limpa as marcas
+		// do branch depois de todas as validações.
 		c.PauseReason, c.HandoffIncomplete, c.BlockedBy = "", false, ""
 		c.Column = domain.EpicColumn(c.Column, nil)
-		if !isNew && c.Branch != "" {
-			if _, err := s.st.SetCardBranch(c.ID, ""); err != nil {
-				return http.StatusInternalServerError, "erro interno: " + err.Error()
-			}
-		}
 		c.Branch = ""
 	}
 	return 0, ""
