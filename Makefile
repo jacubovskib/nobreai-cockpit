@@ -6,6 +6,27 @@ BINDIR     ?= $(PREFIX)/bin
 NOBRE_ADDR ?= 127.0.0.1:7420
 DEMO_ADDR  ?= 127.0.0.1:7421
 
+# Serviço do nobred: launchd no macOS (o `nobre setup` grava o LaunchAgent
+# com este rótulo), systemd do usuário nos demais.
+UNAME         := $(shell uname -s)
+LAUNCHD_LABEL := io.nobretech.nobred
+ifeq ($(UNAME),Darwin)
+LAUNCHD_TARGET = gui/$$(id -u)/$(LAUNCHD_LABEL)
+SVC_TOOL       = launchctl
+SVC_ACTIVE     = launchctl print $(LAUNCHD_TARGET) >/dev/null 2>&1
+SVC_INSTALLED  = $(SVC_ACTIVE)
+SVC_RESTART    = launchctl kickstart -k $(LAUNCHD_TARGET)
+SVC_SHOW       = launchctl print $(LAUNCHD_TARGET) 2>/dev/null | grep -E '^[[:space:]]*(state|pid|path) = '
+SVC_LOGS       = tail -F $(HOME)/Library/Logs/nobred.log
+else
+SVC_TOOL       = systemctl
+SVC_ACTIVE     = systemctl --user is-active --quiet nobred
+SVC_INSTALLED  = systemctl --user cat nobred >/dev/null 2>&1
+SVC_RESTART    = systemctl --user restart nobred
+SVC_SHOW       = systemctl --user show nobred --property=MainPID,ActiveEnterTimestamp,FragmentPath 2>/dev/null
+SVC_LOGS       = journalctl --user -u nobred -f
+endif
+
 .DEFAULT_GOAL := help
 .PHONY: help check web build install setup setup-dry-run update restart status logs demo dev test clean uninstall uninstall-dry-run
 
@@ -19,9 +40,9 @@ help: ## mostra esta ajuda
 	@echo
 	@echo "Variáveis: PREFIX=$(PREFIX)  BINDIR=$(BINDIR)  NOBRE_ADDR=$(NOBRE_ADDR)"
 
-check: ## confere as dependências (go, node, pnpm, systemd, claude, PATH)
+check: ## confere as dependências (go, node, pnpm, systemd ou launchd, claude, PATH)
 	@ok=1; \
-	for t in go node pnpm git curl systemctl; do \
+	for t in go node pnpm git curl $(SVC_TOOL); do \
 	  if command -v $$t >/dev/null 2>&1; then printf '✓ %-10s %s\n' $$t "$$(command -v $$t)"; \
 	  else printf '! %-10s não encontrado\n' $$t; ok=0; fi; \
 	done; \
@@ -30,7 +51,8 @@ check: ## confere as dependências (go, node, pnpm, systemd, claude, PATH)
 	if [ -n "$$have" ] && [ "$$(printf '%s\n%s\n' "$$want" "$$have" | sort -V | head -1)" != "$$want" ]; then \
 	  echo "! go $$have é mais antigo que o exigido pelo go.mod ($$want)"; ok=0; \
 	elif [ -n "$$have" ]; then echo "✓ go $$have (go.mod pede $$want)"; fi; \
-	if systemctl --user show-environment >/dev/null 2>&1; then echo "✓ systemd do usuário disponível"; \
+	if [ "$(UNAME)" = Darwin ]; then echo "✓ launchd (macOS): o nobred roda como LaunchAgent"; \
+	elif systemctl --user show-environment >/dev/null 2>&1; then echo "✓ systemd do usuário disponível"; \
 	else echo "! systemctl --user não responde (o nobred roda como serviço de usuário do systemd)"; ok=0; fi; \
 	if command -v claude >/dev/null 2>&1; then echo "✓ claude     $$(command -v claude)"; \
 	else echo "! claude não está no PATH deste terminal (instale o Claude Code ou ponha o diretório dele no PATH)"; ok=0; fi; \
@@ -50,7 +72,7 @@ install: build ## instala nobre e nobred em BINDIR (não reinicia o daemon)
 	install -d "$(BINDIR)"
 	install -m755 nobre nobred "$(BINDIR)/"
 	@echo "Instalado em $(BINDIR)."
-	@if [ "$(filter update,$(MAKECMDGOALS))" = "" ] && systemctl --user is-active --quiet nobred 2>/dev/null; then \
+	@if [ "$(filter update,$(MAKECMDGOALS))" = "" ] && $(SVC_ACTIVE); then \
 	  echo "O nobred está rodando com a versão anterior. Rode 'make restart' para trocar."; fi
 
 setup: install ## instala e configura: hooks, skill e status line do Claude Code e o serviço nobred
@@ -63,13 +85,14 @@ update: install ## reinstala os binários e reinicia o daemon (fecha os terminai
 	@$(MAKE) --no-print-directory restart
 
 restart: ## reinicia o nobred (os terminais abertos na plataforma são encerrados)
-	systemctl --user restart nobred
+	@$(SVC_INSTALLED) || { echo "! o serviço do nobred não está instalado: rode make setup"; exit 1; }
+	$(SVC_RESTART)
 	@for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS -o /dev/null "http://$(NOBRE_ADDR)/api/health" 2>/dev/null && break; sleep 0.5; done
 	@$(MAKE) --no-print-directory status
 
 status: ## mostra o serviço e se a API responde
-	@printf 'Serviço nobred: '; systemctl --user is-active nobred || true
-	@systemctl --user show nobred --property=MainPID,ActiveEnterTimestamp,FragmentPath 2>/dev/null | sed 's/^/  /'
+	@printf 'Serviço nobred: '; if $(SVC_ACTIVE); then echo active; else echo inactive; fi
+	@$(SVC_SHOW) | sed 's/^[[:space:]]*/  /' || true
 	@if curl -fsS "http://$(NOBRE_ADDR)/api/health" 2>/dev/null; then \
 	  echo; echo "Interface: http://$(NOBRE_ADDR)"; \
 	else echo "! a API não respondeu em http://$(NOBRE_ADDR)"; fi
@@ -86,7 +109,7 @@ uninstall-dry-run: ## mostra o que o make uninstall removeria
 	@echo "[dry-run] Apagaria $(BINDIR)/nobre e $(BINDIR)/nobred"
 
 logs: ## acompanha o log do nobred
-	journalctl --user -u nobred -f
+	$(SVC_LOGS)
 
 demo: build ## sobe um nobred com dados de demonstração em DEMO_ADDR (banco separado)
 	@echo "Demonstração em http://$(DEMO_ADDR) (Ctrl+C para sair)"

@@ -29,7 +29,7 @@ binário.
 por ele mesmo.</sub>
 
 > Estado atual: piloto funcional com o **Claude Code**, em **Linux com
-> systemd**. Os adaptadores para Codex e Kiro, o modo tmux, os limites mensais
+> systemd** e **macOS**. Os adaptadores para Codex e Kiro, o modo tmux, os limites mensais
 > e o servidor MCP ainda não existem.
 
 ## Sumário
@@ -150,14 +150,16 @@ restrito). Ele tem três páginas:
 
 ## Requisitos
 
-- **Linux com systemd** (o daemon roda como serviço de usuário e lê `/proc`).
+- **Linux com systemd** ou **macOS** (o daemon roda como serviço de usuário:
+  unidade do systemd no Linux, LaunchAgent do launchd no macOS).
 - **Go** na versão do `go.mod` (hoje 1.26.5) ou mais nova.
 - **Node.js** e **pnpm**, para compilar a interface (testado com Node 24 e
   pnpm 11).
 - **git** e **curl**.
 - **Claude Code** instalado e autenticado.
 - Um terminal gráfico (gnome-terminal, konsole, xfce4-terminal, terminator,
-  xterm, alacritty, kitty…) para o botão "Continuar" abrir janelas.
+  xterm, alacritty, kitty…) para o botão "Continuar" abrir janelas. No macOS
+  ele usa o Terminal.app.
 
 ## Instalação
 
@@ -172,8 +174,8 @@ O daemon não guarda o `PATH` do terminal onde você rodou o setup. Toda vez que
 abre um agente ("Continuar" ou `nobre run`) ou procura o `claude`, ele pergunta
 o `PATH` ao seu shell de login (bash ou zsh). Assim, trocar a versão do Node,
 de um venv ou do mise não quebra nada, e não é preciso reinstalar. A unidade do
-systemd guarda o `PATH` do terminal do setup só como reserva, para quando o
-shell não puder ser consultado (fish, por exemplo).
+systemd (ou o LaunchAgent, no macOS) guarda o `PATH` do terminal do setup só
+como reserva, para quando o shell não puder ser consultado (fish, por exemplo).
 
 O `make setup` faz, em ordem:
 
@@ -186,7 +188,9 @@ O `make setup` faz, em ordem:
      com as chaves em ordem alfabética, mas o seu conteúdo é preservado;
    - instala a skill em `~/.claude/skills/nobre-cockpit/SKILL.md`;
    - grava `~/.config/systemd/user/nobred.service` e roda
-     `systemctl --user enable --now nobred`;
+     `systemctl --user enable --now nobred` (no macOS, grava
+     `~/Library/LaunchAgents/io.nobretech.nobred.plist` e o carrega com
+     `launchctl bootstrap`);
    - pergunta se o repositório atual deve ser cadastrado como projeto.
 
 O setup roda sempre a partir do binário instalado, nunca do clone: os hooks e
@@ -361,7 +365,7 @@ procurado em `NOBRE_ADDR` (padrão `127.0.0.1:7420`).
 | Alvo | O que faz |
 |---|---|
 | `make` / `make help` | Lista os alvos |
-| `make check` | Confere go, node, pnpm, git, curl, systemd, claude e o `PATH` |
+| `make check` | Confere go, node, pnpm, git, curl, systemd (ou launchd), claude e o `PATH` |
 | `make setup` | Compila, instala e configura (primeira instalação) |
 | `make setup-dry-run` | Mostra o que o setup mudaria, sem gravar nada |
 | `make build` | Compila `./nobre` e `./nobred` com a interface embutida |
@@ -369,12 +373,31 @@ procurado em `NOBRE_ADDR` (padrão `127.0.0.1:7420`).
 | `make update` | Reinstala e reinicia o daemon |
 | `make restart` | Reinicia o daemon |
 | `make status` | Mostra o serviço e se a API responde |
-| `make logs` | Acompanha o log do daemon (`journalctl`) |
+| `make logs` | Acompanha o log do daemon (`journalctl`; no macOS, `~/Library/Logs/nobred.log`) |
 | `make demo` | Sobe um daemon de demonstração em `127.0.0.1:7421` |
 | `make uninstall` | Desfaz o setup e apaga os binários (o banco fica) |
 | `make uninstall-dry-run` | Mostra o que o `make uninstall` removeria |
 | `make test` | `go vet`, testes Go e testes da interface |
 | `make clean` | Apaga os binários e o build da interface |
+
+### No macOS
+
+Os mesmos comandos valem no macOS (testado no CI em `macos-latest`). O que
+muda:
+
+- O `nobred` roda como LaunchAgent (`io.nobretech.nobred`): o `make restart`
+  usa `launchctl kickstart -k`, o `make status` mostra o `launchctl print` e o
+  log fica em `~/Library/Logs/nobred.log`.
+- O "Continuar" abre o agente numa janela do Terminal.app (via `osascript`).
+  Na primeira vez o macOS pede permissão para o `nobred` controlar o Terminal
+  (Ajustes do Sistema → Privacidade e Segurança → Automação). Para outro
+  terminal (kitty, alacritty), troque o comando em **Configuração**. O modo
+  "em segundo plano" (terminal dentro da plataforma) funciona igual.
+- O monitor de CPU e memória por worktree ainda depende do `/proc` e fica
+  vazio no macOS. O resto (sessões, cards, custo, hooks) funciona igual.
+
+Para migrar de um daemon rodado na mão: pare-o, rode `make setup` e confira
+com `make status`.
 
 ## Atualizar
 

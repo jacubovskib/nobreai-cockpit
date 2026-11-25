@@ -1,0 +1,78 @@
+# Garante que o Cockpit roda no macOS: suíte Go, instalação com o launchd de
+# verdade (nobre setup), Makefile e o ciclo de uma sessão de ponta a ponta com
+# um agente falso instalado como o Claude Code nativo.
+name: macOS
+
+on:
+  push:
+    branches: [main, "feat/macos"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: go vet e go test
+        run: go vet ./... && go test ./...
+
+      - name: make install
+        run: make install
+
+      - name: nobre setup (LaunchAgent de verdade)
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          nobre setup </dev/null
+          plutil -lint "$HOME/Library/LaunchAgents/io.nobretech.nobred.plist"
+
+      - name: make status
+        run: |
+          for i in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:7420/api/health && break; sleep 0.5; done
+          make status | tee status.txt
+          grep -q '^Serviço nobred: active' status.txt
+          grep -q '"ok":true' status.txt
+
+      - name: smoke da sessão (hook, PID do agente, reconciliador)
+        run: scripts/smoke/agent.sh "$HOME/.local/bin"
+
+      - name: make restart troca o processo
+        run: |
+          before=$(launchctl print "gui/$(id -u)/io.nobretech.nobred" | awk '/^[[:space:]]*pid = /{print $3}')
+          make restart
+          after=$(launchctl print "gui/$(id -u)/io.nobretech.nobred" | awk '/^[[:space:]]*pid = /{print $3}')
+          echo "pid antes=$before depois=$after"
+          test -n "$after" && test "$before" != "$after"
+
+      - name: nobre setup de novo não reinicia
+        run: |
+          before=$(launchctl print "gui/$(id -u)/io.nobretech.nobred" | awk '/^[[:space:]]*pid = /{print $3}')
+          "$HOME/.local/bin/nobre" setup </dev/null
+          after=$(launchctl print "gui/$(id -u)/io.nobretech.nobred" | awk '/^[[:space:]]*pid = /{print $3}')
+          test "$before" = "$after"
+
+      - name: nobre setup --remover
+        run: |
+          "$HOME/.local/bin/nobre" setup --remover
+          if launchctl print "gui/$(id -u)/io.nobretech.nobred" >/dev/null 2>&1; then echo "serviço ainda carregado"; exit 1; fi
+          test ! -e "$HOME/Library/LaunchAgents/io.nobretech.nobred.plist"
+
+      - name: log do nobred
+        if: always()
+        run: cat "$HOME/Library/Logs/nobred.log" || true
