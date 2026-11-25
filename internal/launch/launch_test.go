@@ -127,7 +127,8 @@ func TestResolveBinaryDarwinFallsBackToOsascript(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	if got, err := resolveBinaryOn("darwin", "x-terminal-emulator"); err != nil || got != osa {
+	want, _ := filepath.EvalSymlinks(osa)
+	if got, err := resolveBinaryOn("darwin", "x-terminal-emulator"); err != nil || got != want {
 		t.Fatalf("darwin: %q, %v", got, err)
 	}
 	if _, err := resolveBinaryOn("linux", "x-terminal-emulator"); err == nil {

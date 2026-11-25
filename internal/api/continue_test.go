@@ -362,7 +362,7 @@ func bgClaude(t *testing.T) string {
 }
 
 func TestContinueBackgroundStartsTerminal(t *testing.T) {
-	proj := t.TempDir()
+	proj := realTempDir(t)
 	g := &fakeGit{branch: "main", clean: true}
 	mgr := pty.NewManager(pty.Options{})
 	t.Cleanup(mgr.Close)

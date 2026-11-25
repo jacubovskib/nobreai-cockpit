@@ -220,7 +220,7 @@ func TestDeleteWorktreeBranchOnlyIfMerged(t *testing.T) {
 
 func TestDeleteWorktreeBranchIsBase(t *testing.T) {
 	a, p, main, _ := rmSetup(t)
-	other := filepath.Join(t.TempDir(), "on-main")
+	other := filepath.Join(realTempDir(t), "on-main")
 	gitRun(t, main, "checkout", "-q", "-b", "outro")
 	gitRun(t, main, "worktree", "add", "-q", other, "main")
 	got := decode[removeResp](t, a.do(t, "DELETE", "/api/worktrees", rmBody(p.ID, other, false, true), 0))
@@ -364,7 +364,7 @@ func TestDeleteWorktreeProcessesUnknown(t *testing.T) {
 
 func TestDeleteWorktreeDetachedKeepsBranchReason(t *testing.T) {
 	a, p, main, _ := rmSetup(t)
-	det := filepath.Join(t.TempDir(), "det")
+	det := filepath.Join(realTempDir(t), "det")
 	gitRun(t, main, "worktree", "add", "-q", "--detach", det)
 	got := decode[removeResp](t, a.do(t, "DELETE", "/api/worktrees", rmBody(p.ID, det, false, true), 0))
 	if !got.Removed || got.BranchDeleted || got.BranchKeptReason != "o worktree não tem branch (HEAD destacado)" {

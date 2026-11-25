@@ -539,3 +539,14 @@ func TestWorktreesGroupRunsNoGitOnEmptyPath(t *testing.T) {
 		t.Fatalf("chamadas = %v", g.calls)
 	}
 }
+
+// realTempDir é o t.TempDir sem links: no macOS ele fica em /var/folders, que
+// é link para /private/var, e o git e o shell devolvem o caminho físico.
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}

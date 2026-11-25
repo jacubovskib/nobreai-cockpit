@@ -121,7 +121,7 @@ func TestScanAheadUsesOriginBase(t *testing.T) {
 
 func TestScanPlansInBranchWorktree(t *testing.T) {
 	d := newRepo(t)
-	wt := filepath.Join(t.TempDir(), "wt")
+	wt := filepath.Join(realTempDir(t), "wt")
 	git(t, d, nil, "worktree", "add", "-q", "-b", "feat/w", wt)
 	commitOn(t, wt, "feat/w", "w.txt", 0)
 	if err := os.MkdirAll(filepath.Join(wt, "docs"), 0o755); err != nil {
@@ -157,7 +157,7 @@ func TestScanPlansDedupedAcrossWorktrees(t *testing.T) {
 	now := time.Now()
 	var newer string
 	for i, n := range []string{"w1", "w2"} {
-		wt := filepath.Join(t.TempDir(), n)
+		wt := filepath.Join(realTempDir(t), n)
 		git(t, d, nil, "worktree", "add", "-q", "-b", "feat/"+n, wt)
 		commitOn(t, wt, "feat/"+n, n+".txt", 0)
 		p := write(wt, "plan-x.md", now.Add(-time.Duration(2-i)*time.Hour))
@@ -193,4 +193,15 @@ func TestScanEmptyBaseErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "nenhuma base") || !strings.Contains(err.Error(), "nobre project base") {
 		t.Fatalf("mensagem = %v", err)
 	}
+}
+
+// realTempDir é o t.TempDir sem links (no macOS, /var é link para
+// /private/var e o git devolve o caminho físico).
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
