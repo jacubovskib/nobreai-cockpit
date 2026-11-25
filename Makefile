@@ -13,8 +13,9 @@ LAUNCHD_LABEL := io.nobretech.nobred
 ifeq ($(UNAME),Darwin)
 LAUNCHD_TARGET = gui/$$(id -u)/$(LAUNCHD_LABEL)
 SVC_TOOL       = launchctl
-SVC_ACTIVE     = launchctl print $(LAUNCHD_TARGET) >/dev/null 2>&1
-SVC_INSTALLED  = $(SVC_ACTIVE)
+SVC_INSTALLED  = launchctl print $(LAUNCHD_TARGET) >/dev/null 2>&1
+SVC_ACTIVE     = launchctl print $(LAUNCHD_TARGET) 2>/dev/null | grep -q 'state = running'
+SVC_STATE      = if $(SVC_ACTIVE); then echo active; elif $(SVC_INSTALLED); then echo inactive; else echo "não instalado"; fi
 SVC_RESTART    = launchctl kickstart -k $(LAUNCHD_TARGET)
 SVC_SHOW       = launchctl print $(LAUNCHD_TARGET) 2>/dev/null | grep -E '^[[:space:]]*(state|pid|path) = '
 SVC_LOGS       = tail -F $(HOME)/Library/Logs/nobred.log
@@ -22,6 +23,7 @@ else
 SVC_TOOL       = systemctl
 SVC_ACTIVE     = systemctl --user is-active --quiet nobred
 SVC_INSTALLED  = systemctl --user cat nobred >/dev/null 2>&1
+SVC_STATE      = systemctl --user is-active nobred || true
 SVC_RESTART    = systemctl --user restart nobred
 SVC_SHOW       = systemctl --user show nobred --property=MainPID,ActiveEnterTimestamp,FragmentPath 2>/dev/null
 SVC_LOGS       = journalctl --user -u nobred -f
@@ -91,7 +93,7 @@ restart: ## reinicia o nobred (os terminais abertos na plataforma são encerrado
 	@$(MAKE) --no-print-directory status
 
 status: ## mostra o serviço e se a API responde
-	@printf 'Serviço nobred: '; if $(SVC_ACTIVE); then echo active; else echo inactive; fi
+	@printf 'Serviço nobred: '; $(SVC_STATE)
 	@$(SVC_SHOW) | sed 's/^[[:space:]]*/  /' || true
 	@if curl -fsS "http://$(NOBRE_ADDR)/api/health" 2>/dev/null; then \
 	  echo; echo "Interface: http://$(NOBRE_ADDR)"; \

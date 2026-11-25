@@ -6,7 +6,7 @@ import { useWithProject } from '../../app/project'
 import type { RemoveNeedsConfirm, RemoveWorktreeResult, WorktreeDetail } from '../../api/types'
 import { btn, ErrorLine, muted } from '../card/shared'
 import { mono } from '../worktreeUI'
-import { plural } from '../board'
+import { plural } from '../boardModel'
 
 const btnDanger: React.CSSProperties = { ...btn, borderColor: '#6b2c2c', color: 'var(--err)' }
 const MAX_FILES = 10

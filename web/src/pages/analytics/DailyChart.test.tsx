@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { DailyChart } from './DailyChart'
 import { buildDays } from './data'
 import type { Total } from '../../api/types'
-import { CurrencyContext } from '../../ui/money'
+import { CurrencyContext } from '../../ui/currency'
 
 const t = (day: string, agent: string, cost: number, unpriced = false): Total =>
   ({ key: `${day}|${agent}`, agent, day, sessions: 1, input: 0, output: 0, cache_write: 0, cache_read: 0, cost_usd: cost, credits: 0, unpriced })

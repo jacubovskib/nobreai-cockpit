@@ -6,10 +6,10 @@ import { Credits, Money } from '../ui/Money'
 import { ProjectTag } from '../ui/ProjectTag'
 import { projectColor, useWithProject } from '../app/project'
 import { range } from './analytics/data'
-import { signalText } from './board'
+import { signalText } from './boardModel'
 import { btn, muted, panel } from './card/shared'
 import type { Project } from '../api/types'
-import { buildRows, type ProjectRow } from './projects'
+import { buildRows, type ProjectRow } from './projectsModel'
 
 const PERIODS = [
   { id: 1, label: 'Hoje' },

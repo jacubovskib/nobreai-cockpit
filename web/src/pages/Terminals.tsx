@@ -6,7 +6,7 @@ import { projectForPath, useWithProject } from '../app/project'
 import { ProjectTag } from '../ui/ProjectTag'
 import { agentInfo } from '../ui/agents'
 import { LazyTerminalView } from '../ui/LazyTerminalView'
-import { minutesSince } from './board'
+import { minutesSince } from './boardModel'
 
 const th: React.CSSProperties = { textAlign: 'left', fontWeight: 500, fontSize: 12, color: 'var(--text-2)', padding: '6px 10px' }
 const td: React.CSSProperties = { padding: '8px 10px', borderTop: '1px solid var(--border)' }

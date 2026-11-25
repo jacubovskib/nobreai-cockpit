@@ -13,7 +13,7 @@ import (
 // um erro de escape apareceria aqui, sem abrir janela nem pedir permissão.
 func TestOsascriptArgvCompiles(t *testing.T) {
 	env := map[string]string{"NOBRE_RESUME": "NAC-1"}
-	agent := []string{"claude", "--", `Continue o NAC-1: 'x' "y" \z`}
+	agent := []string{"claude", "--", "Continue o NAC-1: 'x' \"y\" \\z\n\tlinha 2"}
 	if p, err := ResolveBinary("x-terminal-emulator"); err != nil || filepath.Base(p) != "osascript" {
 		t.Fatalf("x-terminal-emulator no macOS = %q, %v; want osascript", p, err)
 	}

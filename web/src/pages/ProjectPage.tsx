@@ -7,9 +7,9 @@ import { Credits, Money } from '../ui/Money'
 import { range } from './analytics/data'
 import { ProjectTag } from '../ui/ProjectTag'
 import { PlanBlocks } from '../ui/PlanBlocks'
-import { signalText } from './board'
+import { signalText } from './boardModel'
 import { btn, h2, muted, panel } from './card/shared'
-import { buildRows, contextLine, GROUPS, sessionProject, stateLabel, timeline } from './projects'
+import { buildRows, contextLine, GROUPS, sessionProject, stateLabel, timeline } from './projectsModel'
 
 // Cronograma das entregas do projeto da rota (não usa o seletor da barra lateral).
 export function ProjectPage() {

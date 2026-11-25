@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { Money } from './Money'
-import { CurrencyContext } from './money'
+import { CurrencyContext } from './currency'
 import { Tokens } from './Tokens'
 import { ReadinessPips } from './ReadinessPips'
 import { AgentSwatch } from './AgentSwatch'

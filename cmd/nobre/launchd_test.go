@@ -15,7 +15,10 @@ import (
 type fakeLaunchctl struct {
 	loaded    bool
 	failBoots int
-	ran       []string
+	// noGUI: o domínio gui/<uid> não existe; bootoutBusy: o bootout
+	// descarrega mas responde com erro, como quando o processo ainda sai.
+	noGUI, bootoutBusy bool
+	ran                []string
 }
 
 func (f *fakeLaunchctl) run(name string, args ...string) error {
@@ -26,6 +29,12 @@ func (f *fakeLaunchctl) run(name string, args ...string) error {
 	}
 	switch args[0] {
 	case "print":
+		if !strings.Contains(args[1], "/io.") { // o domínio, não o serviço
+			if f.noGUI {
+				return errors.New("Bad request. Could not find domain for port identifier")
+			}
+			return nil
+		}
 		if !f.loaded {
 			return errors.New("exit status 113")
 		}
@@ -37,6 +46,9 @@ func (f *fakeLaunchctl) run(name string, args ...string) error {
 		f.loaded = true
 	case "bootout":
 		f.loaded = false
+		if f.bootoutBusy {
+			return errors.New("Boot-out failed: 36: Operation now in progress")
+		}
 	}
 	return nil
 }
@@ -69,6 +81,7 @@ func TestSetupDarwinInstallsLaunchAgent(t *testing.T) {
 		"<key>PATH</key>\n\t\t<string>/opt/x/bin:/usr/bin:/home/u/.local/bin:/usr/local/bin:/bin</string>",
 		"<key>SuccessfulExit</key>\n\t\t<false/>",
 		"<key>AbandonProcessGroup</key>\n\t<true/>",
+		"<key>ProcessType</key>\n\t<string>Interactive</string>",
 		"<string>" + filepath.Join(e.d.LogDir, "nobred.log") + "</string>",
 	} {
 		if !strings.Contains(string(plist), want) {
@@ -79,6 +92,7 @@ func TestSetupDarwinInstallsLaunchAgent(t *testing.T) {
 		t.Fatalf("no macOS não grava unidade do systemd: %v", err)
 	}
 	want := []string{
+		"launchctl print gui/501",
 		"launchctl enable gui/501/io.nobretech.nobred",
 		"launchctl print gui/501/io.nobretech.nobred",
 		"launchctl bootstrap gui/501 " + filepath.Join(e.d.AgentsDir, "io.nobretech.nobred.plist"),
@@ -101,14 +115,15 @@ func TestSetupDarwinInstallsLaunchAgent(t *testing.T) {
 
 	// nobred mudou de lugar: descarrega o antigo e carrega o novo, mesmo com o
 	// launchd recusando as primeiras tentativas.
-	f.ran, f.failBoots = nil, 2
+	f.ran, f.failBoots, f.bootoutBusy = nil, 2, true
 	e.d.NobredBin = "/opt/y/bin/nobred"
 	r = e.run(t, "127.0.0.1:1", "", t.TempDir())
 	if r.code != 0 || !f.loaded || !strings.Contains(r.stdout, "reiniciado para usar o LaunchAgent novo") {
 		t.Fatalf("%+v ran=%v", r, f.ran)
 	}
 	joined := strings.Join(f.ran, "\n")
-	if !strings.Contains(joined, "launchctl bootout gui/501/io.nobretech.nobred\nlaunchctl bootstrap") || strings.Count(joined, "bootstrap") != 3 {
+	out, boot := strings.Index(joined, "launchctl bootout"), strings.Index(joined, "launchctl bootstrap")
+	if out < 0 || boot < out || strings.Count(joined, "bootstrap") != 3 {
 		t.Fatalf("ran =\n%s", joined)
 	}
 }
@@ -162,5 +177,32 @@ func TestPlistEscapesXML(t *testing.T) {
 	p := plistContent("/Users/a&b/bin/nobred", "/x<y>", "/l/n.log")
 	if !strings.Contains(p, "/Users/a&amp;b/bin/nobred") || !strings.Contains(p, "/x&lt;y&gt;") {
 		t.Fatal(p)
+	}
+}
+
+func TestSetupDarwinWithoutGUISessionIsClear(t *testing.T) {
+	e, f := newLaunchdEnv(t)
+	f.noGUI = true
+	r := e.run(t, "127.0.0.1:1", "", t.TempDir())
+	if r.code == 0 || !strings.Contains(r.stdout, "o domínio gui/501 do launchd não existe") {
+		t.Fatalf("%+v", r)
+	}
+	for _, c := range f.ran {
+		if strings.Contains(c, "bootstrap") {
+			t.Fatalf("sem domínio não tenta carregar: %v", f.ran)
+		}
+	}
+}
+
+func TestRemoverDarwinUnloadsWhenPlistIsGone(t *testing.T) {
+	e, f := newLaunchdEnv(t)
+	if r := e.run(t, "127.0.0.1:1", "", t.TempDir()); r.code != 0 {
+		t.Fatalf("setup: %+v", r)
+	}
+	os.Remove(filepath.Join(e.d.AgentsDir, "io.nobretech.nobred.plist"))
+	f.bootoutBusy = true
+	r := e.run(t, "127.0.0.1:1", "", t.TempDir(), "--remover")
+	if r.code != 0 || f.loaded || !strings.Contains(r.stdout, "Serviço do nobred descarregado") {
+		t.Fatalf("%+v ran=%v", r, f.ran)
 	}
 }

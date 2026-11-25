@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -44,9 +45,6 @@ func TestTerminalArgvTemplates(t *testing.T) {
 		{"xfce4-terminal", []string{"xfce"}, []string{"/usr/bin/xfce4-terminal", "-x", "/bin/sh", "-c", wantScript}},
 		{"xterm", []string{"xterm"}, []string{"/usr/bin/xterm", "-e", "/bin/sh", "-c", wantScript}},
 		{"kitty", []string{"kitty", "-x"}, []string{"/usr/bin/kitty", "-e", "/bin/sh", "-c", wantScript}},
-		{"Terminal.app via osascript", []string{"osascript"}, []string{"/usr/bin/osascript",
-			"-e", `tell application "Terminal"`, "-e", "activate",
-			"-e", "do script " + appleScriptString("/bin/sh -c "+quote(wantScript)), "-e", "end tell"}},
 		{"desconhecido", []string{"meu-term", "--run"}, []string{"meu-term", "--run", wantScript}},
 		{"não resolve", []string{"sumiu", "-e"}, []string{"sumiu", "-e", wantScript}},
 	}
@@ -133,5 +131,59 @@ func TestResolveBinaryDarwinFallsBackToOsascript(t *testing.T) {
 	}
 	if _, err := resolveBinaryOn("linux", "x-terminal-emulator"); err == nil {
 		t.Fatal("no Linux não troca pelo osascript")
+	}
+}
+
+// TestTerminalArgvOsascriptUsesScriptFile: o Terminal.app digita o texto do
+// "do script" no shell interativo; o pacote de retomada (várias linhas, tabs)
+// vai num arquivo 0600 que se apaga, e só "exec /bin/sh '<arquivo>'" é
+// digitado.
+func TestTerminalArgvOsascriptUsesScriptFile(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	res := fakeResolve(map[string]string{"osascript": "/usr/bin/osascript"})
+	agent := []string{"claude", "--", "linha 1\n\tlinha 2 'x' \"y\""}
+	argv := TerminalArgvWith(res, []string{"osascript"}, "/usr/bin", "/w/api", map[string]string{"NOBRE_RESUME": "NAC-1"}, agent)
+	if len(argv) != 9 || argv[0] != "/usr/bin/osascript" || argv[2] != `tell application "Terminal"` || argv[6] != "activate" || argv[8] != "end tell" {
+		t.Fatalf("argv = %q", argv)
+	}
+	const pre = `do script "exec /bin/sh '`
+	if !strings.HasPrefix(argv[4], pre) || !strings.HasSuffix(argv[4], `'"`) {
+		t.Fatalf("do script = %q", argv[4])
+	}
+	file := strings.TrimSuffix(strings.TrimPrefix(argv[4], pre), `'"`)
+	if strings.ContainsAny(file, "\n\t'\"") {
+		t.Fatalf("caminho digitado com caracteres especiais: %q", file)
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "rm -f \"$0\"\n" + Script("/usr/bin", "/w/api", map[string]string{"NOBRE_RESUME": "NAC-1"}, agent) + "\n"
+	if string(b) != want {
+		t.Fatalf("script =\n%s\nwant\n%s", b, want)
+	}
+	if st, _ := os.Stat(file); st.Mode().Perm() != 0o600 {
+		t.Fatalf("modo = %v", st.Mode().Perm())
+	}
+}
+
+// TestExecStartOsascriptError: o osascript que sai com erro (Automação
+// negada) vira erro do Start, em vez de sumir no log.
+func TestExecStartOsascriptError(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "osascript")
+	script := "#!/bin/sh\necho 'execution error: Not authorized to send Apple events to Terminal. (-1743)' >&2\nexit 1\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := Exec{ShowEnv: func() ([]byte, error) { return nil, nil }}.Start([]string{fake, "-e", "x"})
+	if err == nil || !strings.Contains(err.Error(), "-1743") || !strings.Contains(err.Error(), "Automação") {
+		t.Fatalf("err = %v", err)
+	}
+	ok := filepath.Join(dir, "ok", "osascript")
+	os.MkdirAll(filepath.Dir(ok), 0o755)
+	os.WriteFile(ok, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	if err := (Exec{ShowEnv: func() ([]byte, error) { return nil, nil }}).Start([]string{ok}); err != nil {
+		t.Fatalf("osascript ok: %v", err)
 	}
 }

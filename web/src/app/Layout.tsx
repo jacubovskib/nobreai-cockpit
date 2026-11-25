@@ -4,7 +4,7 @@ import { useHealth, useProjects, useSettings } from '../api/queries'
 import type { Project } from '../api/types'
 import { useProjectFilter, withProject } from './project'
 import { useStream } from '../api/useStream'
-import { CurrencyContext } from '../ui/money'
+import { CurrencyContext } from '../ui/currency'
 
 const svgProps = {
   width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',

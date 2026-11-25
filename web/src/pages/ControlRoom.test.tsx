@@ -5,7 +5,7 @@ import { ControlRoom } from './ControlRoom'
 import { CardsList } from './CardsList'
 import { Board } from './Board'
 import type { Overview, CardSummary } from '../api/types'
-import { CurrencyContext } from '../ui/money'
+import { CurrencyContext } from '../ui/currency'
 
 const total = { key: '', agent: '', day: '', sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0, cost_usd: 0, unpriced: false }
 const overview: Overview = {

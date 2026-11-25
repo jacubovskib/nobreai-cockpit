@@ -1,6 +1,6 @@
 import type { CardDetail } from '../../api/types'
 import { TASK_LABEL } from '../../ui/PlanBlocks'
-import { ddmm } from '../projects'
+import { ddmm } from '../projectsModel'
 import { h2, muted, panel } from './shared'
 
 export function Plan({ card }: { card: CardDetail }) {

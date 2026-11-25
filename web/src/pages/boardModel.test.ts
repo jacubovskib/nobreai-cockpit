@@ -1,4 +1,4 @@
-import { groupByColumn, COLUMNS, cardMarks, signalText } from './board'
+import { groupByColumn, COLUMNS, cardMarks, signalText } from './boardModel'
 import type { CardSummary } from '../api/types'
 
 describe('groupByColumn', () => {

@@ -2,6 +2,7 @@
 package launch
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Launcher inicia um processo e o solta do daemon.
@@ -89,6 +91,9 @@ func (e Exec) Start(argv []string) error {
 		cmd.Env = withGraphicalEnv(cmd.Env, e.ShowEnv)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if filepath.Base(argv[0]) == "osascript" {
+		return startOsascript(cmd)
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -98,6 +103,55 @@ func (e Exec) Start(argv []string) error {
 		}
 	}()
 	return nil
+}
+
+// osascriptWait é quanto o Start espera o osascript responder: ele sai logo
+// depois de abrir a janela, e com erro quando o macOS nega ao nobred o
+// controle do Terminal (Automação). Enquanto o pedido de permissão está na
+// tela ele não sai; passado o prazo, o Start conta como aberto.
+var osascriptWait = 5 * time.Second
+
+func startOsascript(cmd *exec.Cmd) error {
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("o Terminal não abriu (%v: %s). No macOS, permita que o nobred controle o Terminal em Ajustes do Sistema → Privacidade e Segurança → Automação",
+				err, strings.TrimSpace(stderr.String()))
+		}
+		return nil
+	case <-time.After(osascriptWait):
+		go func() {
+			if err := <-done; err != nil {
+				log.Printf("launch: osascript terminou com erro: %v: %s", err, strings.TrimSpace(stderr.String()))
+			}
+		}()
+		return nil
+	}
+}
+
+// writeScript grava script num arquivo temporário (0600) que se apaga ao
+// rodar, e devolve o caminho.
+func writeScript(script string) (string, error) {
+	f, err := os.CreateTemp("", "nobre-continuar-*.sh")
+	if err != nil {
+		return "", err
+	}
+	_, werr := f.WriteString("rm -f \"$0\"\n" + script + "\n")
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(f.Name())
+		return "", werr
+	}
+	return f.Name(), nil
 }
 
 // quote protege s para o shell com aspas simples.
@@ -212,14 +266,19 @@ func TerminalArgvWith(resolve Resolver, terminalCmd []string, path, dir string, 
 			case base == "konsole", base == "xterm", base == "alacritty", base == "kitty":
 				return []string{bin, "-e", "/bin/sh", "-c", script}
 			case base == "osascript":
-				// macOS: o Terminal.app abre uma janela e roda o comando no
-				// shell de login do usuário; o sh -c explícito vale com zsh,
-				// bash ou fish. Na primeira vez o macOS pede para o nobred
-				// controlar o Terminal (Automação).
+				// macOS: o "do script" do Terminal.app DIGITA o texto no shell
+				// interativo da janela nova (zsh, bash ou fish). O script vai
+				// num arquivo e só um comando curto é digitado: o pacote de
+				// retomada tem quebras de linha, tabs e vários KB. Na primeira
+				// vez o macOS pede para o nobred controlar o Terminal.
+				cmd := "/bin/sh -c " + quote(script)
+				if f, err := writeScript(script); err == nil {
+					cmd = "exec /bin/sh " + quote(f)
+				}
 				return []string{bin,
 					"-e", `tell application "Terminal"`,
+					"-e", "do script " + appleScriptString(cmd),
 					"-e", "activate",
-					"-e", "do script " + appleScriptString("/bin/sh -c "+quote(script)),
 					"-e", "end tell"}
 			}
 		}

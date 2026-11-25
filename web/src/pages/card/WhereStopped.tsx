@@ -2,7 +2,7 @@ import type { CardDetail } from '../../api/types'
 import { agentInfo } from '../../ui/agents'
 import { EditableText } from './EditableText'
 import { h2, muted, panel } from './shared'
-import { minutesSince } from '../board'
+import { minutesSince } from '../boardModel'
 
 function ago(iso: string | null) {
   if (!iso) return ''

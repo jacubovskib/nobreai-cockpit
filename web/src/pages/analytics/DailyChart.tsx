@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { agentInfo } from '../../ui/agents'
-import { formatMoney, useCurrency, type CurrencyPref } from '../../ui/money'
+import { formatMoney, useCurrency, type CurrencyPref } from '../../ui/currency'
 import { niceMax, usd2, type Day } from './data'
 
 const H = 240

@@ -23,8 +23,10 @@ func (d *setupDeps) launchdTarget() string { return d.launchdDomain() + "/" + la
 // plistContent monta o LaunchAgent do nobred, o equivalente da unidade do
 // systemd: KeepAlive só em saída com erro (Restart=on-failure),
 // AbandonProcessGroup para os terminais e agentes abertos pelo "Continuar"
-// sobreviverem a um restart (KillMode=process) e o PATH de reserva
-// (unitPATH) em EnvironmentVariables.
+// sobreviverem a um restart (KillMode=process), ProcessType Interactive (sem
+// a redução de CPU e disco que o launchd aplica por padrão e que os agentes
+// filhos herdariam; o systemd não faz isso) e o PATH de reserva (unitPATH)
+// em EnvironmentVariables.
 func plistContent(nobred, path, logFile string) string {
 	var env string
 	if path != "" {
@@ -49,6 +51,8 @@ func plistContent(nobred, path, logFile string) string {
 	</dict>
 	<key>AbandonProcessGroup</key>
 	<true/>
+	<key>ProcessType</key>
+	<string>Interactive</string>
 	<key>StandardOutPath</key>
 	<string>` + xmlEscape(logFile) + `</string>
 	<key>StandardErrorPath</key>
@@ -65,6 +69,25 @@ func xmlEscape(s string) string {
 // launchdLoaded diz se o serviço está carregado no domínio do usuário.
 func (d *setupDeps) launchdLoaded() bool {
 	return d.Run("launchctl", "print", d.launchdTarget()) == nil
+}
+
+// launchdBootout descarrega o serviço. O launchctl pode responder com erro
+// ("Operation now in progress") enquanto o processo ainda sai: só é falha se
+// o serviço continuar carregado depois de alguns segundos.
+func (d *setupDeps) launchdBootout() error {
+	err := d.Run("launchctl", "bootout", d.launchdTarget())
+	if err == nil {
+		return nil
+	}
+	for i := 0; i < 10; i++ {
+		if !d.launchdLoaded() {
+			return nil
+		}
+		if d.Sleep != nil {
+			d.Sleep(500 * time.Millisecond)
+		}
+	}
+	return err
 }
 
 // launchdBootstrap carrega o plist. Logo depois de um bootout o launchd pode
@@ -97,7 +120,11 @@ func (c *cli) setupLaunchd(d *setupDeps, dry bool, l *checklist) {
 		} else {
 			l.ok("[dry-run] LaunchAgent %s já está atualizado", plist)
 		}
-		l.ok("[dry-run] Rodaria: launchctl bootstrap %s %s", d.launchdDomain(), plist)
+		if changed {
+			l.ok("[dry-run] Rodaria: launchctl bootstrap %s %s", d.launchdDomain(), plist)
+		} else {
+			l.ok("[dry-run] Rodaria: launchctl kickstart %s (sem reiniciar se já roda)", d.launchdTarget())
+		}
 		return
 	}
 	if changed {
@@ -115,6 +142,12 @@ func (c *cli) setupLaunchd(d *setupDeps, dry bool, l *checklist) {
 	} else {
 		l.ok("LaunchAgent %s já está atualizado", plist)
 	}
+	// Sem sessão gráfica (SSH sem ninguém logado na tela) não há domínio
+	// gui/<uid> para carregar o LaunchAgent.
+	if err := d.Run("launchctl", "print", d.launchdDomain()); err != nil {
+		l.bad("Serviço do nobred: o domínio %s do launchd não existe (sem sessão gráfica?). Rode o setup num terminal do Mac com você logado na tela, não por SSH", d.launchdDomain())
+		return
+	}
 	// Um "launchctl disable" anterior impediria o bootstrap.
 	_ = d.Run("launchctl", "enable", d.launchdTarget())
 	loaded := d.launchdLoaded()
@@ -127,7 +160,7 @@ func (c *cli) setupLaunchd(d *setupDeps, dry bool, l *checklist) {
 		l.ok("Daemon nobred ativo (launchd: %s)", d.launchdTarget())
 		return
 	case loaded:
-		if err := d.Run("launchctl", "bootout", d.launchdTarget()); err != nil {
+		if err := d.launchdBootout(); err != nil {
 			l.bad("launchctl bootout %s: %v", d.launchdTarget(), err)
 			return
 		}
@@ -146,20 +179,29 @@ func (c *cli) setupLaunchd(d *setupDeps, dry bool, l *checklist) {
 // removeLaunchd para o nobred e apaga o LaunchAgent.
 func (c *cli) removeLaunchd(d *setupDeps, dry bool, l *checklist) {
 	plist := d.launchdPlist()
-	if !isFile(plist) {
+	if dry {
+		if isFile(plist) {
+			l.ok("[dry-run] Rodaria: launchctl bootout %s", d.launchdTarget())
+			l.ok("[dry-run] Apagaria %s", plist)
+		} else {
+			l.ok("[dry-run] Descarregaria %s se estiver carregado", d.launchdTarget())
+		}
+		return
+	}
+	loaded := d.launchdLoaded()
+	if !isFile(plist) && !loaded {
 		l.ok("Serviço do nobred não instalado; nada a remover")
 		return
 	}
-	if dry {
-		l.ok("[dry-run] Rodaria: launchctl bootout %s", d.launchdTarget())
-		l.ok("[dry-run] Apagaria %s", plist)
-		return
-	}
-	if d.launchdLoaded() {
-		if err := d.Run("launchctl", "bootout", d.launchdTarget()); err != nil {
+	if loaded {
+		if err := d.launchdBootout(); err != nil {
 			l.bad("launchctl bootout %s: %v", d.launchdTarget(), err)
 			return
 		}
+	}
+	if !isFile(plist) {
+		l.ok("Serviço do nobred descarregado (o LaunchAgent já tinha sido apagado)")
+		return
 	}
 	if err := os.Remove(plist); err != nil {
 		l.bad("LaunchAgent do nobred: %v", err)
