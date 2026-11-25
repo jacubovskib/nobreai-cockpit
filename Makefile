@@ -34,7 +34,7 @@ SVC_LOGS       = journalctl --user -u nobred -f
 endif
 
 .DEFAULT_GOAL := help
-.PHONY: help check web build install setup setup-dry-run update restart status logs demo dev test clean uninstall uninstall-dry-run
+.PHONY: help check web build install setup setup-dry-run update restart status logs demo dev test dist clean uninstall uninstall-dry-run
 
 help: ## mostra esta ajuda
 	@echo "NobreAI Cockpit"
@@ -128,6 +128,27 @@ dev: ## explica como rodar daemon e interface em modo de desenvolvimento
 test: ## roda go vet, testes Go e testes da interface
 	go vet ./... && go test ./... && pnpm -C web test --run
 
-clean: ## apaga os binários e o build da interface
+# Pacotes da release: um tar.gz por plataforma e o checksums.txt.
+DIST_TARGETS = darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
+
+dist: web ## empacota nobre e nobred para macOS e Linux em dist/ (VERSION=v0.1.0)
+	rm -rf dist
+	mkdir -p dist/work
+	@set -e; for t in $(DIST_TARGETS); do \
+	  os=$${t%/*}; arch=$${t#*/}; w=dist/work/$${os}_$${arch}; \
+	  pkg=nobreai-cockpit_$(VERSION)_$${os}_$${arch}.tar.gz; \
+	  echo "==> $$pkg"; \
+	  mkdir -p $$w; \
+	  for c in nobre nobred; do \
+	    CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w $(GO_LDFLAGS)" -o $$w/$$c ./cmd/$$c; \
+	  done; \
+	  tar -C $$w -czf dist/$$pkg nobre nobred; \
+	done
+	rm -rf dist/work
+	@cd dist && if command -v sha256sum >/dev/null 2>&1; then sha256sum *.tar.gz; else shasum -a 256 *.tar.gz; fi > checksums.txt
+	@echo "Pacotes e checksums.txt em dist/."
+
+clean: ## apaga os binários, os pacotes e o build da interface
+	rm -rf dist
 	rm -f nobre nobred
 	find web/dist -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
