@@ -293,3 +293,49 @@ func TestReconcileUnknownAgentOnlyNeedsPID(t *testing.T) {
 		t.Fatalf("sessão marcada como morta: %+v", got)
 	}
 }
+
+// O fim da sessão pelo reconciliador (processo morto, carência vencida)
+// recalcula o épico da filha.
+func TestEpicReconcilePath(t *testing.T) {
+	st := newStore(t)
+	p, err := st.CreateProject("api", "/w/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := st.CreateCard(domain.Card{Title: "e", ProjectID: p.ID, Type: domain.TypeEpico})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.CreateCard(domain.Card{Title: "f", ProjectID: p.ID, ParentID: &e.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := domain.Session{ID: "claude:1", Agent: "claude", PID: 4242, StartedAt: t0, LastEventAt: t0}
+	if err := st.StartSession(x); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AttachSession(x.ID, c.Key, false); err != nil {
+		t.Fatal(err)
+	}
+	// Épico desatualizado (gravação manual crua): só o recálculo no fim da
+	// sessão o devolve para em andamento.
+	if err := st.MoveCard(e.Key, domain.Backlog); err != nil {
+		t.Fatal(err)
+	}
+	set, root := domain.DefaultSettings(), fakeProc(t)
+	if _, err := Reconcile(st, Liveness{ProcRoot: root}, t0, set); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reconcile(st, Liveness{ProcRoot: root}, t0.Add(16*time.Minute), set); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.GetSession(x.ID); got.EndedAt == nil {
+		t.Fatal("sessão não foi encerrada")
+	}
+	if col := column(t, st, c.Key); col != domain.Pausado {
+		t.Fatalf("filha = %s, quer pausado", col)
+	}
+	if col := column(t, st, e.Key); col != domain.EmAndamento {
+		t.Fatalf("épico = %s, quer em_andamento", col)
+	}
+}

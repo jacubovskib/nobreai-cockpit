@@ -159,6 +159,10 @@ func createCardTx(tx *sql.Tx, c domain.Card, now time.Time) (domain.Card, error)
 	if c.Priority == "" {
 		c.Priority = domain.PrioMedia
 	}
+	if c.Type == domain.TypeEpico {
+		// Épico nasce sem filhas: a coluna vem delas, não do pedido.
+		c.Column = domain.EpicColumn(c.Column, nil)
+	}
 	res, err := tx.Exec(`INSERT INTO cards(key, project_id, title, goal, done_when, where_stopped, where_stopped_at, how_to_test, branch, col, created_at, updated_at, type, parent_id, priority, points)
 		VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ProjectID, c.Title, c.Goal, c.DoneWhen, c.WhereStopped, nullableTime(c.WhereStoppedAt),
@@ -177,6 +181,12 @@ func createCardTx(tx *sql.Tx, c domain.Card, now time.Time) (domain.Card, error)
 	}
 	if err := replaceLabelsTx(tx, c.ID, c.Labels); err != nil {
 		return c, err
+	}
+	if c.ParentID != nil {
+		// A filha nova entra no cálculo do épico.
+		if err := recalcEpicTx(tx, *c.ParentID); err != nil {
+			return c, err
+		}
 	}
 	return c, nil
 }
@@ -278,7 +288,8 @@ func (s *Store) ListIntegrationCandidates() ([]domain.Card, error) {
 	return out, rows.Err()
 }
 
-// UpdateCard grava os campos editáveis do card (identificado por ID).
+// UpdateCard grava os campos editáveis do card (identificado por ID) e
+// recalcula o épico pai antigo, o novo e o próprio card, se for épico.
 func (s *Store) UpdateCard(c domain.Card) error {
 	if c.Type == "" {
 		c.Type = domain.TypeTarefa
@@ -291,6 +302,11 @@ func (s *Store) UpdateCard(c domain.Card) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Card inexistente: oldParent fica nulo e requireAffected decide abaixo.
+	var oldParent sql.NullInt64
+	if err := tx.QueryRow(`SELECT parent_id FROM cards WHERE id=?`, c.ID).Scan(&oldParent); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	res, err := tx.Exec(`UPDATE cards SET title=?, goal=?, done_when=?, where_stopped=?, where_stopped_at=?, how_to_test=?, branch=?, project_id=?, col=?, pause_reason=?, handoff_incomplete=?, blocked_by=?, type=?, parent_id=?, priority=?, points=?, updated_at=? WHERE id=?`,
 		c.Title, c.Goal, c.DoneWhen, c.WhereStopped, nullableTime(c.WhereStoppedAt), c.HowToTest, c.Branch,
 		c.ProjectID, string(c.Column), c.PauseReason, c.HandoffIncomplete, c.BlockedBy,
@@ -302,6 +318,19 @@ func (s *Store) UpdateCard(c domain.Card) error {
 		return err
 	}
 	if err := replaceLabelsTx(tx, c.ID, c.Labels); err != nil {
+		return err
+	}
+	if oldParent.Valid && (c.ParentID == nil || *c.ParentID != oldParent.Int64) {
+		if err := recalcEpicTx(tx, oldParent.Int64); err != nil {
+			return err
+		}
+	}
+	if c.ParentID != nil {
+		if err := recalcEpicTx(tx, *c.ParentID); err != nil {
+			return err
+		}
+	}
+	if err := recalcEpicTx(tx, c.ID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -375,57 +404,91 @@ func (s *Store) RecordIntegration(cardID int64, branch string, at time.Time, d d
 		d.CardID, d.What, d.Why, d.SessionID, fmtTime(d.At)); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(`UPDATE cards SET col=?, updated_at=? WHERE id=? AND col=?`,
-		string(domain.Concluido), fmtTime(time.Now()), cardID, string(domain.Revisao)); err != nil {
+	res, err := tx.Exec(`UPDATE cards SET col=?, updated_at=? WHERE id=? AND col=? AND type<>'epico'`,
+		string(domain.Concluido), fmtTime(time.Now()), cardID, string(domain.Revisao))
+	if err != nil {
+		return false, err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return false, err
+	} else if n > 0 {
+		if err := recalcParentTx(tx, cardID); err != nil {
+			return false, err
+		}
+	}
+	return true, tx.Commit()
+}
+
+// MoveCard move o card manualmente, sem aplicar regras. O épico recebe a
+// coluna como veio (a API já validou com domain.EpicManualMove); a filha
+// recalcula o épico pai.
+func (s *Store) MoveCard(key string, to domain.Column) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var id int64
+	var typ domain.CardType
+	var parent sql.NullInt64
+	if err := tx.QueryRow(`SELECT id, type, parent_id FROM cards WHERE key=?`, key).Scan(&id, &typ, &parent); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE cards SET col=?, updated_at=? WHERE id=?`, string(to), fmtTime(time.Now()), id); err != nil {
+		return err
+	}
+	if typ != domain.TypeEpico && parent.Valid {
+		if err := recalcEpicTx(tx, parent.Int64); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// moveForLimit roda numa transação a mudança de coluna por limite de custo
+// (q com os args), que nunca pega épico, e recalcula o épico pai se mudou.
+func (s *Store) moveForLimit(cardID int64, q string, args ...any) (bool, error) {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(q+` AND type<>'epico'`, args...)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil || n == 0 {
+		return false, err
+	}
+	if err := recalcParentTx(tx, cardID); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
 }
 
-// MoveCard move o card manualmente, sem aplicar regras.
-func (s *Store) MoveCard(key string, to domain.Column) error {
-	res, err := s.DB.Exec(`UPDATE cards SET col=?, updated_at=? WHERE key=?`, string(to), fmtTime(time.Now()), key)
-	if err != nil {
-		return err
-	}
-	return requireAffected(res)
-}
-
 // PauseForLimit move para pausado o card em andamento e grava o motivo
 // "limite de custo". Devolve se mudou.
 func (s *Store) PauseForLimit(cardID int64, at time.Time) (bool, error) {
-	res, err := s.DB.Exec(`UPDATE cards SET col=?, pause_reason=?, updated_at=? WHERE id=? AND col=?`,
+	return s.moveForLimit(cardID, `UPDATE cards SET col=?, pause_reason=?, updated_at=? WHERE id=? AND col=?`,
 		string(domain.Pausado), domain.PauseReasonLimit, fmtTime(at), cardID, string(domain.EmAndamento))
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n > 0, err
 }
 
 // ResumeFromLimit devolve para em andamento o card pausado por limite de
 // custo e limpa o motivo, a marca de handoff incompleto e o bloqueio. Devolve se mudou.
 func (s *Store) ResumeFromLimit(cardID int64, at time.Time) (bool, error) {
-	res, err := s.DB.Exec(`UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, blocked_by='', updated_at=? WHERE id=? AND col=? AND pause_reason=?`,
+	return s.moveForLimit(cardID, `UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, blocked_by='', updated_at=? WHERE id=? AND col=? AND pause_reason=?`,
 		string(domain.EmAndamento), fmtTime(at), cardID, string(domain.Pausado), domain.PauseReasonLimit)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n > 0, err
 }
 
 // DoneFromLimit leva para revisão o card pausado por limite de custo (o
 // nobre done da sessão que ainda é dona dele) e limpa o motivo da pausa e a
 // marca de handoff incompleto. Devolve se mudou.
 func (s *Store) DoneFromLimit(cardID int64, at time.Time) (bool, error) {
-	res, err := s.DB.Exec(`UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, updated_at=? WHERE id=? AND col=? AND pause_reason=?`,
+	return s.moveForLimit(cardID, `UPDATE cards SET col=?, pause_reason='', handoff_incomplete=0, updated_at=? WHERE id=? AND col=? AND pause_reason=?`,
 		string(domain.Revisao), fmtTime(at), cardID, string(domain.Pausado), domain.PauseReasonLimit)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n > 0, err
 }
 
 // SetHandoffIncomplete grava a marca de handoff incompleto do card.
