@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -22,13 +23,21 @@ import (
 // setupDeps são os caminhos e comandos do `nobre setup`. Os testes injetam
 // diretórios temporários e um executor falso; nada aqui toca o sistema real.
 type setupDeps struct {
-	SettingsPath string        // ~/.claude/settings.json
-	SkillsDir    string        // ~/.claude/skills
-	UnitDir      string        // ~/.config/systemd/user
-	NobreBin     string        // caminho absoluto do nobre (vai nos hooks)
-	NobredBin    string        // caminho absoluto do nobred; vazio = não encontrado
-	DaemonWait   time.Duration // quanto esperar o nobred responder antes de cadastrar o projeto
-	Run          func(name string, args ...string) error
+	SettingsPath string // ~/.claude/settings.json
+	SkillsDir    string // ~/.claude/skills
+	UnitDir      string // ~/.config/systemd/user
+	// GOOS escolhe o gerenciador do serviço: "darwin" usa o launchd
+	// (AgentsDir, LogDir, UID); qualquer outro, o systemd (UnitDir).
+	GOOS      string
+	AgentsDir string // ~/Library/LaunchAgents
+	LogDir    string // ~/Library/Logs
+	UID       int
+	// Sleep espera entre tentativas do launchctl bootstrap; nil = sem espera.
+	Sleep      func(time.Duration)
+	NobreBin   string        // caminho absoluto do nobre (vai nos hooks)
+	NobredBin  string        // caminho absoluto do nobred; vazio = não encontrado
+	DaemonWait time.Duration // quanto esperar o nobred responder antes de cadastrar o projeto
+	Run        func(name string, args ...string) error
 	// Drivers são os agentes do passo de cada agente: o setup instala e
 	// remove os que têm adapter.SetupInstaller e adapter.SetupUninstaller.
 	// nil = nenhum (os passos do Claude seguem explícitos).
@@ -51,6 +60,11 @@ func defaultSetupDeps() (*setupDeps, error) {
 		SettingsPath: filepath.Join(home, ".claude", "settings.json"),
 		SkillsDir:    filepath.Join(home, ".claude", "skills"),
 		UnitDir:      filepath.Join(home, ".config", "systemd", "user"),
+		GOOS:         runtime.GOOS,
+		AgentsDir:    filepath.Join(home, "Library", "LaunchAgents"),
+		LogDir:       filepath.Join(home, "Library", "Logs"),
+		UID:          os.Getuid(),
+		Sleep:        time.Sleep,
 		NobreBin:     exe,
 		Drivers:      agents.Compiled(),
 		DaemonWait:   10 * time.Second,
@@ -357,6 +371,10 @@ func (c *cli) removeAll(d *setupDeps, dry bool, l *checklist) error {
 }
 
 func (c *cli) removeService(d *setupDeps, dry bool, l *checklist) {
+	if d.GOOS == "darwin" {
+		c.removeLaunchd(d, dry, l)
+		return
+	}
 	unit := filepath.Join(d.UnitDir, "nobred.service")
 	if !isFile(unit) {
 		l.ok("Serviço do nobred não instalado; nada a remover")
@@ -388,6 +406,10 @@ const sessionEnvVars = "DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDR
 func (c *cli) setupService(d *setupDeps, dry bool, l *checklist) {
 	if d.NobredBin == "" {
 		l.bad("Serviço do daemon: não achei o nobred (coloque-o ao lado do nobre ou no PATH)")
+		return
+	}
+	if d.GOOS == "darwin" {
+		c.setupLaunchd(d, dry, l)
 		return
 	}
 	unit := filepath.Join(d.UnitDir, "nobred.service")

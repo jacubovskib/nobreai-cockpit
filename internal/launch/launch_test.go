@@ -2,6 +2,8 @@ package launch
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -28,6 +30,7 @@ func TestTerminalArgvTemplates(t *testing.T) {
 		"xfce":                "/usr/bin/xfce4-terminal",
 		"kitty":               "/usr/bin/kitty",
 		"meu-term":            "/opt/meu-term",
+		"osascript":           "/usr/bin/osascript",
 	})
 	cases := []struct {
 		name string
@@ -41,6 +44,9 @@ func TestTerminalArgvTemplates(t *testing.T) {
 		{"xfce4-terminal", []string{"xfce"}, []string{"/usr/bin/xfce4-terminal", "-x", "/bin/sh", "-c", wantScript}},
 		{"xterm", []string{"xterm"}, []string{"/usr/bin/xterm", "-e", "/bin/sh", "-c", wantScript}},
 		{"kitty", []string{"kitty", "-x"}, []string{"/usr/bin/kitty", "-e", "/bin/sh", "-c", wantScript}},
+		{"Terminal.app via osascript", []string{"osascript"}, []string{"/usr/bin/osascript",
+			"-e", `tell application "Terminal"`, "-e", "activate",
+			"-e", "do script " + appleScriptString("/bin/sh -c "+quote(wantScript)), "-e", "end tell"}},
 		{"desconhecido", []string{"meu-term", "--run"}, []string{"meu-term", "--run", wantScript}},
 		{"não resolve", []string{"sumiu", "-e"}, []string{"sumiu", "-e", wantScript}},
 	}
@@ -103,5 +109,28 @@ func TestPathWithDir(t *testing.T) {
 		if got := PathWithDir(c.path, c.dir); got != c.want {
 			t.Errorf("PathWithDir(%q, %q) = %q, quero %q", c.path, c.dir, got, c.want)
 		}
+	}
+}
+
+func TestAppleScriptString(t *testing.T) {
+	got := appleScriptString(`/bin/sh -c 'cd "/w" && echo \'\''x'`)
+	want := `"/bin/sh -c 'cd \"/w\" && echo \\'\\''x'"`
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestResolveBinaryDarwinFallsBackToOsascript(t *testing.T) {
+	dir := t.TempDir()
+	osa := filepath.Join(dir, "osascript")
+	if err := os.WriteFile(osa, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	if got, err := resolveBinaryOn("darwin", "x-terminal-emulator"); err != nil || got != osa {
+		t.Fatalf("darwin: %q, %v", got, err)
+	}
+	if _, err := resolveBinaryOn("linux", "x-terminal-emulator"); err == nil {
+		t.Fatal("no Linux não troca pelo osascript")
 	}
 }

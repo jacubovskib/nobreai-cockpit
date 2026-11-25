@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -83,7 +84,10 @@ func (e Exec) Start(argv []string) error {
 		return fmt.Errorf("comando vazio")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Env = withGraphicalEnv(os.Environ(), e.ShowEnv)
+	cmd.Env = os.Environ()
+	if runtime.GOOS == "linux" { // o ambiente gráfico do systemd só existe no Linux
+		cmd.Env = withGraphicalEnv(cmd.Env, e.ShowEnv)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return err
@@ -105,9 +109,17 @@ func quote(s string) string {
 type Resolver func(name string) (string, error)
 
 // ResolveBinary acha name no PATH e segue os symlinks (x-terminal-emulator →
-// /usr/bin/terminator, por exemplo).
+// /usr/bin/terminator, por exemplo). No macOS, sem x-terminal-emulator (o
+// terminal padrão da Configuração), resolve o osascript: o Terminal.app.
 func ResolveBinary(name string) (string, error) {
+	return resolveBinaryOn(runtime.GOOS, name)
+}
+
+func resolveBinaryOn(goos, name string) (string, error) {
 	p, err := exec.LookPath(name)
+	if err != nil && goos == "darwin" && name == "x-terminal-emulator" {
+		p, err = exec.LookPath("osascript")
+	}
 	if err != nil {
 		return "", err
 	}
@@ -164,11 +176,17 @@ func TerminalArgv(terminalCmd []string, path, dir string, env map[string]string,
 	return TerminalArgvWith(ResolveBinary, terminalCmd, path, dir, env, agentArgv)
 }
 
+// appleScriptString devolve s como literal de string do AppleScript.
+func appleScriptString(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}
+
 // TerminalArgvWith resolve terminalCmd[0] e, pelo nome do binário, usa o
 // formato de execução de comando do terminal: terminator aceita -e com uma
 // string (rodada por $SHELL -c, também na partida a frio); gnome-terminal usa
 // "-- sh -c" (o wrapper da Debian usa -e); xfce4-terminal usa "-x sh -c";
-// konsole, xterm, alacritty e kitty usam "-e sh -c". Desconhecido: terminalCmd + o script como último argumento.
+// konsole, xterm, alacritty e kitty usam "-e sh -c"; osascript (macOS) abre o
+// Terminal.app com "do script". Desconhecido: terminalCmd + o script como último argumento.
 // PATH, diretório e variáveis vão dentro do script porque o terminator e o
 // gnome-terminal reaproveitam uma instância aberta via DBus e descartam o
 // cwd e o env de quem chamou.
@@ -193,6 +211,16 @@ func TerminalArgvWith(resolve Resolver, terminalCmd []string, path, dir string, 
 				return []string{bin, "--", "/bin/sh", "-c", script}
 			case base == "konsole", base == "xterm", base == "alacritty", base == "kitty":
 				return []string{bin, "-e", "/bin/sh", "-c", script}
+			case base == "osascript":
+				// macOS: o Terminal.app abre uma janela e roda o comando no
+				// shell de login do usuário; o sh -c explícito vale com zsh,
+				// bash ou fish. Na primeira vez o macOS pede para o nobred
+				// controlar o Terminal (Automação).
+				return []string{bin,
+					"-e", `tell application "Terminal"`,
+					"-e", "activate",
+					"-e", "do script " + appleScriptString("/bin/sh -c "+quote(script)),
+					"-e", "end tell"}
 			}
 		}
 	}

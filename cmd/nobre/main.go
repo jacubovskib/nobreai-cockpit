@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/nobretech/nobreai-cockpit/internal/client"
@@ -84,7 +85,7 @@ type cli struct {
 
 func newCLI() *cli {
 	c := &cli{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, cwd: os.Getwd, git: gitinfo.Exec{},
-		opener: func(url string) error { return exec.Command("xdg-open", url).Start() }}
+		opener: openURL}
 	c.spawn = func(p []byte) { spawnStatuslineSender(c.addr())(p) }
 	return c
 }
@@ -280,4 +281,13 @@ func helpFor(cmd string) string {
 		return usage
 	}
 	return "Uso:\n" + b.String()
+}
+
+// openURL abre url no navegador padrão: open no macOS, xdg-open nos demais.
+func openURL(url string) error {
+	name := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		name = "open"
+	}
+	return exec.Command(name, url).Start()
 }
