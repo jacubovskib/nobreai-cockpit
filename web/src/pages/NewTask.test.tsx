@@ -15,6 +15,7 @@ const cardsList = [
   { key: 'NAC-9', title: 'Tarefa comum', type: 'tarefa', column: 'backlog' },
 ]
 let fetchMock: ReturnType<typeof vi.fn>
+let qcRef: QueryClient
 function wrap(at: string, props: { epic?: string; label?: string } = {}) {
   fetchMock = vi.fn(async (url: string, init?: { method?: string }) =>
     url === '/api/projects' ? new Response(JSON.stringify(allProjects), { status: 200 })
@@ -23,6 +24,7 @@ function wrap(at: string, props: { epic?: string; label?: string } = {}) {
       : new Response('{}', { status: 404 }))
   vi.stubGlobal('fetch', fetchMock)
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  qcRef = qc
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[at]}>
@@ -106,5 +108,14 @@ describe('NewTask · tipo e épico', () => {
     fireEvent.change(screen.getByLabelText('Título'), { target: { value: 'Filha' } })
     fireEvent.click(screen.getByRole('button', { name: 'Criar tarefa' }))
     await waitFor(() => expect(sent()).toMatchObject({ project_id: 3, parent_key: 'NAC-7' }))
+  })
+  it('Nova filha invalida o card do épico para a lista de filhas atualizar', async () => {
+    wrap('/?projeto=1', { epic: 'NAC-7', label: 'Nova filha' })
+    const spy = vi.spyOn(qcRef, 'invalidateQueries')
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova filha' }))
+    await screen.findByRole('option', { name: 'NAC-7 · Plataforma' })
+    fireEvent.change(screen.getByLabelText('Título'), { target: { value: 'Filha' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Criar tarefa' }))
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['card', 'NAC-7'] }))
   })
 })

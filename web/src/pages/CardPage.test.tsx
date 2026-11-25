@@ -366,6 +366,18 @@ describe('CardPage · hierarquia', () => {
     await waitFor(() => expect(bodies(fn, 'PATCH', '/api/cards/NAC-42')).toEqual([{ parent_key: '', points: null }]))
   })
 
+  it('pontos inválidos não são enviados e mostram erro', async () => {
+    const fn = mock({ ...base, '/api/cards': cardsRoute, '/api/cards/NAC-42': { ...typed, points: 3 }, 'PATCH /api/cards/NAC-42': {} })
+    wrap(<CardPage />)
+    await screen.findByRole('option', { name: 'NAC-7 · Plataforma' })
+    for (const v of ['abc', '-1']) {
+      fireEvent.change(screen.getByLabelText('Pontos'), { target: { value: v } })
+      fireEvent.click(screen.getByRole('button', { name: 'Salvar classificação' }))
+      expect(await screen.findByText('points precisa ser um número maior ou igual a zero')).toBeInTheDocument()
+    }
+    expect(bodies(fn, 'PATCH', '/api/cards/NAC-42')).toEqual([])
+  })
+
   it('mostra o erro do servidor no ErrorLine', async () => {
     mock({ ...base, '/api/cards': cardsRoute, '/api/cards/NAC-42': typed, 'PATCH /api/cards/NAC-42': { status: 409, body: { error: 'só épico pode ser pai' } } })
     wrap(<CardPage />)

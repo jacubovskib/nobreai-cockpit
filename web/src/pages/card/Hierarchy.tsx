@@ -36,7 +36,11 @@ export function Hierarchy({ card }: { card: CardDetail }) {
       if (p !== priority) body.priority = p
       if (t !== 'epico' && epic !== parent) body.parent_key = epic
       if (splitLabels(lab).join(' ') !== splitLabels(labels).join(' ')) body.labels = splitLabels(lab)
-      if (pts.trim() !== points) body.points = pts.trim() === '' ? null : Number(pts.trim().replace(',', '.'))
+      if (pts.trim() !== points) {
+        const n = Number(pts.trim().replace(',', '.'))
+        if (pts.trim() !== '' && (!Number.isFinite(n) || n < 0)) throw new Error('points precisa ser um número maior ou igual a zero')
+        body.points = pts.trim() === '' ? null : n
+      }
       return patch(`/api/cards/${card.key}`, body)
     },
     onSuccess: () => {

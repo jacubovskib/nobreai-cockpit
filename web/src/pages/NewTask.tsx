@@ -38,6 +38,7 @@ export function NewTask({ epic = '', label = 'Nova tarefa' }: { epic?: string; l
     onSuccess: () => {
       setOpen(false); setTitle(''); setGoal(''); setType('tarefa'); setParent(epic); setError('')
       qc.invalidateQueries({ queryKey: ['cards'] }); qc.invalidateQueries({ queryKey: ['overview'] })
+      if (epic) qc.invalidateQueries({ queryKey: ['card', epic] })
     },
     onError: (e: Error) => setError(e.message),
   })
