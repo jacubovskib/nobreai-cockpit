@@ -22,6 +22,14 @@ type CardDetail struct {
 	Live *domain.Session `json:"live"`
 	// TouchedFiles são os arquivos lidos/editados (eventos dos hooks).
 	TouchedFiles []store.TouchedFile `json:"touched_files"`
+	// ParentKey/ParentTitle: o épico pai ("" sem pai). Children, ChildrenTotals,
+	// TreeTotals e ChildCards só existem no épico (nil nos outros cards).
+	ParentKey      string        `json:"parent_key"`
+	ParentTitle    string        `json:"parent_title"`
+	Children       *EpicProgress `json:"children"`
+	ChildrenTotals *store.Total  `json:"children_totals"`
+	TreeTotals     *store.Total  `json:"tree_totals"`
+	ChildCards     []CardSummary `json:"child_cards"`
 }
 
 // CardSummary é o card como aparece no board.
@@ -50,10 +58,22 @@ type CardSummary struct {
 	SignalSince *time.Time    `json:"signal_since"`
 	// Plan são as tarefas do plano de implementação (nil sem tarefas).
 	Plan *domain.Plan `json:"plan"`
+	// ParentKey/ParentTitle: o épico pai ("" sem pai). Children (progresso),
+	// ChildrenTotals (uso das filhas) e TreeTotals (épico + filhas) só no épico.
+	ParentKey      string        `json:"parent_key"`
+	ParentTitle    string        `json:"parent_title"`
+	Children       *EpicProgress `json:"children"`
+	ChildrenTotals *store.Total  `json:"children_totals"`
+	TreeTotals     *store.Total  `json:"tree_totals"`
+	// WaitingOnYou (domain.WaitingOnYou): o card espera uma ação sua;
+	// WaitingReason diz qual.
+	WaitingOnYou  bool   `json:"waiting_on_you"`
+	WaitingReason string `json:"waiting_reason"`
 }
 
 // cardDetail carrega conteúdo, sessões (com uso), sessão viva e prontidão do card.
 func (s *server) cardDetail(c domain.Card) (CardDetail, error) {
+	c.Labels = nonNil(c.Labels)
 	d := CardDetail{Card: c}
 	var err error
 	if d.ProjectName, err = s.projectLabel(c.ProjectID); err != nil {
@@ -101,11 +121,31 @@ func (s *server) cardDetail(c domain.Card) (CardDetail, error) {
 			d.Live = &sessions[i]
 		}
 	}
+	v, err := s.hierarchyView(c, byCard)
+	if err != nil {
+		return d, err
+	}
+	d.ParentKey, d.ParentTitle = v.ParentKey, v.ParentTitle
+	d.Children, d.ChildrenTotals, d.TreeTotals = v.Progress, v.ChildrenTotals, v.TreeTotals
+	if c.Type == domain.TypeEpico {
+		d.ChildCards = make([]CardSummary, 0, len(v.Children))
+		for _, ch := range v.Children {
+			sum, err := s.cardSummary(ch, byCard)
+			if err != nil {
+				return d, err
+			}
+			d.ChildCards = append(d.ChildCards, sum)
+		}
+	}
 	d.Readiness, err = s.readiness(c, d.Content, d.Live != nil)
 	return d, err
 }
 
 func (s *server) readiness(c domain.Card, ct domain.Content, live bool) (domain.ReadinessResult, error) {
+	if c.Type == domain.TypeEpico {
+		// O épico não é retomado: a prontidão é das filhas.
+		return domain.ReadinessResult{Items: []domain.ReadinessItem{}}, nil
+	}
 	set, err := s.st.GetSettings()
 	if err != nil {
 		return domain.ReadinessResult{}, err
@@ -122,8 +162,17 @@ func (s *server) readiness(c domain.Card, ct domain.Content, live bool) (domain.
 // owns diz se a sessão está ligada ao card agora (e não só no histórico dele).
 func owns(x domain.Session, cardID int64) bool { return x.CardID != nil && *x.CardID == cardID }
 
-func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, error) {
-	sum := CardSummary{Card: c, Totals: totals}
+// cardSummary monta o card do board; byCard é o uso por card (para o card e,
+// num épico, as filhas).
+func (s *server) cardSummary(c domain.Card, byCard map[string]store.Total) (CardSummary, error) {
+	c.Labels = nonNil(c.Labels)
+	sum := CardSummary{Card: c, Totals: byCard[c.Key]}
+	v, err := s.hierarchyView(c, byCard)
+	if err != nil {
+		return sum, err
+	}
+	sum.ParentKey, sum.ParentTitle = v.ParentKey, v.ParentTitle
+	sum.Children, sum.ChildrenTotals, sum.TreeTotals = v.Progress, v.ChildrenTotals, v.TreeTotals
 	sessions, err := s.st.SessionsForCard(c.ID)
 	if err != nil {
 		return sum, err
@@ -156,7 +205,9 @@ func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, er
 		return sum, err
 	}
 	sum.Plan = ct.Plan
-	sum.Readiness, err = s.readiness(c, ct, sum.Live)
+	if sum.Readiness, err = s.readiness(c, ct, sum.Live); err != nil {
+		return sum, err
+	}
 	last := c.UpdatedAt
 	if sum.LastActivityAt != nil && sum.LastActivityAt.After(last) {
 		last = *sum.LastActivityAt
@@ -176,6 +227,11 @@ func (s *server) cardSummary(c domain.Card, totals store.Total) (CardSummary, er
 		}
 	}
 	sig := domain.CardStatusSignal(in)
+	// Esperando você usa o sinal cru: pergunta aberta conta mesmo com sessão viva.
+	sum.WaitingOnYou, sum.WaitingReason = domain.WaitingOnYou(domain.WaitingInput{
+		Column: c.Column, OpenQuestions: in.OpenQuestions, HandoffIncomplete: c.HandoffIncomplete,
+		Ready: sum.Readiness.Ready, PauseReason: c.PauseReason, Signal: sig,
+	})
 	switch sig {
 	case domain.SignalBloqueado, domain.SignalProntoParaRetomar:
 		// Valem na hora e também com sessão viva; o tempo é o da pausa.
