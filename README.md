@@ -358,11 +358,13 @@ nobre project scan --nao-sugerir apps/old,packages/x      # recusa pastas relati
 Grupo com pasta: uma pasta que não é repositório git (por exemplo `~/workspace/clientes`, com vários repositórios dentro) também pode virar um grupo.
 
 ```sh
-nobre project add ~/workspace/clientes                   # pasta sem git: cadastra um grupo com pasta, se achar repositórios dentro dela
+nobre project add ~/workspace/clientes                   # pasta sem git: cadastra um grupo com pasta e liga a ele os repositórios que achar dentro dela
+nobre project add ~/workspace/clientes --sem-filhos      # só o grupo; os repositórios ficam como sugestão
 ```
 
 - `nobre start` e `nobre card add` criam o card no projeto da pasta onde o comando rodou: o projeto cadastrado mais específico que a contém. Numa sessão aberta na pasta do grupo (ou numa pasta-mãe sem cadastro), rode o comando dentro do repositório filho para o card nascer nele, com o branch de lá. Se a pasta do comando não tem projeto, vale o projeto da sessão.
-- Para o card cair num repositório do grupo, esse repositório precisa estar cadastrado: `nobre project add <grupo>/<repositório> --pai <grupo>`. `nobre project add` na pasta do grupo cadastra só o grupo e lista os repositórios como sugestão.
+- Os repositórios do grupo são ligados sem `--pai`: `nobre project add` na pasta do grupo liga os que achar (de novo, acrescenta os novos); `nobre project add <repositório>` dentro do grupo liga só ele; e `nobre start` ou `nobre card add` rodado dentro de um repositório do grupo ainda não cadastrado o liga na hora, a menos que você o tenha recusado em "Não sugerir estes". Fora de um grupo cadastrado, nada é cadastrado sozinho.
+- `nobre start` numa sessão sem projeto (aberta numa pasta sem cadastro) liga a sessão ao projeto do card, com a captura dele.
 - O grupo com pasta não usa git: não tem branch, worktree nem base. Ele aceita cards (o grupo sem pasta continua recusando) e aparece em Worktrees só como cabeçalho, com os repositórios dos filhos abaixo.
 - Na Configuração, "Adicionar projeto" abre o seletor de pasta. Escolha a pasta e o Cockpit varre os sub-projetos (repositório, monorepo ou grupo) e cadastra tudo de uma vez, com os sub-projetos que você marcar. "Varrer de novo" repete a varredura numa pasta já cadastrada.
 - Na página do projeto principal, a linha "geral" da tabela "Por app" mostra `(raiz)`: é o que caiu no principal e não em um app.
@@ -392,7 +394,7 @@ Comandos de administração:
 
 | Comando | O que faz |
 |---|---|
-| `nobre project add [caminho] [--name <nome>] [--pai <id\|pasta>]` | Cadastra um repositório (ou um app de monorepo, com `--pai`). Numa pasta que não é git e tem repositórios dentro, cadastra um grupo com pasta (não aceita `--pai`) |
+| `nobre project add [caminho] [--name <nome>] [--pai <id\|pasta>] [--sem-filhos]` | Cadastra um repositório (ou um app de monorepo, com `--pai`). Numa pasta que não é git e tem repositórios dentro, cadastra um grupo com pasta e liga a ele os repositórios que achar (`--sem-filhos` cadastra só o grupo; não aceita `--pai`). Um repositório dentro de um grupo com pasta é ligado ao grupo sem `--pai` |
 | `nobre project pai <projeto> <pai\|--nenhum>` | Liga ou desliga um projeto de um pai |
 | `nobre project grupo "<nome>"` | Cria um grupo de repositórios |
 | `nobre app <nome>` / `nobre app --geral` | Põe o card no app do monorepo, ou no principal |
