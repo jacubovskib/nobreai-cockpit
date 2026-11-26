@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { intervalMs, percentile, tick, verdict } from './load'
+import { intervalMs, percentile, tick, validity, verdict } from './load'
 
 const text = (b: Uint8Array) => new TextDecoder().decode(b)
 const count = (s: string, sub: string) => s.split(sub).length - 1
@@ -54,5 +54,36 @@ describe('verdict', () => {
     expect(verdict({ longMax: 0, lagP95: 50, lagMax: 40 })).toBe('reprovado')
     expect(verdict({ longMax: 0, lagP95: 10, lagMax: 100 })).toBe('reprovado')
     expect(verdict({ longMax: 49, lagP95: 49, lagMax: 99 })).toBe('aprovado')
+  })
+})
+
+describe('validity', () => {
+  const ok = { hiddenDuringRun: false, fps: 60, renderers: Array(9).fill('webgl') as string[], expected: 9 }
+  it('tudo certo: válida, sem motivos', () => {
+    expect(validity(ok)).toEqual({ valid: true, reasons: [] })
+  })
+  it('janela escondida durante a rodada invalida', () => {
+    const v = validity({ ...ok, hiddenDuringRun: true })
+    expect(v.valid).toBe(false)
+    expect(v.reasons).toContain('janela escondida durante a medição')
+  })
+  it('fps abaixo de 5 invalida', () => {
+    const v = validity({ ...ok, fps: 4 })
+    expect(v.valid).toBe(false)
+    expect(v.reasons).toContain('taxa de quadros abaixo de 5')
+    expect(validity({ ...ok, fps: 5 }).valid).toBe(true)
+  })
+  it('um tile em dom invalida', () => {
+    const v = validity({ ...ok, renderers: [...Array(8).fill('webgl'), 'dom'] })
+    expect(v.valid).toBe(false)
+    expect(v.reasons).toContain('1 de 9 tiles sem WebGL')
+  })
+  it('só 8 terminais montados invalida', () => {
+    const v = validity({ ...ok, renderers: Array(8).fill('webgl') })
+    expect(v.valid).toBe(false)
+    expect(v.reasons).toContain('só 8 de 9 terminais montados')
+  })
+  it('acumula os motivos', () => {
+    expect(validity({ hiddenDuringRun: true, fps: 1, renderers: [], expected: 9 }).reasons).toHaveLength(3)
   })
 })

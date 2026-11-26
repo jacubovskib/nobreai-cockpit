@@ -47,3 +47,18 @@ export function percentile(xs: number[], p: number): number {
 export function verdict(m: { longMax: number; lagP95: number; lagMax: number }): 'aprovado' | 'reprovado' {
   return m.longMax < META.longMax && m.lagP95 < META.lagP95 && m.lagMax < META.lagMax ? 'aprovado' : 'reprovado'
 }
+
+export const MIN_FPS = 5
+
+// validity diz se a rodada pode valer como medição. renderers traz o
+// renderizador efetivo de cada terminal montado (um tile que perdeu o WebGL no
+// meio da rodada entra como 'dom'). Rodada inválida nunca vale como aprovação.
+export function validity(i: { hiddenDuringRun: boolean; fps: number; renderers: string[]; expected: number }): { valid: boolean; reasons: string[] } {
+  const reasons: string[] = []
+  if (i.hiddenDuringRun) reasons.push('janela escondida durante a medição')
+  if (i.fps < MIN_FPS) reasons.push(`taxa de quadros abaixo de ${MIN_FPS}`)
+  if (i.renderers.length < i.expected) reasons.push(`só ${i.renderers.length} de ${i.expected} terminais montados`)
+  const semWebgl = i.renderers.filter((r) => r !== 'webgl').length
+  if (semWebgl > 0) reasons.push(`${semWebgl} de ${i.expected} tiles sem WebGL`)
+  return { valid: reasons.length === 0, reasons }
+}

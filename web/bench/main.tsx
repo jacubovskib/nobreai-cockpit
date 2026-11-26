@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { TerminalView, xtermFactory, type TermLike, type TermFactory, type WsFactory, type WsLike } from '../src/ui/TerminalView'
-import { percentile, tick, verdict, type Profile } from './load'
+import { percentile, tick, validity, verdict, type Profile } from './load'
 import type { FromWorker, ToWorker } from './worker'
 
 const TILES = 9
@@ -14,7 +14,7 @@ const MEASURE_MS = 6000
 const REPLUG_MS = 3000
 const SNAPSHOT_BYTES = 2 * 1024 * 1024
 const LAG_STEP_MS = 10
-const MIN_FPS = 5
+const MOUNT_TIMEOUT_MS = 5000
 
 type Mode = Profile | 'religar'
 
@@ -26,9 +26,15 @@ export interface BenchResult {
   longMax: number
   lagP95: number
   lagMax: number
-  renderers: ('dom' | 'webgl')[]
+  renderersStart: ('dom' | 'webgl' | null)[] // null: terminal não montado
+  renderers: ('dom' | 'webgl' | null)[] // no fim da medição
   visibility: DocumentVisibilityState
-  verdict: 'aprovado' | 'reprovado' | null // null: a religação não entra no veredito
+  hiddenDuringRun: boolean
+  valid: boolean
+  reasons: string[]
+  // 'inválido': a rodada não vale como medição (nunca como aprovação);
+  // null: a religação não entra no veredito
+  verdict: 'aprovado' | 'reprovado' | 'inválido' | null
 }
 
 declare global {
@@ -149,13 +155,44 @@ function Bench() {
   }, [])
   const stopLoad = useCallback(() => { worker.current?.terminate(); worker.current = null }, [])
 
-  const finish = useCallback((profile: Mode, m: Awaited<ReturnType<typeof measure>>) => {
+  const rendererNow = () => terms.current.map((t) => t?.renderer ?? null)
+  // Espera os 9 terminais existirem (o WebGL só liga com o xterm aberto).
+  const waitMounted = async () => {
+    const t0 = performance.now()
+    while (terms.current.filter(Boolean).length < TILES) {
+      if (performance.now() - t0 > MOUNT_TIMEOUT_MS) return false
+      await sleep(50)
+    }
+    return true
+  }
+
+  const publish = useCallback((profile: Mode, m: Awaited<ReturnType<typeof measure>>, start: BenchResult['renderersStart'], hiddenDuringRun: boolean) => {
+    const end = rendererNow()
+    // só vale WebGL se estava ligado no começo e no fim (contexto perdido = dom)
+    const effective = end.flatMap((r, i) => (r === null ? [] : [r === 'webgl' && start[i] === 'webgl' ? 'webgl' : 'dom']))
+    const v = validity({ hiddenDuringRun, fps: m.fps, renderers: effective, expected: TILES })
     const r: BenchResult = {
       ...m,
       profile,
-      renderers: terms.current.map((t) => t?.renderer ?? 'dom'),
+      renderersStart: start,
+      renderers: end,
       visibility: document.visibilityState,
-      verdict: profile === 'religar' ? null : verdict(m),
+      hiddenDuringRun,
+      valid: v.valid,
+      reasons: v.reasons,
+      verdict: !v.valid ? 'inválido' : profile === 'religar' ? null : verdict(m),
+    }
+    window.__bench = r
+    setResult(r)
+  }, [])
+
+  const publishUnmounted = useCallback((profile: Mode) => {
+    const n = terms.current.filter(Boolean).length
+    const r: BenchResult = {
+      profile, fps: 0, longCount: 0, longSum: 0, longMax: 0, lagP95: 0, lagMax: 0,
+      renderersStart: rendererNow(), renderers: rendererNow(),
+      visibility: document.visibilityState, hiddenDuringRun: document.visibilityState !== 'visible',
+      valid: false, reasons: [`só ${n} de ${TILES} terminais montados`], verdict: 'inválido',
     }
     window.__bench = r
     setResult(r)
@@ -166,28 +203,41 @@ function Bench() {
     setBusy(mode)
     setResult(null)
     window.__bench = { running: true }
+    // qualquer momento escondido, do aquecimento ao fim da medição, invalida
+    let hiddenDuringRun = document.visibilityState !== 'visible'
+    const onVis = () => { if (document.visibilityState !== 'visible') hiddenDuringRun = true }
+    document.addEventListener('visibilitychange', onVis)
     try {
+      if (!(await waitMounted())) { publishUnmounted(mode); return }
       if (mode === 'religar') {
         // desmonta os 9 e remonta cada um com um snapshot de 2 MiB
         snapshotBytes = 0
+        terms.current = []
         setGen((g) => g + 1)
         await sleep(500)
+        if (!(await waitMounted())) { publishUnmounted(mode); return }
         snapshotBytes = SNAPSHOT_BYTES
+        terms.current = []
         const pending = measure(REPLUG_MS)
         setGen((g) => g + 1)
-        finish('religar', await pending)
+        const m = await pending
+        if (!(await waitMounted())) { publishUnmounted(mode); return }
+        publish('religar', m, rendererNow(), hiddenDuringRun)
         snapshotBytes = 0
       } else {
+        const start = rendererNow()
         startLoad(mode)
         await sleep(WARMUP_MS)
-        finish(mode, await measure(MEASURE_MS))
+        publish(mode, await measure(MEASURE_MS), start, hiddenDuringRun)
         stopLoad()
       }
     } finally {
+      document.removeEventListener('visibilitychange', onVis)
       stopLoad()
+      snapshotBytes = 0
       setBusy(null)
     }
-  }, [busy, finish, startLoad, stopLoad])
+  }, [busy, publish, publishUnmounted, startLoad, stopLoad])
 
   // ?auto=agente|enxurrada|religar começa a rodada sem clique
   const auto = useRef(false)
@@ -196,13 +246,10 @@ function Bench() {
     auto.current = true
     const a = new URLSearchParams(location.search).get('auto')
     if (a === 'agente' || a === 'enxurrada' || a === 'religar') {
-      // espera os tiles abrirem (o WebGL só liga com o xterm aberto)
-      setTimeout(() => { void run(a) }, 500)
+      void run(a) // o run espera os 9 terminais montarem
     }
   }, [run])
 
-  const hidden = document.visibilityState !== 'visible'
-  const lowFps = result !== null && result.fps < MIN_FPS
   const btn = { padding: '8px 16px', borderRadius: 8, border: '1px solid #3A3F4B', background: '#1a1d24', color: '#E8EAEE', font: 'inherit', cursor: busy ? 'wait' : 'pointer' } as const
 
   return (
@@ -213,12 +260,6 @@ function Bench() {
         <button style={btn} disabled={!!busy} onClick={() => void run('enxurrada')}>Enxurrada</button>
         <button style={btn} disabled={!!busy} onClick={() => void run('religar')}>Religar</button>
       </div>
-      {(hidden || lowFps) && (
-        <p role="alert" style={{ color: '#f0b429', margin: '0 0 12px' }}>
-          {hidden ? 'A janela não está visível: ' : `Só ${fmt(result!.fps)} quadros por segundo: `}
-          a medição não vale. Deixe a janela à frente, sem nada por cima, e rode de novo.
-        </p>
-      )}
       <div role="status" style={{ marginBottom: 12, fontSize: 14, lineHeight: 1.6 }}>
         {busy && <div>Rodando {busy}… ({busy === 'religar' ? `${REPLUG_MS / 1000} s` : `${WARMUP_MS / 1000} s de aquecimento, ${MEASURE_MS / 1000} s de medição`})</div>}
         {!busy && !result && <div>Escolha um perfil para medir.</div>}
@@ -228,9 +269,15 @@ function Bench() {
             <div>Quadros por segundo: {fmt(result.fps)}</div>
             <div>Tarefas longas: {result.longCount} (soma {fmt(result.longSum)} ms, máxima {fmt(result.longMax)} ms)</div>
             <div>Atraso da thread principal: p95 {fmt(result.lagP95)} ms, máximo {fmt(result.lagMax)} ms</div>
-            <div>Renderizador: {result.renderers.map((r, i) => `${i + 1}:${r}`).join(' ')}</div>
-            <div>Visibilidade: {result.visibility}</div>
-            {result.verdict && <div style={{ fontSize: 18, color: result.verdict === 'aprovado' ? '#3ecf8e' : '#f4676b' }}>Veredito: {result.verdict}</div>}
+            <div>Renderizador (início): {result.renderersStart.map((r, i) => `${i + 1}:${r ?? 'ausente'}`).join(' ')}</div>
+            <div>Renderizador (fim): {result.renderers.map((r, i) => `${i + 1}:${r ?? 'ausente'}`).join(' ')}</div>
+            <div>Visibilidade: {result.visibility}{result.hiddenDuringRun && ' (escondida durante a rodada)'}</div>
+            {result.verdict === 'inválido' && (
+              <div role="alert" style={{ fontSize: 18, color: '#f0b429' }}>
+                Veredito: inválido, a medição não vale. Motivos: {result.reasons.join('; ')}. Deixe a janela à frente, sem nada por cima, em um Chrome com WebGL, e rode de novo.
+              </div>
+            )}
+            {result.verdict && result.verdict !== 'inválido' && <div style={{ fontSize: 18, color: result.verdict === 'aprovado' ? '#3ecf8e' : '#f4676b' }}>Veredito: {result.verdict}</div>}
           </>
         )}
       </div>
