@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -55,18 +55,21 @@ function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (ke
     ? `processo encerrado há ${minutesSince(card.pid_dead_at)} min`
     : card.last_activity_at ? `sem sessão há ${mins} min` : 'sem sessão viva'
   const [moving, setMoving] = useState(false)
+  const moveBtn = useRef<HTMLButtonElement>(null)
+  // Fechar as opções devolve o foco ao botão ⋯ (senão ele cairia no body).
+  const closeMove = () => { setMoving(false); moveBtn.current?.focus() }
   const cardTo = withP(`/cards/${card.key}`)
   // Backlog sem sessão: só chave, tipo e título (e o que você definiu), sem rodapé zerado.
   const bare = isBareBacklog(card)
   const hint = handoffHint(card)
   const marks = cardMarks(card, card.readiness.ready)
   const merged = !!card.branch_merged_at && card.column !== 'concluido'
-  const showFooter = !bare && (isEpic || hasSession(card))
+  const showFooter = !bare && (isEpic || hasSession(card) || !!card.agent)
   return (
     <article
       draggable
       onDragStart={(e) => { e.dataTransfer.setData('text/plain', card.key); e.dataTransfer.effectAllowed = 'move' }}
-      onKeyDown={(e) => { if (e.key === 'Escape') setMoving(false) }}
+      onKeyDown={(e) => { if (e.key === 'Escape' && moving) closeMove() }}
       style={cardBox(card, stale)}
       aria-label={`${card.key} ${card.title}`}
     >
@@ -89,6 +92,7 @@ function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (ke
             </span>
           )}
           <button
+            ref={moveBtn}
             type="button"
             aria-label={`Mover ${card.key}`}
             aria-expanded={moving}
@@ -104,7 +108,7 @@ function BoardCard({ card, onMove, busy, tag }: { card: CardSummary; onMove: (ke
         <div role="group" aria-label={`Mover ${card.key} para`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)' }}>
           <span>Mover para</span>
           {COLUMNS.filter((c) => c.id !== card.column).map((c) => (
-            <button key={c.id} type="button" disabled={busy} style={smallBtn} onClick={() => { setMoving(false); onMove(card.key, c.id) }}>
+            <button key={c.id} type="button" disabled={busy} style={smallBtn} onClick={() => { closeMove(); onMove(card.key, c.id) }}>
               {c.label}
             </button>
           ))}

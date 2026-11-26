@@ -289,8 +289,11 @@ describe('Board enxuto (NAC-61)', () => {
     const art = await screen.findByRole('article', { name: /NAC-4/ })
     const btn = within(art).getByRole('button', { name: 'Mover NAC-4' })
     fireEvent.click(btn)
-    fireEvent.keyDown(btn, { key: 'Escape' })
+    const opt = within(art).getByRole('button', { name: 'Backlog' })
+    opt.focus()
+    fireEvent.keyDown(opt, { key: 'Escape' })
     expect(within(art).queryByRole('group', { name: 'Mover NAC-4 para' })).toBeNull()
+    expect(document.activeElement).toBe(btn)
   })
 
   it('ação principal: Continuar nos pausados (painel de continuar) e Revisar e aprovar na revisão', async () => {
