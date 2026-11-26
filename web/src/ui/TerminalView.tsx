@@ -269,13 +269,22 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
       for (const c of chunks) { all.set(c, off); off += c.byteLength }
       term.write(all)
     }
-    const dropOut = () => {
-      pending = []
+    const cancelOutFrame = () => {
       if (outFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(outFrame)
       outFrame = 0
     }
+    const dropOut = () => { pending = []; cancelOutFrame() }
+    // flushNow escreve na hora o que esperava o quadro (fim da sessão, aba
+    // que muda de visibilidade): nenhuma saída recebida se perde.
+    const flushNow = () => { cancelOutFrame(); flushOut() }
     const queueOut = (bytes: Uint8Array) => {
-      if (!grid || typeof requestAnimationFrame !== 'function') { term.write(bytes); return }
+      // Com a aba escondida não há quadros: escreve direto (o xterm guarda e
+      // interpreta sem desenhar), sem acumular aqui.
+      if (!grid || typeof requestAnimationFrame !== 'function' || document.hidden) {
+        if (pending.length) flushNow()
+        term.write(bytes)
+        return
+      }
       pending.push(bytes)
       if (!outFrame) outFrame = requestAnimationFrame(flushOut)
     }
@@ -315,6 +324,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
               refont()
             }
             if (m.type === 'exit') {
+              flushNow() // a saída anterior ao exit vai para o xterm antes do aviso
               exited = true
               setExitCode(typeof m.code === 'number' ? m.code : 0)
               endedCb.current?.()
@@ -327,6 +337,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
       }
       sock.onclose = () => {
         if (disposed || ws !== sock) return
+        flushNow()
         if (exited) { setStatus('desconectado'); return }
         if (attempt >= MAX_RETRIES) { setStatus('desconectado'); return }
         setStatus('reconectando')
@@ -350,6 +361,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
     const onWinResize = () => { if (followPty()) applyFont(); else term.fit() }
     live.current = { fit: onWinResize, reconnect }
     window.addEventListener('resize', onWinResize)
+    if (grid) document.addEventListener('visibilitychange', flushNow)
     const RO = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onWinResize)
     RO?.observe(el)
     RO?.observe(scr)
@@ -359,6 +371,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
       clearTimeout(retryTimer)
       clearTimeout(resizeTimer)
       window.removeEventListener('resize', onWinResize)
+      document.removeEventListener('visibilitychange', flushNow)
       el.removeEventListener('keydown', engage, true)
       el.removeEventListener('paste', engage, true)
       RO?.disconnect()

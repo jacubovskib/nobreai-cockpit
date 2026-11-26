@@ -417,6 +417,69 @@ describe('TerminalView na grade', () => {
     expect(term.written.map(text)).toEqual(['hist', 'abc'])
   })
 
+  it('a saída que chega antes do exit é escrita antes de onEnded, sem esperar o quadro', () => {
+    vi.useFakeTimers()
+    const term = new FakeTerm()
+    const socks: FakeWs[] = []
+    let atEnd: string[] = []
+    const onEnded = vi.fn(() => { atEnd = term.written.map(text) })
+    render(<TerminalView id="t1" grid readonly termFactory={() => term} wsFactory={(u) => { const w = new FakeWs(u); socks.push(w); return w }} onEnded={onEnded} />)
+    act(() => socks[0].open())
+    snapshot(socks[0], term)
+    act(() => {
+      socks[0].msg(new TextEncoder().encode('fim ').buffer)
+      socks[0].msg(new TextEncoder().encode('do agente').buffer)
+      socks[0].msg(JSON.stringify({ type: 'exit', code: 0, reason: 'agent' }))
+    })
+    expect(onEnded).toHaveBeenCalledTimes(1)
+    expect(atEnd.join('')).toBe('histfim do agente')
+  })
+
+  it('a saída pendente é escrita quando a conexão cai, sem esperar o quadro', () => {
+    vi.useFakeTimers()
+    const { term, socks } = gridSetup({ readonly: true })
+    act(() => socks[0].open())
+    snapshot(socks[0], term)
+    act(() => { socks[0].msg(new TextEncoder().encode('ultima').buffer); socks[0].drop() })
+    expect(term.written.map(text).join('')).toBe('histultima')
+  })
+
+  describe('com a aba escondida', () => {
+    let hidden = false
+    beforeEach(() => {
+      hidden = false
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+    })
+    afterEach(() => { delete (document as { hidden?: boolean }).hidden })
+
+    it('escreve cada mensagem na hora, sem quadro; visível, volta a um write por quadro', () => {
+      vi.useFakeTimers()
+      const { term, socks } = gridSetup({ readonly: true })
+      act(() => socks[0].open())
+      snapshot(socks[0], term)
+      hidden = true
+      act(() => socks[0].msg(new TextEncoder().encode('a').buffer))
+      expect(term.written.map(text)).toEqual(['hist', 'a'])
+      hidden = false
+      for (const s of ['b', 'c']) act(() => socks[0].msg(new TextEncoder().encode(s).buffer))
+      expect(term.written).toHaveLength(2)
+      act(() => { vi.advanceTimersToNextFrame() })
+      expect(term.written.map(text)).toEqual(['hist', 'a', 'bc'])
+    })
+
+    it('a saída que esperava o quadro é escrita quando a aba muda de visibilidade', () => {
+      vi.useFakeTimers()
+      const { term, socks } = gridSetup({ readonly: true })
+      act(() => socks[0].open())
+      snapshot(socks[0], term)
+      act(() => socks[0].msg(new TextEncoder().encode('x').buffer))
+      expect(term.written).toHaveLength(1)
+      hidden = true
+      act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(term.written.map(text)).toEqual(['hist', 'x'])
+    })
+  })
+
   it('na grade a entrada continua esperando o snapshot ser escrito', () => {
     vi.useFakeTimers()
     const { term, socks } = gridSetup()
