@@ -45,7 +45,7 @@ function Where() {
 
 function renderAt(path = '/terminals') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={qc}><MemoryRouter initialEntries={[path]}><Terminals /><Where /></MemoryRouter></QueryClientProvider>)
+  return { qc, ...render(<QueryClientProvider client={qc}><MemoryRouter initialEntries={[path]}><Terminals /><Where /></MemoryRouter></QueryClientProvider>) }
 }
 
 const tiles = () => Array.from(document.querySelectorAll<HTMLElement>('section[data-tile]'))
@@ -168,6 +168,31 @@ describe('Terminais em grade', () => {
     expect(tileIds()).toEqual(['t1', 't2', 't3', 't4'])
     expect(within(tile('t1')).getByTestId('tv')).toHaveAttribute('data-active', 'true')
     expect(within(tile('t2')).getByTestId('tv')).toHaveAttribute('data-active', 'false')
+  })
+
+  it('?id=X rola até o tile já ampliado', async () => {
+    const seen: string[] = []
+    const spy = vi.fn(function (this: HTMLElement) { seen.push(`${this.getAttribute('data-tile')}:${this.style.gridColumn}`) })
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: spy, configurable: true, writable: true })
+    try {
+      api(FAMILY, PROJECTS)
+      renderAt('/terminals?id=t3')
+      await waitFor(() => expect(spy).toHaveBeenCalledOnce())
+      expect(seen).toEqual(['t3:span 3'])
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
+  it('?id=X que chega numa recarga da lista ainda abre em foco e na linha toda', async () => {
+    let terms: object[] = [info({ id: 'a' })]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(terms), { status: 200 })))
+    const { qc } = renderAt('/terminals?id=novo')
+    await screen.findByTestId('tv')
+    terms = [info({ id: 'novo', card_key: 'NAC-9' }), info({ id: 'a', started_at: ago(1) })]
+    await act(() => qc.invalidateQueries({ queryKey: ['terminals'] }))
+    await waitFor(() => expect(tile('novo').style.gridColumn).toBe('span 3'))
+    expect(within(tile('novo')).getByTestId('tv')).toHaveAttribute('data-active', 'true')
   })
 
   it('?id=inexistente avisa que o terminal não existe mais e a grade continua', async () => {

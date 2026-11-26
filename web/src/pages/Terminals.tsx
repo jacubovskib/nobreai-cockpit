@@ -136,8 +136,8 @@ export function Terminals() {
   const { data, isPending, isError } = useTerminals()
   const projectsQ = useProjects()
   const projects = projectsQ.data ?? NO_PROJECTS
-  const cardsData = useCards().data
-  const cards = Array.isArray(cardsData) ? cardsData : NO_CARDS
+  const cardsQ = useCards()
+  const cards = Array.isArray(cardsQ.data) ? cardsQ.data : NO_CARDS
   const { root, app } = useProjectFilter()
   const [params] = useSearchParams()
   const selected = params.get('id') ?? ''
@@ -151,7 +151,8 @@ export function Terminals() {
   const lastUsed = useRef<Record<string, number>>({})
   const woken = useRef(new Set<string>())
   const dragging = useRef<string | null>(null)
-  const pendingScroll = useRef<string | null>(null)
+  // Estado (não ref): a rolagem roda no render que já aplicou o "linha toda".
+  const [scrollTo, setScrollTo] = useState<string | null>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const onScreen = useOnScreen(gridRef)
   const pageHidden = usePageHidden()
@@ -188,8 +189,9 @@ export function Terminals() {
   const tabList = useMemo(() => tabs(placed, projects), [placed, projects])
 
   // Aba ou chip salvos sem terminal caem em "Todos" (sem regravar). Antes da
-  // lista e dos projetos chegarem, vale o salvo.
-  const ready = !!data && !projectsQ.isPending
+  // lista, dos projetos e dos cards chegarem, vale o salvo (o card decide o
+  // projeto do terminal).
+  const ready = !!data && !projectsQ.isPending && !cardsQ.isPending
   const tab = !ready || tabList.some((x) => x.id === layout.tab) ? layout.tab : 'all'
   const chipList = useMemo(() => chips(placed, projects, tab), [placed, projects, tab])
   const sub = !ready || layout.sub === 'all' || chipList.some((x) => x.id === layout.sub) ? layout.sub : 'all'
@@ -222,23 +224,24 @@ export function Terminals() {
     if (root) dispatch({ type: 'tab', tab: root.id, sub: app === null ? 'all' : app })
   }, [selected, hasFilter, projectsQ.isPending, root, app])
 
-  // ?id=X, uma vez por id: em foco, linha toda, rolado até ele.
+  // ?id=X, uma vez por id: em foco, linha toda, rolado até ele. Só conta como
+  // atendido quando X está na lista: um terminal recém-criado pode chegar
+  // numa recarga depois de uma lista velha do cache.
   const handledId = useRef('')
   useEffect(() => {
     if (!selected || !data || handledId.current === selected) return
-    handledId.current = selected
     if (!data.some((t) => t.id === selected)) return
+    handledId.current = selected
     dispatch({ type: 'expand', id: selected })
     actions.focus(selected)
-    pendingScroll.current = selected
+    setScrollTo(selected)
   }, [selected, data, actions])
   // Sem dependências: rola assim que o tile aparecer na grade.
   useEffect(() => {
-    const id = pendingScroll.current
-    if (!id) return
-    const el = Array.from(gridRef.current?.querySelectorAll('[data-tile]') ?? []).find((x) => x.getAttribute('data-tile') === id)
+    if (!scrollTo) return
+    const el = Array.from(gridRef.current?.querySelectorAll('[data-tile]') ?? []).find((x) => x.getAttribute('data-tile') === scrollTo)
     if (!el) return
-    pendingScroll.current = null
+    setScrollTo(null)
     el.scrollIntoView?.({ block: 'nearest' })
   })
 
