@@ -111,7 +111,7 @@ export function Layout() {
             <circle cx="20" cy="9" r="2.5" fill="#0E1014" />
           </svg>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span className="brand-name">NobreAI Cockpit</span>
+            <span className="brand-name">NobreAI OS</span>
             <span className="brand-sub">pessoal · local</span>
           </div>
         </div>

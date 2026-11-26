@@ -62,7 +62,17 @@ export const PRIORITY_LABEL: Record<Priority, string> = {
 }
 
 // epic: chave do épico, 'none' (sem pai e não-épico) ou '' (todos).
-export interface BoardFilter { epic: string | 'none' | ''; type: CardType | ''; waiting: boolean }
+// search: texto livre casado com chave e título (o payload do board não traz arquivos).
+export interface BoardFilter { epic: string | 'none' | ''; type: CardType | ''; waiting: boolean; search?: string }
+
+// fold: minúsculas e sem acentos, para a busca.
+const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+// matchesSearch: a busca casa com a chave ou o título; vazia casa tudo.
+export function matchesSearch(card: Pick<CardSummary, 'key' | 'title'>, search: string): boolean {
+  const term = fold(search.trim())
+  return !term || fold(card.key).includes(term) || fold(card.title ?? '').includes(term)
+}
 
 // applyBoardFilter: épico mantém o épico e as filhas; 'none' = sem pai e não-épico.
 export function applyBoardFilter(cards: CardSummary[], f: BoardFilter): CardSummary[] {
@@ -71,6 +81,7 @@ export function applyBoardFilter(cards: CardSummary[], f: BoardFilter): CardSumm
     else if (f.epic && c.key !== f.epic && c.parent_key !== f.epic) return false
     if (f.type && c.type !== f.type) return false
     if (f.waiting && !c.waiting_on_you) return false
+    if (f.search && !matchesSearch(c, f.search)) return false
     return true
   })
 }
@@ -83,4 +94,71 @@ export function epicOptions(cards: CardSummary[], selected = ''): { key: string;
   for (const c of cards) if (c.parent_key && !out.has(c.parent_key)) out.set(c.parent_key, c.parent_title || '')
   if (selected && selected !== 'none' && !out.has(selected)) out.set(selected, '')
   return [...out].map(([key, title]) => ({ key, title }))
+}
+
+// hasSession: o card já teve (ou tem) sessão.
+export const hasSession = (card: Pick<CardSummary, 'session_count' | 'live'>) => card.session_count > 0 || !!card.live
+
+// isBareBacklog: backlog sem sessão (e não-épico) mostra só chave, tipo e título,
+// além do que você mesmo definiu (épico, pontos, prioridade, labels).
+export function isBareBacklog(card: Pick<CardSummary, 'column' | 'type' | 'session_count' | 'live'>): boolean {
+  return card.column === 'backlog' && card.type !== 'epico' && !hasSession(card)
+}
+
+type HandoffCard = Pick<CardSummary, 'column' | 'type' | 'session_count' | 'live' | 'signal' | 'readiness'>
+
+// readyToResume: pausado com o handoff completo e sem bloqueio. É a mesma regra do
+// selo "pronto para retomar" e da contagem da faixa do topo.
+export function readyToResume(card: HandoffCard): boolean {
+  return card.column === 'pausado' && card.type !== 'epico' && card.readiness.total > 0 && card.readiness.ready && card.signal !== 'bloqueado'
+}
+
+// handoffHint: o indicador de handoff só aparece quando informa algo: "pronto para
+// retomar" (pausado e completo) ou "contexto n/5" (incompleto, inclusive 0/5, em card
+// com sessão e ainda não concluído). Fora disso, vazio.
+export function handoffHint(card: HandoffCard): string {
+  const { met, total, ready } = card.readiness
+  if (card.type === 'epico' || total <= 0) return ''
+  if (readyToResume(card)) return 'pronto para retomar'
+  if (!ready && met < total && hasSession(card) && card.column !== 'concluido') return `contexto ${met}/${total}`
+  return ''
+}
+
+// ageText: "há 36 h" abaixo de 48 h, "há 3 dias" a partir daí; vazio sem data válida.
+export function ageText(iso: string | null, now: Date = new Date()): string {
+  if (!iso) return ''
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return ''
+  const hours = Math.max(0, Math.floor((now.getTime() - t) / 3600000))
+  return hours < 48 ? `há ${hours} h` : `há ${Math.floor(hours / 24)} dias`
+}
+
+// boardStrip: o que espera por você. review = cards em Revisão; oldestReview = o
+// signal_since mais antigo entre os "aguardando revisão" (o dado só existe após 24 h
+// sem atividade; sem ele, null); resumable = pausados prontos; live = sessões vivas.
+export interface BoardStrip { review: number; oldestReview: string | null; resumable: number; live: number }
+export function boardStrip(cards: CardSummary[]): BoardStrip {
+  const out: BoardStrip = { review: 0, oldestReview: null, resumable: 0, live: 0 }
+  for (const c of cards) {
+    if (c.column === 'revisao') {
+      out.review++
+      if (c.signal === 'aguardando_revisao' && c.signal_since && !Number.isNaN(Date.parse(c.signal_since))
+        && (out.oldestReview === null || Date.parse(c.signal_since) < Date.parse(out.oldestReview))) out.oldestReview = c.signal_since
+    }
+    if (readyToResume(c)) out.resumable++
+    if (c.live) out.live++
+  }
+  return out
+}
+
+// DONE_VISIBLE: quantos concluídos a coluna mostra antes de "Ver os N concluídos".
+export const DONE_VISIBLE = 3
+
+// recentDone: os concluídos do mais recente (updated_at, que muda ao concluir) para o
+// mais antigo, cortados em `limit`. Sem data válida vai para o fim, na ordem de entrada.
+export function recentDone(cards: CardSummary[], limit: number = DONE_VISIBLE): CardSummary[] {
+  const at = (c: CardSummary) => { const t = Date.parse(c.updated_at ?? ''); return Number.isNaN(t) ? -Infinity : t }
+  return cards.map((c, i) => ({ c, i, t: at(c) }))
+    .sort((a, b) => (a.t === b.t ? a.i - b.i : b.t > a.t ? 1 : -1))
+    .slice(0, limit).map((x) => x.c)
 }
