@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/nobretech/nobreai-cockpit/internal/gitinfo"
 	"github.com/nobretech/nobreai-cockpit/internal/resume"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
+	"github.com/nobretech/nobreai-cockpit/internal/workspaces"
 )
 
 // Rotas do agente: a sessão é a sessão viva do processo informado em
@@ -32,6 +34,9 @@ const (
 	// msgNoProject é o aviso sem guia; noProjectMsg cita o do agente.
 	msgNoProject = "Este repositório não está cadastrado no NobreAI Cockpit. Cadastre com nobre project add e faça o levantamento com nobre project scan."
 	msgNotGit    = "Esta pasta não é um repositório git e não pode ser cadastrada no NobreAI Cockpit; a sessão segue sem card."
+	// msgRepoFolder é o aviso numa pasta sem git que tem repositórios dentro
+	// (%s é a pasta): ela pode virar grupo, com o aval do usuário.
+	msgRepoFolder = "Esta pasta não é um repositório git, mas tem repositórios dentro e pode ser cadastrada como grupo. Pergunte ao usuário se quer cadastrá-la com nobre project add %s e só cadastre se ele aceitar; para criar o card num dos repositórios, rode o comando dentro dele. A sessão segue sem card até lá."
 )
 
 func (s *server) meRoutes(mux *http.ServeMux) {
@@ -168,26 +173,93 @@ func (s *server) recordEvent(sessionID, kind string, data map[string]any) {
 	s.publish("sessions")
 }
 
-// sessionProject devolve o projeto da sessão (o ligado ou o do cwd) ou
-// responde 409: fora de um repositório git não sugere cadastrar.
-func (s *server) sessionProject(w http.ResponseWriter, sess domain.Session) (int64, bool) {
+// commandDir limpa a pasta que a CLI informou (onde o comando rodou). ""
+// quando ela não veio (CLI antiga) ou não é um caminho absoluto: aí vale só a
+// regra da sessão.
+func commandDir(cwd string) string {
+	if !filepath.IsAbs(cwd) {
+		return ""
+	}
+	return filepath.Clean(cwd)
+}
+
+// commandProject escolhe o projeto do card que o comando cria: o projeto
+// cadastrado mais fundo que contém cwd, a pasta onde o comando rodou (a regra
+// do hook, store.ProjectForLocation, com a tradução do worktree ligado); sem
+// projeto lá (ou sem cwd), o da sessão (o ligado ou o do cwd dela). from é
+// cwd quando foi ele que definiu o projeto e "" quando foi a sessão. Sem
+// projeto, responde 409 com o aviso certo para a pasta.
+func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd string) (id int64, from string, ok bool) {
+	dir := commandDir(cwd)
+	wr, _ := s.deps.Git.(gitinfo.WorktreeReader)
+	if dir != "" {
+		l := store.SessionLocation{Cwd: dir}
+		if wr != nil {
+			loc := wr.Locate(dir)
+			l.Worktree, l.WorktreeLinked, l.Main = loc.Root, loc.Linked, loc.Main
+		}
+		p, err := s.st.ProjectForLocation(dir, l)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return 0, "", false
+		}
+		if p != nil {
+			return p.ID, dir, true
+		}
+	}
 	if sess.ProjectID != nil {
-		return *sess.ProjectID, true
+		return *sess.ProjectID, "", true
 	}
 	p, err := s.st.ProjectForPath(sess.Cwd)
 	if err != nil {
 		writeStoreError(w, err, "")
-		return 0, false
+		return 0, "", false
 	}
 	if p != nil {
-		return p.ID, true
+		return p.ID, "", true
+	}
+	// O aviso fala da pasta do comando; sem ela, da pasta da sessão.
+	if dir == "" {
+		dir = sess.Cwd
 	}
 	msg := s.noProjectMsg(sess)
-	if wr, ok := s.deps.Git.(gitinfo.WorktreeReader); ok && wr.Locate(sess.Cwd).Root == "" {
+	if wr != nil && wr.Locate(dir).Root == "" {
 		msg = msgNotGit
+		if hasReposInside(dir) {
+			msg = fmt.Sprintf(msgRepoFolder, dir)
+		}
 	}
 	writeError(w, http.StatusConflict, msg)
-	return 0, false
+	return 0, "", false
+}
+
+// hasReposInside diz se dir (que não é git) pode virar grupo com pasta: a
+// mesma varredura do nobre project add acha repositórios dentro dela, e ela
+// não é a home nem uma pasta que a contém (que o cadastro recusa).
+func hasReposInside(dir string) bool {
+	if !filepath.IsAbs(dir) {
+		return false
+	}
+	dir = filepath.Clean(dir)
+	if homeOrAncestor(dir) {
+		return false
+	}
+	found, err := workspaces.ScanRepos(dir)
+	return err == nil && len(found) > 0
+}
+
+// commandBranch é o branch de trabalho do card que o comando cria. Quando a
+// pasta do comando definiu o projeto e não é a da sessão, o branch é o de lá
+// (vazio se o git não leu: o da sessão seria de outro repositório) e a
+// localização da sessão não muda. Senão, o branch atual da sessão.
+func (s *server) commandBranch(sess domain.Session, from string) string {
+	if from == "" || from == sess.Cwd {
+		return s.liveBranch(sess).Branch
+	}
+	if s.deps.Git == nil {
+		return ""
+	}
+	return s.deps.Git.Branch(from)
 }
 
 // noProjectMsg é msgNoProject citando, antes do ponto final, as instruções
@@ -210,6 +282,8 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		Title    string `json:"title"`
 		Goal     string `json:"goal"`
 		DoneWhen string `json:"done_when"`
+		// Cwd é a pasta onde o nobre start rodou (ausente na CLI antiga).
+		Cwd string `json:"cwd"`
 		hierarchyInput
 	}
 	if !readJSON(w, r, &in) {
@@ -219,7 +293,7 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeError(w, http.StatusBadRequest, "título obrigatório")
 		return
 	}
-	projectID, ok := s.sessionProject(w, sess)
+	projectID, from, ok := s.commandProject(w, sess, in.Cwd)
 	if !ok {
 		return
 	}
@@ -234,13 +308,14 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeStoreError(w, err, "")
 		return
 	}
-	s.syncBranch(c.ID, s.liveBranch(sess).Branch)
+	s.syncBranch(c.ID, s.commandBranch(sess, from))
 	s.publish("cards", "sessions")
 	s.writeCard(w, http.StatusCreated, c.Key)
 }
 
-// meCards cria um card no projeto da sessão sem ligar a sessão a ele (o
-// agente cadastra o histórico do repositório sem sair do card atual).
+// meCards cria um card sem ligar a sessão a ele (o agente cadastra o
+// histórico do repositório sem sair do card atual), no projeto da pasta do
+// comando ou, na falta, no da sessão (ver commandProject).
 func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Session) {
 	var in struct {
 		Title        string `json:"title"`
@@ -249,6 +324,8 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		Branch       string `json:"branch"`
 		WhereStopped string `json:"where_stopped"`
 		Column       string `json:"column"`
+		// Cwd é a pasta onde o nobre card add rodou (ausente na CLI antiga).
+		Cwd string `json:"cwd"`
 		hierarchyInput
 	}
 	if !readJSON(w, r, &in) {
@@ -271,7 +348,7 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeError(w, http.StatusBadRequest, "coluna inválida (use backlog ou pausado)")
 		return
 	}
-	projectID, ok := s.sessionProject(w, sess)
+	projectID, _, ok := s.commandProject(w, sess, in.Cwd)
 	if !ok {
 		return
 	}
