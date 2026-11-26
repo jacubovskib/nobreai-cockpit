@@ -7,7 +7,7 @@ import type { TerminalHandle, TerminalViewProps } from '../../ui/TerminalView'
 import { GridTile, type GridTileProps } from './GridTile'
 
 // Terminal simulado: guarda as props e o handle para o teste comandar.
-const handle = { setReadonly: vi.fn(), kill: vi.fn(), fit: vi.fn(), reconnect: vi.fn() }
+const handle = { setReadonly: vi.fn(), kill: vi.fn(), fit: vi.fn(), reconnect: vi.fn(), holdFit: vi.fn(), releaseFit: vi.fn() }
 let last: TerminalViewProps | null = null
 vi.mock('../../ui/LazyTerminalView', () => ({
   LazyTerminalView: forwardRef<TerminalHandle, TerminalViewProps>(function Fake(props, ref) {
@@ -165,15 +165,40 @@ describe('GridTile', () => {
       return e
     }
     fireEvent(corner, ev('pointerdown', 400, 360))
+    expect(handle.holdFit).toHaveBeenCalledOnce()
     fireEvent(corner, ev('pointermove', 800, 2000))
     expect(section.style.height).toBe('900px')
     expect(section.style.gridColumn).toBe('span 2')
     expect(screen.getByText('2 de 3 col · 900 px')).toBeInTheDocument()
     expect(props.onResize).not.toHaveBeenCalled()
+    expect(handle.releaseFit).not.toHaveBeenCalled()
     fireEvent(corner, ev('pointerup', 800, 2000))
     expect(props.onResize).toHaveBeenCalledOnce()
     expect(props.onResize).toHaveBeenCalledWith({ span: 2, h: 900 })
-    expect(handle.fit).toHaveBeenCalled()
+    // Um ajuste só, ao soltar: releaseFit já ajusta, sem fit() a mais.
+    expect(handle.releaseFit).toHaveBeenCalledOnce()
+    expect(handle.fit).not.toHaveBeenCalled()
     expect(screen.queryByText(/de 3 col/)).toBeNull()
+  })
+
+  it('pointercancel no canto devolve o tamanho e solta o ajuste segurado', () => {
+    const { props, container } = setup()
+    const section = container.querySelector('section') as HTMLElement
+    Object.defineProperty(section.parentElement as HTMLElement, 'clientWidth', { value: 1200 })
+    vi.spyOn(section, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 400, height: 360, right: 400, bottom: 360, x: 0, y: 0, toJSON() {} })
+    const corner = screen.getByRole('button', { name: 'Redimensionar terminal' })
+    const ev = (type: string, x: number, y: number) => {
+      const e = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperties(e, { clientX: { value: x }, clientY: { value: y }, pointerId: { value: 1 } })
+      return e
+    }
+    fireEvent(corner, ev('pointerdown', 400, 360))
+    expect(handle.holdFit).toHaveBeenCalledOnce()
+    fireEvent(corner, ev('pointermove', 800, 2000))
+    fireEvent(corner, ev('pointercancel', 800, 2000))
+    expect(handle.releaseFit).toHaveBeenCalledOnce()
+    expect(props.onResize).not.toHaveBeenCalled()
+    expect(section.style.height).toBe('360px')
+    expect(section.style.gridColumn).toBe('span 1')
   })
 })

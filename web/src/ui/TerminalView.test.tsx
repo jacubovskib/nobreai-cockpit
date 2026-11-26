@@ -578,6 +578,109 @@ describe('TerminalView na grade', () => {
   })
 })
 
+describe('TerminalView: gesto de redimensionar (holdFit/releaseFit)', () => {
+  // ResizeObserver simulado (o jsdom não tem): fire() dispara os observers ativos.
+  let observers: Set<() => void>
+  const fire = () => act(() => { observers.forEach((cb) => cb()) })
+  beforeEach(() => {
+    observers = new Set()
+    vi.stubGlobal('ResizeObserver', class {
+      cb: () => void
+      constructor(cb: () => void) { this.cb = cb; observers.add(cb) }
+      observe() {}
+      unobserve() {}
+      disconnect() { observers.delete(this.cb) }
+    })
+  })
+
+  // xterm que, como o real, avisa onResize quando o fit muda as colunas.
+  class ResizingTerm extends FakeTerm {
+    fit() { super.fit(); this.cols += 1; this.resizeCb() }
+  }
+
+  function mount(term: FakeTerm, readonly: boolean) {
+    const socks: FakeWs[] = []
+    const ref = createRef<TerminalHandle>()
+    render(<TerminalView ref={ref} id="t1" grid readonly={readonly} termFactory={() => term} wsFactory={(u) => { const w = new FakeWs(u); socks.push(w); return w }} />)
+    return { socks, ref }
+  }
+
+  it('assistindo: segurado, o observer não ajusta a fonte; soltar ajusta uma vez e não manda resize', () => {
+    vi.useFakeTimers()
+    const term = new FakeTerm()
+    const { socks, ref } = mount(term, true)
+    const h = host()
+    // applyFont lê a largura do contêiner uma vez por ajuste: conta as leituras.
+    let measures = 0
+    let w = 1016
+    let hh = 555
+    Object.defineProperty(h, 'clientWidth', { configurable: true, get: () => { measures++; return w } })
+    Object.defineProperty(h, 'clientHeight', { configurable: true, get: () => hh })
+    const xs = document.createElement('div')
+    xs.className = 'xterm-screen'
+    ;(h.firstElementChild as HTMLElement).appendChild(xs)
+    Object.defineProperty(xs, 'offsetWidth', { configurable: true, get: () => 920 * term.fontSize / BASE_FONT })
+    Object.defineProperty(xs, 'offsetHeight', { configurable: true, get: () => 680 * term.fontSize / BASE_FONT })
+    act(() => socks[0].open())
+    snapshot(socks[0], term)
+    act(() => socks[0].msg(JSON.stringify({ type: 'info', id: 't1', cols: 120, rows: 40 })))
+    act(() => { vi.advanceTimersToNextFrame() })
+    expect(term.fontSize).toBe(10)
+
+    measures = 0
+    act(() => ref.current!.holdFit())
+    w = 2016; hh = 1100 // o tile cresce durante o gesto
+    fire(); fire(); fire()
+    expect(measures).toBe(0)
+    expect(term.fontSize).toBe(10)
+    expect(term.fits).toBe(0)
+
+    act(() => ref.current!.releaseFit())
+    expect(measures).toBe(1)
+    expect(term.fontSize).toBe(BASE_FONT)
+    expect(term.fits).toBe(0)
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(socks[0].sent).toHaveLength(0)
+
+    // Fora do gesto o observer volta a ajustar (−, +, ⤢ e colunas dependem dele).
+    fire()
+    expect(measures).toBe(2)
+  })
+
+  it('interagindo: vários disparos segurados e soltar mandam um único resize ao PTY', () => {
+    vi.useFakeTimers()
+    const term = new ResizingTerm()
+    const { socks, ref } = mount(term, false)
+    act(() => socks[0].open())
+    snapshot(socks[0], term)
+    fireEvent.keyDown(host(), { key: 'a' }) // interage: o PTY passa a seguir o tile
+    act(() => { vi.advanceTimersByTime(200) })
+    const n = resizes(socks[0]).length
+    const f = term.fits
+    expect(n).toBeGreaterThan(0)
+
+    act(() => ref.current!.holdFit())
+    for (let i = 0; i < 3; i++) {
+      fire()
+      act(() => { vi.advanceTimersByTime(150) }) // pausa maior que o debounce
+    }
+    expect(term.fits).toBe(f)
+    expect(resizes(socks[0])).toHaveLength(n)
+
+    act(() => ref.current!.releaseFit())
+    expect(term.fits).toBe(f + 1)
+    act(() => { vi.advanceTimersByTime(150) })
+    expect(resizes(socks[0])).toHaveLength(n + 1)
+    expect(resizes(socks[0]).at(-1)).toEqual({ type: 'resize', cols: term.cols, rows: term.rows })
+
+    // Sem segurar, o observer ajusta como antes.
+    fire()
+    expect(term.fits).toBe(f + 2)
+    act(() => { vi.advanceTimersByTime(150) })
+    expect(resizes(socks[0])).toHaveLength(n + 2)
+  })
+})
+
 describe('xtermFactory', () => {
   beforeEach(() => {
     webgl.mode = 'ok'; webgl.loseContext = null; webgl.disposed = 0

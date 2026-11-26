@@ -131,6 +131,11 @@ export interface TerminalHandle {
   kill(): void
   fit(): void
   reconnect(): void
+  // Durante o gesto de redimensionar o tile só o CSS muda: holdFit faz o
+  // ResizeObserver ignorar as mudanças de tamanho e releaseFit ajusta uma
+  // vez, ao soltar (interagindo, isso vira um único resize ao PTY).
+  holdFit(): void
+  releaseFit(): void
 }
 
 export interface TerminalViewProps {
@@ -183,6 +188,9 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
   const termRef = useRef<TermLike | null>(null)
   // Ações que dependem da conexão viva, preenchidas pelo efeito principal.
   const live = useRef<{ fit(): void; reconnect(): void } | null>(null)
+  // held: gesto de redimensionar em curso; o ResizeObserver não ajusta. Fica
+  // fora do efeito para valer entre reconexões e morrer com a view.
+  const held = useRef(false)
 
   useEffect(() => { setRo(readonly) }, [readonly, id])
   useEffect(() => { setExitCode(null); setConfirming(false); setKillError(''); engaged.current = false }, [id])
@@ -362,7 +370,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
     live.current = { fit: onWinResize, reconnect }
     window.addEventListener('resize', onWinResize)
     if (grid) document.addEventListener('visibilitychange', flushNow)
-    const RO = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onWinResize)
+    const RO = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { if (!held.current) onWinResize() })
     RO?.observe(el)
     RO?.observe(scr)
 
@@ -406,6 +414,12 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
     kill: () => { void kill() },
     fit: () => live.current?.fit(),
     reconnect: () => live.current?.reconnect(),
+    holdFit: () => { held.current = true },
+    releaseFit: () => {
+      if (!held.current) return
+      held.current = false
+      live.current?.fit()
+    },
   }))
 
   const ended = exitCode !== null

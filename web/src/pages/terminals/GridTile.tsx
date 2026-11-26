@@ -76,6 +76,9 @@ function GridTileView(p: GridTileProps) {
     const gap = grid ? parseFloat(getComputedStyle(grid).columnGap) || 0 : 0
     const colW = grid ? (grid.clientWidth - gap * (cols - 1)) / cols : 0
     gesture.current = { x: e.clientX, y: e.clientY, w: rect.width, h: rect.height || size.h, colW, gap, last: size }
+    // Durante o gesto só o CSS muda; o xterm é ajustado uma vez, ao soltar.
+    // Se o tile ou o terminal desmontar no meio, a trava some com a view.
+    term.current?.holdFit()
   }
   const onCornerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
     const g = gesture.current
@@ -93,9 +96,9 @@ function GridTileView(p: GridTileProps) {
     gesture.current = null
     try { e.currentTarget.releasePointerCapture?.(e.pointerId) } catch { /* já solto */ }
     setHint('')
-    if (cancel) { apply(size); return }
+    if (cancel) { apply(size); term.current?.releaseFit(); return }
     p.onResize(g.last)
-    term.current?.fit()
+    term.current?.releaseFit()
   }
 
   const stateText = ended

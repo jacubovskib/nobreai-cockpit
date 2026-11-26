@@ -13,7 +13,7 @@ const renders: Record<string, number> = {}
 vi.mock('../ui/LazyTerminalView', () => ({
   LazyTerminalView: forwardRef<TerminalHandle, TerminalViewProps>(function Fake(props, ref) {
     renders[props.id] = (renders[props.id] ?? 0) + 1
-    useImperativeHandle(ref, () => ({ setReadonly() {}, kill() {}, fit() {}, reconnect() {} }))
+    useImperativeHandle(ref, () => ({ setReadonly() {}, kill() {}, fit() {}, reconnect() {}, holdFit() {}, releaseFit() {} }))
     return <div data-testid="tv" data-id={props.id} data-readonly={String(!!props.readonly)} data-active={String(!!props.active)}>{props.id}</div>
   }),
 }))
