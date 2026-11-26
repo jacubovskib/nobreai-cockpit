@@ -150,6 +150,8 @@ export function Terminals() {
   // lastUsed e woken ficam em ref: lidos no render, mudam junto com o foco.
   const lastUsed = useRef<Record<string, number>>({})
   const woken = useRef(new Set<string>())
+  const wasAlive = useRef(new Set<string>())
+  const wasLive = useRef(new Set<string>())
   const dragging = useRef<string | null>(null)
   // Estado (não ref): a rolagem roda no render que já aplicou o "linha toda".
   const [scrollTo, setScrollTo] = useState<string | null>(null)
@@ -197,14 +199,27 @@ export function Terminals() {
   const sub = !ready || layout.sub === 'all' || chipList.some((x) => x.id === layout.sub) ? layout.sub : 'all'
   const shown = visible(placed, { ...layout, tab, sub }, filter)
 
+  // Terminal que encerra com o tile ligado continua ligado (entra em woken),
+  // para quem assiste não perder a saída final. Tem de ser no render: um
+  // efeito chegaria depois do render que já pausou o tile. Adicionar a um Set
+  // é idempotente, então render repetido não muda nada.
+  const ended = new Set(list.filter((t) => !isLive(t)).map((t) => t.id))
+  for (const id of ended) if (wasAlive.current.has(id) && wasLive.current.has(id)) woken.current.add(id)
+
   const live = liveSet({
     ids: shown.map((t) => t.id),
     onScreen,
-    ended: new Set(list.filter((t) => !isLive(t)).map((t) => t.id)),
+    ended,
     woken: woken.current,
     focused,
     lastUsed: lastUsed.current,
     pageHidden,
+  })
+
+  // Vivos e ligados do último render aplicado: a recarga seguinte compara com eles.
+  useEffect(() => {
+    wasAlive.current = new Set(list.filter(isLive).map((t) => t.id))
+    wasLive.current = live
   })
 
   useEffect(() => {

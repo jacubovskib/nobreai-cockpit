@@ -262,6 +262,43 @@ describe('Terminais em grade', () => {
     expect(screen.getAllByTestId('tv')).toHaveLength(9)
   })
 
+  it('tile ligado continua mostrando o terminal quando ele encerra na recarga da lista', async () => {
+    let terms: object[] = [info({ id: 'a' }), info({ id: 'b', card_key: 'NAC-2', started_at: ago(1) })]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(terms), { status: 200 })))
+    const { qc } = renderAt()
+    await waitFor(() => expect(screen.getAllByTestId('tv')).toHaveLength(2))
+    terms = [info({ id: 'a', ended_at: new Date().toISOString(), exit_code: 0 }), info({ id: 'b', card_key: 'NAC-2', started_at: ago(1) })]
+    await act(() => qc.invalidateQueries({ queryKey: ['terminals'] }))
+    await within(tile('a')).findByText('encerrado (código 0)')
+    expect(within(tile('a')).getByTestId('tv')).toBeInTheDocument()
+    expect(within(tile('a')).queryByRole('button', { name: 'Em pausa. Clique para ligar.' })).toBeNull()
+  })
+
+  it('terminal já encerrado ao abrir começa em pausa e liga com o clique', async () => {
+    api([info({ id: 'a' }), info({ id: 'b', card_key: 'NAC-2', ended_at: new Date().toISOString(), exit_code: 1, started_at: ago(1) })])
+    renderAt()
+    await waitFor(() => expect(within(tile('a')).getByTestId('tv')).toBeInTheDocument())
+    expect(within(tile('b')).queryByTestId('tv')).toBeNull()
+    fireEvent.click(within(tile('b')).getByRole('button', { name: 'Em pausa. Clique para ligar.' }))
+    expect(within(tile('b')).getByTestId('tv')).toBeInTheDocument()
+  })
+
+  it('terminal que encerra com o tile em pausa continua em pausa', async () => {
+    const many = (endT9: boolean) => Array.from({ length: 10 }, (_, i) => info({
+      id: `t${i}`, card_key: `NAC-${i}`, started_at: ago(i), ...(endT9 && i === 9 ? { ended_at: new Date().toISOString(), exit_code: 0 } : {}),
+    }))
+    let terms = many(false)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(terms), { status: 200 })))
+    const { qc } = renderAt()
+    await waitFor(() => expect(screen.getAllByTestId('tv')).toHaveLength(9))
+    expect(within(tile('t9')).queryByTestId('tv')).toBeNull()
+    terms = many(true)
+    await act(() => qc.invalidateQueries({ queryKey: ['terminals'] }))
+    await within(tile('t9')).findByText('encerrado (código 0)')
+    expect(within(tile('t9')).queryByTestId('tv')).toBeNull()
+    expect(within(tile('t9')).getByRole('button', { name: 'Em pausa. Clique para ligar.' })).toBeInTheDocument()
+  })
+
   it('interagir num tile não redesenha o outro', async () => {
     api([info({ id: 'a', started_at: ago(1) }), info({ id: 'b', card_key: 'NAC-2', started_at: ago(2) })])
     renderAt()
