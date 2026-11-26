@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -283,5 +284,175 @@ func TestMeNoProjectMessageByFolderKind(t *testing.T) {
 	}
 	if ps, _ := a.st.ListProjects(); len(ps) != 0 {
 		t.Fatalf("cadastrou projeto sozinho: %+v", ps)
+	}
+}
+
+// created é a resposta de nobre start / nobre card add.
+type created struct {
+	domain.Card
+	ProjectLabel string `json:"project_label"`
+	LinkedRepo   string `json:"linked_repo"`
+	LinkedGroup  string `json:"linked_group"`
+}
+
+func (a *testAPI) create(t *testing.T, path string, body map[string]string, pid int) created {
+	t.Helper()
+	rec := a.do(t, "POST", path, body, pid)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("%s = %d %s", path, rec.Code, rec.Body)
+	}
+	return decode[created](t, rec)
+}
+
+func (a *testAPI) projectAt(t *testing.T, path string) *domain.Project {
+	t.Helper()
+	ps, err := a.st.ListProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return projectByPath(ps)[path]
+}
+
+// Comando dentro de um repositório git não cadastrado que fica num grupo com
+// pasta: o repositório é cadastrado como filho do grupo (pela raiz, com a
+// captura do grupo) e o card nasce nele; a resposta diz isso. Da segunda vez
+// o projeto já existe.
+func TestMeCommandLinksUnregisteredRepoToGroup(t *testing.T) {
+	const front = "/w/bravonix/turing-front"
+	a := dirGitAPI(t, &dirGit{
+		branches: map[string]string{front + "/src": "feat/f"},
+		roots:    map[string]string{front + "/src": front},
+	})
+	g, _ := a.bravonix(t)
+	a.liveSess(t, domain.Session{ID: "claude:s", PID: 4242, Cwd: "/w/bravonix", ProjectID: &g.ID})
+	in := map[string]string{"title": "T", "cwd": front + "/src"}
+	c := a.create(t, "/api/me/cards", in, 4242)
+	p := a.projectAt(t, front)
+	if p == nil || p.ParentID == nil || *p.ParentID != g.ID || p.Name != "turing-front" || p.Capture != g.Capture || p.IsGroup() {
+		t.Fatalf("filho = %+v", p)
+	}
+	if c.ProjectID != p.ID || c.LinkedRepo != "turing-front" || c.LinkedGroup != "Bravonix" || c.ProjectLabel != "Bravonix › turing-front" {
+		t.Fatalf("resposta = %+v", c)
+	}
+	c = a.create(t, "/api/me/start", in, 4242)
+	if c.ProjectID != p.ID || c.LinkedRepo != "" || c.LinkedGroup != "" || c.Branch != "feat/f" || c.ProjectLabel != "Bravonix › turing-front" {
+		t.Fatalf("segunda vez = %+v", c)
+	}
+	if ps, _ := a.st.ListProjects(); len(ps) != 3 {
+		t.Fatalf("projetos = %+v", ps)
+	}
+}
+
+// Worktree ligado de um repositório não cadastrado do grupo: quem vira projeto
+// é o checkout principal, nunca a pasta do worktree.
+func TestMeCommandLinksMainCheckoutOfLinkedWorktree(t *testing.T) {
+	a := dirGitAPI(t, &dirGit{
+		roots: map[string]string{"/w/wt-novo/src": "/w/wt-novo"},
+		mains: map[string]string{"/w/wt-novo/src": "/w/bravonix/novo"},
+	})
+	g, _ := a.bravonix(t)
+	a.liveSess(t, domain.Session{ID: "claude:s", PID: 4242, Cwd: "/w/bravonix", ProjectID: &g.ID})
+	c := a.create(t, "/api/me/cards", map[string]string{"title": "T", "cwd": "/w/wt-novo/src"}, 4242)
+	p := a.projectAt(t, "/w/bravonix/novo")
+	if p == nil || c.ProjectID != p.ID || c.LinkedRepo != "novo" || a.projectAt(t, "/w/wt-novo") != nil {
+		t.Fatalf("filho = %+v resposta = %+v", p, c)
+	}
+}
+
+// O vínculo automático só vale dentro de um grupo cadastrado e segue a regra
+// da varredura: fora de grupo, em pasta que a varredura pula, abaixo de 2
+// níveis, numa pasta do grupo que não é repositório ou num repositório que o
+// usuário mandou não sugerir, nada é cadastrado.
+func TestMeCommandNeverLinksOutsideTheScanRules(t *testing.T) {
+	roots := map[string]string{}
+	for _, r := range []string{"/w/solto", "/w/bravonix/node_modules/x", "/w/bravonix/a/b/c", "/w/bravonix/recusado"} {
+		roots[r] = r
+	}
+	a := dirGitAPI(t, &dirGit{roots: roots})
+	g, _ := a.bravonix(t)
+	if err := a.st.PutKV(dismissedKey, map[string][]string{strconv.FormatInt(g.ID, 10): {"recusado"}}); err != nil {
+		t.Fatal(err)
+	}
+	a.liveSess(t, domain.Session{ID: "claude:s", PID: 4242, Cwd: "/w/bravonix", ProjectID: &g.ID})
+	for _, cwd := range []string{"/w/solto", "/w/bravonix/node_modules/x", "/w/bravonix/a/b/c", "/w/bravonix/recusado", "/w/bravonix/docs"} {
+		c := a.create(t, "/api/me/cards", map[string]string{"title": "T", "cwd": cwd}, 4242)
+		if c.ProjectID != g.ID || c.LinkedRepo != "" {
+			t.Fatalf("%s: resposta = %+v", cwd, c)
+		}
+	}
+	if ps, _ := a.st.ListProjects(); len(ps) != 2 {
+		t.Fatalf("cadastrou sozinho: %+v", ps)
+	}
+}
+
+// nobre start numa sessão sem projeto: a sessão é adotada pelo projeto do
+// card, com a captura dele. Projeto com captura desligada não adota, e sessão
+// que já tem projeto continua nele.
+func TestMeStartAdoptsSessionWithoutProject(t *testing.T) {
+	a := dirGitAPI(t, &dirGit{})
+	g, back := a.bravonix(t)
+	off, err := a.st.CreateProject("off", "/w/off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	off.Capture = false
+	if err := a.st.UpdateProject(off); err != nil {
+		t.Fatal(err)
+	}
+	a.liveSess(t, domain.Session{ID: "claude:nova", PID: 1, Cwd: "/w/mae"})
+	a.liveSess(t, domain.Session{ID: "claude:off", PID: 2, Cwd: "/w/mae"})
+	a.liveSess(t, domain.Session{ID: "claude:grupo", PID: 3, Cwd: "/w/bravonix", ProjectID: &g.ID, FullCapture: true})
+	a.create(t, "/api/me/start", map[string]string{"title": "T", "cwd": back.Path}, 1)
+	a.create(t, "/api/me/start", map[string]string{"title": "T", "cwd": "/w/off"}, 2)
+	a.create(t, "/api/me/start", map[string]string{"title": "T", "cwd": back.Path}, 3)
+	if s, _ := a.st.GetSession("claude:nova"); s.ProjectID == nil || *s.ProjectID != back.ID || !s.FullCapture || s.Cwd != "/w/mae" {
+		t.Fatalf("sem projeto: %+v", s)
+	}
+	if s, _ := a.st.GetSession("claude:off"); s.ProjectID != nil || s.FullCapture {
+		t.Fatalf("captura desligada: %+v", s)
+	}
+	if s, _ := a.st.GetSession("claude:grupo"); s.ProjectID == nil || *s.ProjectID != g.ID {
+		t.Fatalf("já tinha projeto: %+v", s)
+	}
+	// nobre card add não liga a sessão a nada: também não adota.
+	a.liveSess(t, domain.Session{ID: "claude:add", PID: 4, Cwd: "/w/mae"})
+	a.create(t, "/api/me/cards", map[string]string{"title": "T", "cwd": back.Path}, 4)
+	if s, _ := a.st.GetSession("claude:add"); s.ProjectID != nil {
+		t.Fatalf("card add adotou: %+v", s)
+	}
+}
+
+// A resposta só cita o projeto quando ele não é o da sessão.
+func TestMeStartSaysProjectWhenNotTheSessions(t *testing.T) {
+	a := dirGitAPI(t, &dirGit{})
+	g, back := a.bravonix(t)
+	a.liveSess(t, domain.Session{ID: "claude:s", PID: 4242, Cwd: "/w/bravonix", ProjectID: &g.ID})
+	if c := a.create(t, "/api/me/start", map[string]string{"title": "T", "cwd": "/w/bravonix"}, 4242); c.ProjectLabel != "" {
+		t.Fatalf("mesmo projeto: %+v", c)
+	}
+	if c := a.create(t, "/api/me/cards", map[string]string{"title": "T"}, 4242); c.ProjectLabel != "" {
+		t.Fatalf("CLI antiga: %+v", c)
+	}
+	if c := a.create(t, "/api/me/start", map[string]string{"title": "T", "cwd": back.Path}, 4242); c.ProjectLabel != "Bravonix › turing-back" {
+		t.Fatalf("outro projeto: %+v", c)
+	}
+}
+
+// nobre project add <repo> sem --pai, com a pasta dentro de um grupo com
+// pasta: o repositório nasce ligado ao grupo e a resposta diz qual.
+func TestCreateProjectInsideGroupFolderAttaches(t *testing.T) {
+	a := newTestAPI(t)
+	g, _ := a.bravonix(t)
+	rec := a.do(t, "POST", "/api/projects", map[string]any{"path": "/w/bravonix/turing-front"}, 0)
+	out := decode[struct {
+		domain.Project
+		AttachedTo string `json:"attached_to"`
+	}](t, rec)
+	if rec.Code != http.StatusCreated || out.ParentID == nil || *out.ParentID != g.ID || out.AttachedTo != "Bravonix" {
+		t.Fatalf("dentro do grupo = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/projects", map[string]any{"path": "/w/solto"}, 0)
+	if rec.Code != http.StatusCreated || strings.Contains(rec.Body.String(), `"attached_to":"B`) || decode[domain.Project](t, rec).ParentID != nil {
+		t.Fatalf("fora do grupo = %d %s", rec.Code, rec.Body)
 	}
 }

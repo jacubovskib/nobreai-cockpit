@@ -315,6 +315,19 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		moved store.Moved
 		err   error
 	)
+	// Sem pai informado, um repositório dentro de um grupo com pasta nasce
+	// ligado a esse grupo (attached diz qual).
+	attached := ""
+	if in.ParentID == nil {
+		g, err := s.st.ProjectForPath(in.Path)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		if g != nil && g.IsGroup() && filepath.Clean(g.Path) != in.Path {
+			in.ParentID, attached = &g.ID, g.Name
+		}
+	}
 	if in.ParentID != nil {
 		p, moved, err = s.st.CreateChild(in.Name, in.Path, *in.ParentID)
 	} else {
@@ -383,7 +396,8 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		Reassigned  int                     `json:"reassigned"`
 		Moved       store.Moved             `json:"moved"`
 		Suggestions []workspaces.Suggestion `json:"suggestions"`
-	}{p, n, moved, sugg})
+		AttachedTo  string                  `json:"attached_to,omitempty"`
+	}{p, n, moved, sugg, attached})
 }
 
 // readPatchBody lê o corpo do PATCH de projeto: aplica os campos em p e devolve

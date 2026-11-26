@@ -183,40 +183,64 @@ func commandDir(cwd string) string {
 	return filepath.Clean(cwd)
 }
 
+// cardTarget é o projeto escolhido para o card que o comando cria. from é a
+// pasta do comando quando foi ela que definiu o projeto ("" = foi a sessão);
+// other diz que o projeto não é o da sessão; linkedRepo e linkedGroup vêm
+// preenchidos quando o comando cadastrou o repositório no grupo.
+type cardTarget struct {
+	id                      int64
+	from                    string
+	other                   bool
+	linkedRepo, linkedGroup string
+}
+
 // commandProject escolhe o projeto do card que o comando cria: o projeto
 // cadastrado mais fundo que contém cwd, a pasta onde o comando rodou (a regra
 // do hook, store.ProjectForLocation, com a tradução do worktree ligado); sem
-// projeto lá (ou sem cwd), o da sessão (o ligado ou o do cwd dela). from é
-// cwd quando foi ele que definiu o projeto e "" quando foi a sessão. Sem
-// projeto, responde 409 com o aviso certo para a pasta.
-func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd string) (id int64, from string, ok bool) {
+// projeto lá (ou sem cwd), o da sessão (o ligado ou o do cwd dela). Um
+// repositório ainda não cadastrado dentro de um grupo com pasta é ligado ao
+// grupo antes (linkRepoToGroup). Sem projeto, responde 409 com o aviso certo
+// para a pasta.
+func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd string) (cardTarget, bool) {
+	fail := func(err error) (cardTarget, bool) {
+		writeStoreError(w, err, "")
+		return cardTarget{}, false
+	}
+	// O projeto da sessão, pela regra de antes.
+	var own *int64
+	if sess.ProjectID != nil {
+		own = sess.ProjectID
+	} else if p, err := s.st.ProjectForPath(sess.Cwd); err != nil {
+		return fail(err)
+	} else if p != nil {
+		own = &p.ID
+	}
 	dir := commandDir(cwd)
 	wr, _ := s.deps.Git.(gitinfo.WorktreeReader)
 	if dir != "" {
 		l := store.SessionLocation{Cwd: dir}
+		var loc gitinfo.Location
 		if wr != nil {
-			loc := wr.Locate(dir)
+			loc = wr.Locate(dir)
 			l.Worktree, l.WorktreeLinked, l.Main = loc.Root, loc.Linked, loc.Main
 		}
 		p, err := s.st.ProjectForLocation(dir, l)
 		if err != nil {
-			writeStoreError(w, err, "")
-			return 0, "", false
+			return fail(err)
 		}
 		if p != nil {
-			return p.ID, dir, true
+			t := cardTarget{id: p.ID, from: dir}
+			if child, err := s.linkRepoToGroup(*p, loc); err != nil {
+				return fail(err)
+			} else if child != nil {
+				t.id, t.linkedRepo, t.linkedGroup = child.ID, child.Name, p.Name
+			}
+			t.other = own == nil || *own != t.id
+			return t, true
 		}
 	}
-	if sess.ProjectID != nil {
-		return *sess.ProjectID, "", true
-	}
-	p, err := s.st.ProjectForPath(sess.Cwd)
-	if err != nil {
-		writeStoreError(w, err, "")
-		return 0, "", false
-	}
-	if p != nil {
-		return p.ID, "", true
+	if own != nil {
+		return cardTarget{id: *own}, true
 	}
 	// O aviso fala da pasta do comando; sem ela, da pasta da sessão.
 	if dir == "" {
@@ -230,7 +254,86 @@ func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd 
 		}
 	}
 	writeError(w, http.StatusConflict, msg)
-	return 0, "", false
+	return cardTarget{}, false
+}
+
+// linkRepoToGroup cadastra como filho do grupo g o repositório git de loc (o
+// checkout principal: um worktree ligado nunca vira projeto) quando a pasta do
+// comando caiu no grupo por falta de projeto mais fundo. O cadastro do grupo é
+// o consentimento, então só vale o que a varredura dele sugeriria: até 2
+// níveis, fora das pastas que ela pula, e nada que o usuário mandou não
+// sugerir. Passa pelo cadastro em lote (addFamily), como os filhos marcados na
+// interface. Devolve nil quando não é o caso; um cadastro recusado pelas
+// regras de família só vai para o log e o card fica no grupo.
+func (s *server) linkRepoToGroup(g domain.Project, loc gitinfo.Location) (*domain.Project, error) {
+	if !g.IsGroup() || g.Path == "" || loc.Root == "" || loc.Main == "" {
+		return nil, nil
+	}
+	root := filepath.Clean(loc.Main)
+	rel, err := filepath.Rel(filepath.Clean(g.Path), root)
+	if err != nil || !workspaces.InScan(rel) {
+		return nil, nil
+	}
+	hidden, err := s.dismissedFor(g.ID)
+	if err != nil {
+		return nil, err
+	}
+	if hidden[filepath.ToSlash(rel)] {
+		return nil, nil
+	}
+	_, kids, _, err := s.addFamily(g, []store.ChildSpec{{Name: filepath.Base(root), Path: root}}, false)
+	if err != nil {
+		if errors.Is(err, store.ErrFamily) || isConstraint(err, "UNIQUE") {
+			log.Printf("ligar %s ao grupo %s: %v", root, g.Name, err)
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(kids) != 1 {
+		return nil, nil
+	}
+	return &kids[0], nil
+}
+
+// writeCreated responde o card criado pelo comando com o que a CLI diz a mais:
+// o projeto, quando não é o da sessão, e o repositório recém-ligado ao grupo.
+func (s *server) writeCreated(w http.ResponseWriter, key string, t cardTarget) {
+	c, err := s.st.GetCard(key)
+	if err != nil {
+		writeStoreError(w, err, msgCardNotFound)
+		return
+	}
+	c.Labels = nonNil(c.Labels)
+	out := struct {
+		domain.Card
+		ProjectLabel string `json:"project_label,omitempty"`
+		LinkedRepo   string `json:"linked_repo,omitempty"`
+		LinkedGroup  string `json:"linked_group,omitempty"`
+	}{Card: c, LinkedRepo: t.linkedRepo, LinkedGroup: t.linkedGroup}
+	if t.other {
+		if out.ProjectLabel, err = s.projectLabel(c.ProjectID); err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// adoptForCard liga a sessão sem projeto ao projeto do card que ela acabou de
+// criar, com a captura completa (AdoptSession), como o cadastro faz com as
+// sessões da pasta. Projeto com captura desligada não adota (como no hook) e
+// sessão que já tem projeto fica onde está. Falha só vai para o log.
+func (s *server) adoptForCard(sess domain.Session, projectID int64) {
+	if sess.ProjectID != nil {
+		return
+	}
+	p, err := s.projectByID(projectID)
+	if err != nil || p == nil || !p.Capture {
+		return
+	}
+	if err := s.st.AdoptSession(sess.ID, projectID); err != nil {
+		log.Printf("adotar a sessão %s: %v", sess.ID, err)
+	}
 }
 
 // canBeGroup diz se dir (que não é git) pode virar grupo com pasta pelo
@@ -300,10 +403,11 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeError(w, http.StatusBadRequest, "título obrigatório")
 		return
 	}
-	projectID, from, ok := s.commandProject(w, sess, in.Cwd)
+	target, ok := s.commandProject(w, sess, in.Cwd)
 	if !ok {
 		return
 	}
+	projectID := target.id
 	nc := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, ProjectID: projectID}
 	if code, msg := s.applyHierarchy(&nc, in.hierarchyInput, true); code != 0 {
 		writeError(w, code, msg)
@@ -315,9 +419,10 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeStoreError(w, err, "")
 		return
 	}
-	s.syncBranch(c.ID, s.commandBranch(sess, from))
+	s.adoptForCard(sess, projectID)
+	s.syncBranch(c.ID, s.commandBranch(sess, target.from))
 	s.publish("cards", "sessions")
-	s.writeCard(w, http.StatusCreated, c.Key)
+	s.writeCreated(w, c.Key, target)
 }
 
 // meCards cria um card sem ligar a sessão a ele (o agente cadastra o
@@ -355,10 +460,11 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		writeError(w, http.StatusBadRequest, "coluna inválida (use backlog ou pausado)")
 		return
 	}
-	projectID, _, ok := s.commandProject(w, sess, in.Cwd)
+	target, ok := s.commandProject(w, sess, in.Cwd)
 	if !ok {
 		return
 	}
+	projectID := target.id
 	branch := strings.TrimSpace(in.Branch)
 	if gp, err := s.projectByID(projectID); err != nil {
 		writeStoreError(w, err, "")
@@ -392,7 +498,7 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 		return
 	}
 	s.publish("cards")
-	s.writeCard(w, http.StatusCreated, c.Key)
+	s.writeCreated(w, c.Key, target)
 }
 
 // meCardSet muda tipo, pai, prioridade, labels e points de um card: o da
