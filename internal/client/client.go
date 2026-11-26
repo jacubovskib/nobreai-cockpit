@@ -222,11 +222,21 @@ func (f CardFields) body() map[string]any {
 	return b
 }
 
+// CreatedCard é o card criado por nobre start ou nobre card add. ProjectLabel
+// vem preenchido quando o projeto não é o da sessão; LinkedRepo e LinkedGroup,
+// quando o comando cadastrou o repositório no grupo.
+type CreatedCard struct {
+	domain.Card
+	ProjectLabel string `json:"project_label"`
+	LinkedRepo   string `json:"linked_repo"`
+	LinkedGroup  string `json:"linked_group"`
+}
+
 // Start cria um card e liga a sessão a ele. cwd é a pasta onde o comando
 // rodou (o daemon escolhe o projeto por ela); vazio não vai no corpo e vale o
 // projeto da sessão.
-func (c *Client) Start(ctx context.Context, title, goal, doneWhen, cwd string, f CardFields) (domain.Card, error) {
-	var card domain.Card
+func (c *Client) Start(ctx context.Context, title, goal, doneWhen, cwd string, f CardFields) (CreatedCard, error) {
+	var card CreatedCard
 	body := f.body()
 	body["title"], body["goal"], body["done_when"] = title, goal, doneWhen
 	if cwd != "" {
@@ -344,10 +354,12 @@ func (c *Client) AddGroup(ctx context.Context, name string) (AddedProject, error
 
 // FolderScan espelha GET /api/fs/scan: o que a pasta é e os repositórios dentro.
 type FolderScan struct {
-	Path        string `json:"path"`
-	Git         bool   `json:"git"`
-	Kind        string `json:"kind"`
-	Name        string `json:"name"`
+	Path string `json:"path"`
+	Git  bool   `json:"git"`
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+	// Registered é o projeto já cadastrado nessa pasta (nil se não há).
+	Registered  *domain.Project `json:"registered"`
 	Suggestions []struct {
 		workspaces.Suggestion
 		Registered *domain.Project `json:"registered"`
@@ -368,11 +380,21 @@ type BatchResult struct {
 	Moved    Moved            `json:"moved"`
 }
 
-// ProjectsBatch cadastra o principal de path (grupo, se a pasta não é git)
-// sem filhos; é o que o nobre project add faz numa pasta de repositórios.
-func (c *Client) ProjectsBatch(ctx context.Context, name, path string) (BatchResult, error) {
+// BatchChild é um filho do lote: a pasta e o nome.
+type BatchChild struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// ProjectsBatch cadastra o principal de path (grupo, se a pasta não é git; o
+// que já existe é reaproveitado) e liga os filhos; é o que o nobre project add
+// faz numa pasta de repositórios.
+func (c *Client) ProjectsBatch(ctx context.Context, name, path string, children []BatchChild) (BatchResult, error) {
 	var r BatchResult
-	err := c.Do(ctx, "POST", "/api/projects/batch", map[string]any{"name": name, "path": path, "children": []any{}}, &r)
+	if children == nil {
+		children = []BatchChild{}
+	}
+	err := c.Do(ctx, "POST", "/api/projects/batch", map[string]any{"name": name, "path": path, "children": children}, &r)
 	return r, err
 }
 
@@ -449,8 +471,8 @@ func (c *Client) DismissSuggestions(ctx context.Context, id int64, rels []string
 
 // AddCard cria um card sem ligar a sessão a ele: no projeto da pasta
 // in["cwd"] (onde o comando rodou), se ela veio; senão, no da sessão.
-func (c *Client) AddCard(ctx context.Context, in map[string]string, f CardFields) (domain.Card, error) {
-	var card domain.Card
+func (c *Client) AddCard(ctx context.Context, in map[string]string, f CardFields) (CreatedCard, error) {
+	var card CreatedCard
 	body := f.body()
 	for k, v := range in {
 		body[k] = v
@@ -486,6 +508,9 @@ type AddedProject struct {
 	Reassigned  int                     `json:"reassigned"`
 	Moved       Moved                   `json:"moved"`
 	Suggestions []workspaces.Suggestion `json:"suggestions"`
+	// AttachedTo é o grupo a que o daemon ligou o projeto por conta própria
+	// (a pasta fica dentro da pasta do grupo e nenhum pai foi informado).
+	AttachedTo string `json:"attached_to"`
 }
 
 // RememberResult é a memória gravada por `nobre lembrar` e as parecidas que já existiam.

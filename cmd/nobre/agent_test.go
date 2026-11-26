@@ -570,3 +570,25 @@ func TestStartAndCardAddSendCommandFolder(t *testing.T) {
 		t.Fatalf("note enviou cwd: %v", got)
 	}
 }
+
+// nobre start e nobre card add dizem o projeto quando ele não é o da sessão e
+// avisam, numa linha, do repositório que o comando ligou ao grupo.
+func TestStartAndCardAddSayProjectAndLinkedRepo(t *testing.T) {
+	reply := `{"key":"NAC-2","column":"backlog"}`
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(reply)) })
+	if r := runCLI(t, addr, "", nil, "start", "x"); r.stdout != "Card NAC-2 criado e ligado a esta sessão.\n" {
+		t.Fatalf("mesmo projeto: %q", r.stdout)
+	}
+	reply = `{"key":"NAC-2","column":"backlog","project_label":"Bravonix › turing-back"}`
+	if r := runCLI(t, addr, "", nil, "start", "x"); r.stdout != "Card NAC-2 criado em Bravonix › turing-back e ligado a esta sessão.\n" {
+		t.Fatalf("outro projeto: %q", r.stdout)
+	}
+	if r := runCLI(t, addr, "", nil, "card", "add", "x"); r.stdout != "Card NAC-2 criado em Bravonix › turing-back, no backlog (sessão não ligada).\n" {
+		t.Fatalf("card add: %q", r.stdout)
+	}
+	reply = `{"key":"NAC-2","column":"backlog","project_label":"Bravonix › turing-front","linked_repo":"turing-front","linked_group":"Bravonix"}`
+	want := "Repositório turing-front cadastrado no grupo Bravonix.\nCard NAC-2 criado em Bravonix › turing-front e ligado a esta sessão.\n"
+	if r := runCLI(t, addr, "", nil, "start", "x"); r.stdout != want {
+		t.Fatalf("ligado: %q", r.stdout)
+	}
+}

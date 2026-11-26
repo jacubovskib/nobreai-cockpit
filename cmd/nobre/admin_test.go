@@ -209,39 +209,99 @@ func TestCLIProjectAddRefusesNonGit(t *testing.T) {
 	}
 }
 
-func TestProjectAddGroupFolderPrintsSuggestions(t *testing.T) {
-	var batch string
-	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+// groupServer é o daemon falso de uma pasta de repositórios /w/grupo: a
+// varredura acha a (novo), b (projeto solto), c (já filho, só no grupo já cadastrado) e d
+// (bloqueado); o lote devolve os filhos pedidos. registered diz se o grupo já
+// estava cadastrado.
+func groupServer(t *testing.T, registered bool, batch *string) string {
+	return fake(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/fs/scan":
 			if r.URL.Query().Get("path") != "/w/grupo" {
 				t.Errorf("path = %q", r.URL.Query().Get("path"))
 			}
-			sg := ""
-			for _, n := range []string{"a", "b", "c", "d", "e", "f", "g"} {
-				sg += `{"path":"/w/grupo/` + n + `","rel":"` + n + `","name":"` + n + `","source":"git","registered":null,"blocked":""},`
+			self, c := "null", ""
+			if registered {
+				self = `{"id":1,"name":"grupo","path":"/w/grupo","kind":"group"}`
+				c = `{"path":"/w/grupo/c","rel":"c","name":"c","source":"git","registered":{"id":9,"name":"c","parent_id":1},"blocked":""},`
 			}
-			sg += `{"path":"/w/grupo/h","rel":"h","name":"h","source":"git","registered":{"id":9,"name":"h"},"blocked":""}`
-			w.Write([]byte(`{"path":"/w/grupo","git":false,"kind":"group","name":"grupo","registered":null,"suggestions":[` + sg + `]}`))
+			w.Write([]byte(`{"path":"/w/grupo","git":false,"kind":"group","name":"grupo","registered":` + self + `,"suggestions":[
+				{"path":"/w/grupo/a","rel":"a","name":"a","source":"git","registered":null,"blocked":""},
+				{"path":"/w/grupo/b","rel":"b","name":"b","source":"git","registered":{"id":8,"name":"b"},"blocked":""},
+				` + c + `
+				{"path":"/w/grupo/d","rel":"d","name":"d","source":"git","registered":{"id":7,"name":"d","parent_id":5},"blocked":"pertence a outro"}]}`))
 		case r.URL.Path == "/api/projects/batch" && r.Method == "POST":
 			b, _ := io.ReadAll(r.Body)
-			batch = string(b)
-			w.WriteHeader(201)
-			w.Write([]byte(`{"project":{"id":1,"name":"grupo","path":"/w/grupo","kind":"group"},"children":[],"moved":{"sessions":0,"cards":0}}`))
+			*batch = string(b)
+			var in struct {
+				Children []map[string]string `json:"children"`
+			}
+			json.Unmarshal(b, &in)
+			kids, _ := json.Marshal(in.Children)
+			if registered {
+				w.WriteHeader(200)
+			} else {
+				w.WriteHeader(201)
+			}
+			w.Write([]byte(`{"project":{"id":1,"name":"grupo","path":"/w/grupo","kind":"group"},"children":` + string(kids) + `,"moved":{"sessions":0,"cards":0}}`))
 		default:
 			t.Errorf("path = %s", r.URL.Path)
 		}
 	})
-	r := runProjectCLI(t, addr, "/w/grupo", testRepos, "project", "add")
+}
+
+// nobre project add numa pasta de repositórios cadastra o grupo e liga os
+// repositórios que a varredura acha (os novos e os projetos soltos; o que é de
+// outro projeto fica de fora).
+func TestProjectAddGroupFolderRegistersRepos(t *testing.T) {
+	var batch string
+	r := runProjectCLI(t, groupServer(t, false, &batch), "/w/grupo", testRepos, "project", "add")
 	want := "Grupo grupo cadastrado: /w/grupo\n" +
-		"Sub-projetos sugeridos (liste ao usuário, não cadastre sem ele pedir):\n" +
-		"  a  (git)\n  b  (git)\n  c  (git)\n  d  (git)\n  e  (git)\n" +
-		"  mais 2 na Configuração → Projetos\n"
+		"Repositórios ligados ao grupo: a, b\n" +
+		"Fora do grupo: d (pertence a outro)\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("%+v\nquer %q", r, want)
 	}
-	if !strings.Contains(batch, `"path":"/w/grupo"`) || !strings.Contains(batch, `"children":[]`) {
+	if !strings.Contains(batch, `"children":[{"name":"a","path":"/w/grupo/a"},{"name":"b","path":"/w/grupo/b"}]`) {
 		t.Fatalf("batch = %s", batch)
+	}
+}
+
+// De novo num grupo já cadastrado: só os repositórios novos entram.
+func TestProjectAddGroupFolderAgainAddsOnlyNewRepos(t *testing.T) {
+	var batch string
+	r := runProjectCLI(t, groupServer(t, true, &batch), "/w/grupo", testRepos, "project", "add")
+	want := "Grupo grupo já cadastrado: /w/grupo\n" +
+		"Repositórios ligados ao grupo: a, b\n" +
+		"Fora do grupo: d (pertence a outro)\n"
+	if r.code != 0 || r.stdout != want {
+		t.Fatalf("%+v\nquer %q", r, want)
+	}
+}
+
+// --sem-filhos cadastra só o grupo e lista os repositórios como sugestão.
+func TestProjectAddGroupFolderSemFilhos(t *testing.T) {
+	var batch string
+	r := runProjectCLI(t, groupServer(t, false, &batch), "/w/grupo", testRepos, "project", "add", "--sem-filhos")
+	want := "Grupo grupo cadastrado: /w/grupo\n" +
+		"Sub-projetos sugeridos (liste ao usuário, não cadastre sem ele pedir):\n" +
+		"  a  (git)\n"
+	if r.code != 0 || r.stdout != want {
+		t.Fatalf("%+v\nquer %q", r, want)
+	}
+	if !strings.Contains(batch, `"children":[]`) {
+		t.Fatalf("batch = %s", batch)
+	}
+}
+
+// nobre project add <repo> sem --pai dentro de um grupo: a saída diz que o
+// repositório foi ligado ao grupo.
+func TestCLIProjectAddInsideGroupSaysAttached(t *testing.T) {
+	var body, paths []string
+	addr := projectServer(t, `{"id":8,"name":"api","path":"/w/api","parent_id":7,"attached_to":"Bravonix","reassigned":0}`, &body, &paths)
+	r := runProjectCLI(t, addr, "/w/api", testRepos, "project", "add")
+	if r.code != 0 || !strings.Contains(r.stdout, "Projeto api cadastrado: /w/api") || !strings.Contains(r.stdout, "Ligado ao grupo Bravonix.\n") {
+		t.Fatalf("%+v", r)
 	}
 }
 
