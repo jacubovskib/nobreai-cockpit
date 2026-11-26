@@ -225,7 +225,7 @@ func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd 
 	msg := s.noProjectMsg(sess)
 	if wr != nil && wr.Locate(dir).Root == "" {
 		msg = msgNotGit
-		if hasReposInside(dir) {
+		if s.canBeGroup(dir) {
 			msg = fmt.Sprintf(msgRepoFolder, dir)
 		}
 	}
@@ -233,28 +233,35 @@ func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd 
 	return 0, "", false
 }
 
-// hasReposInside diz se dir (que não é git) pode virar grupo com pasta: a
-// mesma varredura do nobre project add acha repositórios dentro dela, e ela
-// não é a home nem uma pasta que a contém (que o cadastro recusa).
-func hasReposInside(dir string) bool {
+// canBeGroup diz se dir (que não é git) pode virar grupo com pasta pelo
+// nobre project add: fica dentro da home (sem ser ela) e a varredura do
+// cadastro acha repositórios dentro dela (as travas do fsScan).
+func (s *server) canBeGroup(dir string) bool {
 	if !filepath.IsAbs(dir) {
 		return false
 	}
-	dir = filepath.Clean(dir)
-	if homeOrAncestor(dir) {
+	home, err := s.homeDir()
+	if err != nil {
 		return false
 	}
-	found, err := workspaces.ScanRepos(dir)
+	real, err := filepath.EvalSymlinks(filepath.Clean(dir))
+	if err != nil || real == home || !within(real, home) {
+		return false
+	}
+	found, err := workspaces.ScanRepos(real)
 	return err == nil && len(found) > 0
 }
 
 // commandBranch é o branch de trabalho do card que o comando cria. Quando a
 // pasta do comando definiu o projeto e não é a da sessão, o branch é o de lá
 // (vazio se o git não leu: o da sessão seria de outro repositório) e a
-// localização da sessão não muda. Senão, o branch atual da sessão.
+// localização da sessão não muda. Senão, o branch atual da sessão. A sessão
+// relê o próprio branch nos dois casos: senão o PostToolUse deste mesmo
+// comando veria a diferença e levaria o branch dela para o card.
 func (s *server) commandBranch(sess domain.Session, from string) string {
+	live := s.liveBranch(sess).Branch
 	if from == "" || from == sess.Cwd {
-		return s.liveBranch(sess).Branch
+		return live
 	}
 	if s.deps.Git == nil {
 		return ""

@@ -180,6 +180,26 @@ func TestMeCommandFolderBranchNeverComesFromSessionRepo(t *testing.T) {
 	}
 }
 
+// A sessão está num repositório com o branch gravado desatualizado e o comando
+// rodou em outro: o card fica com o branch da pasta do comando e a sessão relê
+// o dela, para o PostToolUse do próprio comando não levar esse branch ao card.
+func TestMeCommandFolderBranchRefreshesSessionBranch(t *testing.T) {
+	a := dirGitAPI(t, &dirGit{branches: map[string]string{"/w/api": "feat/live", "/w/b": "feat/b"}})
+	a.project(t)
+	b, err := a.st.CreateProject("b", "/w/b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.liveSess(t, domain.Session{ID: "claude:s", PID: 4242, Cwd: "/w/api", Branch: "feat/old"})
+	c := a.createdCard(t, "/api/me/start", map[string]string{"title": "T", "cwd": "/w/b"}, 4242)
+	if c.ProjectID != b.ID || c.Branch != "feat/b" {
+		t.Fatalf("card = projeto %d (quer %d), branch %q", c.ProjectID, b.ID, c.Branch)
+	}
+	if s, _ := a.st.GetSession("claude:s"); s.Cwd != "/w/api" || s.Branch != "feat/live" {
+		t.Fatalf("sessão = %q %q", s.Cwd, s.Branch)
+	}
+}
+
 // Sessão num worktree ligado dentro do monorepo, ligada ao app: a pasta do
 // comando é traduzida para o checkout principal e o card continua no app.
 func TestMeCommandFolderInLinkedWorktreeKeepsApp(t *testing.T) {
@@ -209,8 +229,17 @@ func TestMeCommandFolderInLinkedWorktreeKeepsApp(t *testing.T) {
 // sempre. Pasta sem git e sem repositórios: segue sem card.
 func TestMeNoProjectMessageByFolderKind(t *testing.T) {
 	a := newTestAPI(t)
-	a.h = New(a.st, Deps{Now: func() time.Time { return testNow }, Hub: a.hub, Git: gitinfo.Exec{}})
-	mae := t.TempDir()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.h = New(a.st, Deps{Now: func() time.Time { return testNow }, Hub: a.hub, Git: gitinfo.Exec{}, Home: home})
+	mae := filepath.Join(home, "mae")
+	// Fora da home o nobre project add recusa a pasta: o aviso não o oferece.
+	fora := filepath.Join(t.TempDir(), "fora")
+	if err := os.MkdirAll(filepath.Join(fora, "repo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	repo := filepath.Join(mae, "bravonix", "turing-back")
 	vazia := filepath.Join(mae, "bravonix", "docs")
 	for _, d := range []string{repo, vazia} {
@@ -231,6 +260,8 @@ func TestMeNoProjectMessageByFolderKind(t *testing.T) {
 		{"comando na pasta do grupo", filepath.Dir(repo), []string{folder, "nobre project add " + filepath.Dir(repo)}, "não pode ser cadastrada"},
 		{"comando no repositório filho", repo, []string{msgNoProject}, "não é um repositório git"},
 		{"comando em pasta sem repositórios", vazia, []string{msgNotGit}, "nobre project add"},
+		{"comando em pasta de repositórios fora da home", fora, []string{msgNotGit}, "nobre project add"},
+		{"comando na home", home, []string{msgNotGit}, "nobre project add"},
 	}
 	for _, c := range cases {
 		for _, path := range []string{"/api/me/start", "/api/me/cards"} {
