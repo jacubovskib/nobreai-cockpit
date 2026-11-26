@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import { del } from '../api/client'
 import { wsUrl } from '../api/terminals'
@@ -19,6 +20,9 @@ export interface TermLike {
   fit(): void
   // fontSize muda o tamanho da fonte (o xterm recalcula a célula e redesenha).
   fontSize: number
+  cursorBlink: boolean
+  // renderer: 'webgl' com o addon ativo; 'dom' sem ele ou depois de perder o contexto.
+  readonly renderer: 'dom' | 'webgl'
   focus(): void
   onData(cb: (d: string) => void): void
   onResize(cb: () => void): void
@@ -36,7 +40,8 @@ export interface WsLike {
   onerror: ((e: unknown) => void) | null
 }
 
-export type TermFactory = () => TermLike
+export interface TermOptions { scrollback?: number; cursorBlink?: boolean; webgl?: boolean }
+export type TermFactory = (o?: TermOptions) => TermLike
 export type WsFactory = (url: string) => WsLike
 
 export const BASE_FONT = 13
@@ -45,26 +50,46 @@ export const MIN_FONT = 7
 
 export const THEME = { background: '#0B0D11', foreground: '#E8EAEE', cursor: '#E8EAEE' }
 
-export const xtermFactory: TermFactory = () => {
+export const xtermFactory: TermFactory = (o = {}) => {
   const t = new Terminal({
     fontFamily: "'Geist Mono', ui-monospace, monospace",
     fontSize: BASE_FONT,
-    cursorBlink: true,
+    cursorBlink: o.cursorBlink ?? true,
     theme: THEME,
-    scrollback: 5000,
+    scrollback: o.scrollback ?? 5000,
   })
   const fit = new FitAddon()
   t.loadAddon(fit)
+  let renderer: 'dom' | 'webgl' = 'dom'
+  // O WebGL só ativa com o xterm já aberto (antes disso a ativação fica para o
+  // open, fora do try). Sem WebGL2, ou se o contexto se perde, o addon é
+  // descartado e o xterm volta ao renderizador DOM.
+  const loadWebgl = () => {
+    let addon: WebglAddon | undefined
+    try {
+      addon = new WebglAddon()
+      const a = addon
+      a.onContextLoss(() => { renderer = 'dom'; a.dispose() })
+      t.loadAddon(a)
+      renderer = 'webgl'
+    } catch {
+      renderer = 'dom'
+      try { addon?.dispose() } catch { /* já descartado */ }
+    }
+  }
   return {
     get cols() { return t.cols },
     get rows() { return t.rows },
-    open: (el) => t.open(el),
+    open: (el) => { t.open(el); if (o.webgl) loadWebgl() },
     write: (d, cb) => t.write(d, cb),
     resize: (c, r) => t.resize(c, r),
     reset: () => t.reset(),
     fit: () => { try { fit.fit() } catch { /* contêiner sem tamanho ainda */ } },
     get fontSize() { return t.options.fontSize ?? BASE_FONT },
     set fontSize(n: number) { if (t.options.fontSize !== n) t.options.fontSize = n },
+    get cursorBlink() { return t.options.cursorBlink ?? true },
+    set cursorBlink(b: boolean) { if (t.options.cursorBlink !== b) t.options.cursorBlink = b },
+    get renderer() { return renderer },
     focus: () => t.focus(),
     onData: (cb) => { t.onData(cb) },
     onResize: (cb) => { t.onResize(cb) },
@@ -88,6 +113,8 @@ export function fontToFit(current: number, availW: number, availH: number, natur
 const HOST_PADDING = 8
 
 const OPEN = 1
+// Na grade: histórico menor (até 9 terminais na tela ao mesmo tempo).
+export const GRID_SCROLLBACK = 1000
 const MAX_RETRIES = 3
 const RESIZE_DEBOUNCE_MS = 100
 export const BACKOFF_MS = (attempt: number) => 500 * 2 ** attempt
@@ -95,7 +122,34 @@ export const BACKOFF_MS = (attempt: number) => 500 * 2 ** attempt
 const btn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', minHeight: 36, padding: '0 12px', borderRadius: 8, border: '1px solid #3A3F4B', background: 'transparent', color: 'var(--text)', font: 'inherit', cursor: 'pointer' }
 const btnDanger: React.CSSProperties = { ...btn, borderColor: '#6b2c2c', color: 'var(--err)' }
 
-type Status = 'conectando' | 'conectado' | 'reconectando' | 'desconectado'
+export type Status = 'conectando' | 'conectado' | 'reconectando' | 'desconectado'
+
+// TerminalHandle é o que o tile da grade comanda pelo ref (menu ⋯ e fim do
+// gesto de redimensionar).
+export interface TerminalHandle {
+  setReadonly(ro: boolean): void
+  kill(): void
+  fit(): void
+  reconnect(): void
+}
+
+export interface TerminalViewProps {
+  id: string
+  readonly?: boolean
+  autoFocus?: boolean
+  termFactory?: TermFactory
+  wsFactory?: WsFactory
+  onEnded?: () => void
+  // grid: modo grade — scrollback menor, WebGL, uma escrita por quadro,
+  // batch=1 enquanto só assiste e sem a barra de botões própria (o tile a faz).
+  grid?: boolean
+  // active: na grade, o cursor só pisca no terminal ativo.
+  active?: boolean
+  // onMode avisa a troca entre assistir (true) e interagir (false).
+  onMode?: (ro: boolean) => void
+  // onStatus avisa o estado da conexão (na grade é o tile que o mostra).
+  onStatus?: (s: Status) => void
+}
 
 // Quem só assiste nunca muda o PTY: o xterm segue o tamanho dele (mensagem
 // info) e nenhum resize é enviado até o usuário interagir (clicar em
@@ -104,16 +158,10 @@ type Status = 'conectando' | 'conectado' | 'reconectando' | 'desconectado'
 // snapshot foi escrito: as respostas do xterm a consultas antigas (DA, CPR,
 // OSC) no histórico não viram teclas para o agente.
 
-export function TerminalView({
+export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(function TerminalView({
   id, readonly = false, autoFocus = false, termFactory = xtermFactory, wsFactory: makeWs = wsFactory, onEnded,
-}: {
-  id: string
-  readonly?: boolean
-  autoFocus?: boolean
-  termFactory?: TermFactory
-  wsFactory?: WsFactory
-  onEnded?: () => void
-}) {
+  grid = false, active = false, onMode, onStatus,
+}, ref) {
   const host = useRef<HTMLDivElement>(null)
   const screenRef = useRef<HTMLDivElement>(null)
   const [ro, setRo] = useState(readonly)
@@ -124,17 +172,36 @@ export function TerminalView({
   const [killing, setKilling] = useState(false)
   const endedCb = useRef(onEnded)
   endedCb.current = onEnded
+  const modeCb = useRef(onMode)
+  modeCb.current = onMode
+  const statusCb = useRef(onStatus)
+  statusCb.current = onStatus
+  const activeRef = useRef(active)
+  activeRef.current = active
   // engaged: o usuário interagiu; só então o PTY segue o tamanho desta view.
   const engaged = useRef(false)
+  const termRef = useRef<TermLike | null>(null)
+  // Ações que dependem da conexão viva, preenchidas pelo efeito principal.
+  const live = useRef<{ fit(): void; reconnect(): void } | null>(null)
 
   useEffect(() => { setRo(readonly) }, [readonly, id])
   useEffect(() => { setExitCode(null); setConfirming(false); setKillError(''); engaged.current = false }, [id])
+
+  // onMode só na troca, não no modo inicial.
+  const lastRo = useRef(ro)
+  useEffect(() => {
+    if (lastRo.current === ro) return
+    lastRo.current = ro
+    modeCb.current?.(ro)
+  }, [ro])
+  useEffect(() => { statusCb.current?.(status) }, [status])
 
   useEffect(() => {
     const el = host.current
     const scr = screenRef.current
     if (!el || !scr) return
-    const term = termFactory()
+    const term = grid ? termFactory({ scrollback: GRID_SCROLLBACK, webgl: true, cursorBlink: activeRef.current }) : termFactory()
+    termRef.current = term
     term.open(scr)
     let ws: WsLike | null = null
     let disposed = false
@@ -187,21 +254,48 @@ export function TerminalView({
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(sendResize, RESIZE_DEBOUNCE_MS)
     })
+    // Na grade a saída que chega entre dois quadros vira um único write: com
+    // vários terminais na tela, um write por mensagem trava o desenho.
+    let pending: Uint8Array[] = []
+    let outFrame = 0
+    const flushOut = () => {
+      outFrame = 0
+      const chunks = pending
+      pending = []
+      if (chunks.length === 0) return
+      if (chunks.length === 1) { term.write(chunks[0]); return }
+      const all = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0))
+      let off = 0
+      for (const c of chunks) { all.set(c, off); off += c.byteLength }
+      term.write(all)
+    }
+    const dropOut = () => {
+      pending = []
+      if (outFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(outFrame)
+      outFrame = 0
+    }
+    const queueOut = (bytes: Uint8Array) => {
+      if (!grid || typeof requestAnimationFrame !== 'function') { term.write(bytes); return }
+      pending.push(bytes)
+      if (!outFrame) outFrame = requestAnimationFrame(flushOut)
+    }
+    // O snapshot nunca espera o quadro: a entrada só vale depois dele escrito.
     const writeOut = (bytes: Uint8Array, sock: WsLike) => {
-      if (gotSnapshot) { term.write(bytes); return }
+      if (gotSnapshot) { queueOut(bytes); return }
       gotSnapshot = true // a primeira mensagem binária é o snapshot (pode ser vazio)
       if (bytes.byteLength === 0) { ready = true; return }
       term.write(bytes, () => { if (ws === sock) ready = true })
     }
 
     const connect = () => {
-      const sock = makeWs(wsUrl(id, ro))
+      const sock = makeWs(wsUrl(id, ro, undefined, grid && ro))
       ws = sock
       sock.binaryType = 'arraybuffer'
       sock.onopen = () => {
         attempt = 0
         ready = false
         gotSnapshot = false
+        dropOut() // a saída pendente era da conexão anterior
         setStatus('conectado')
         term.reset() // o servidor reenvia o snapshot a cada conexão
         applyFont() // ao alternar o modo a fonte volta à base (ou encolhe)
@@ -243,7 +337,18 @@ export function TerminalView({
     setStatus('conectando')
     connect()
 
+    // reconnect abre uma conexão nova (o tile oferece "Tentar de novo").
+    const reconnect = () => {
+      clearTimeout(retryTimer)
+      if (ws) { ws.onclose = null; ws.onmessage = null; ws.onopen = null; ws.close() }
+      dropOut()
+      attempt = 0
+      setStatus('conectando')
+      connect()
+    }
+
     const onWinResize = () => { if (followPty()) applyFont(); else term.fit() }
+    live.current = { fit: onWinResize, reconnect }
     window.addEventListener('resize', onWinResize)
     const RO = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onWinResize)
     RO?.observe(el)
@@ -258,10 +363,16 @@ export function TerminalView({
       el.removeEventListener('paste', engage, true)
       RO?.disconnect()
       if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf)
+      dropOut()
       if (ws) { ws.onclose = null; ws.onmessage = null; ws.onopen = null; ws.close() }
+      live.current = null
+      termRef.current = null
       term.dispose()
     }
-  }, [id, ro, autoFocus, termFactory, makeWs])
+  }, [id, ro, autoFocus, termFactory, makeWs, grid])
+
+  // Depois do efeito principal: no primeiro render o terminal já existe.
+  useEffect(() => { if (grid && termRef.current) termRef.current.cursorBlink = active }, [grid, active])
 
   const kill = async () => {
     setKilling(true); setKillError('')
@@ -275,15 +386,24 @@ export function TerminalView({
     }
   }
 
+  // setReadonly(false) vale como "Interagir": o PTY passa a seguir esta view.
+  const toggleMode = (next: boolean) => { engaged.current = !next; setRo(next) }
+  useImperativeHandle(ref, () => ({
+    setReadonly: (next) => { if (next !== ro) toggleMode(next) },
+    kill: () => { void kill() },
+    fit: () => live.current?.fit(),
+    reconnect: () => live.current?.reconnect(),
+  }))
+
   const ended = exitCode !== null
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%', minHeight: 0 }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+      {!grid && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
         <span role="status" style={{ fontSize: 13, color: ended ? 'var(--warn)' : 'var(--text-2)', flex: '1 1 auto' }}>
           {ended ? `encerrado (código ${exitCode})` : status}
         </span>
         {!ended && (
-          <button type="button" style={btn} aria-pressed={ro} onClick={() => { engaged.current = ro; setRo(!ro) }}>
+          <button type="button" style={btn} aria-pressed={ro} onClick={() => toggleMode(!ro)}>
             {ro ? 'Interagir' : 'Somente assistir'}
           </button>
         )}
@@ -297,17 +417,17 @@ export function TerminalView({
             <button type="button" style={btn} disabled={killing} onClick={() => setConfirming(false)}>Cancelar</button>
           </span>
         )}
-      </div>
+      </div>}
       {killError && <p role="alert" style={{ margin: 0, fontSize: 13, color: 'var(--err)' }}>{killError}</p>}
       <div
         ref={host}
         role="group"
         aria-label="Terminal do agente"
-        style={{ flex: '1 1 auto', minHeight: 240, padding: HOST_PADDING, borderRadius: 8, background: THEME.background, border: '1px solid var(--border)', overflow: 'hidden' }}
+        style={{ flex: '1 1 auto', minHeight: grid ? 0 : 240, padding: HOST_PADDING, borderRadius: 8, background: THEME.background, border: '1px solid var(--border)', overflow: 'hidden' }}
       >
         {/* Ocupa o contêiner: o FitAddon mede o pai do xterm (este div). */}
         <div ref={screenRef} data-testid="terminal-screen" style={{ width: '100%', height: '100%' }} />
       </div>
     </div>
   )
-}
+})

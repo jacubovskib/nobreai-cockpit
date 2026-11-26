@@ -1,6 +1,24 @@
 import '@testing-library/jest-dom/vitest'
+import { createRef } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { BASE_FONT, MIN_FONT, TerminalView, fontToFit, type TermLike, type WsLike } from './TerminalView'
+import { wsUrl } from '../api/terminals'
+import { LazyTerminalView } from './LazyTerminalView'
+import { BASE_FONT, MIN_FONT, TerminalView, fontToFit, xtermFactory, type TerminalHandle, type TermLike, type WsLike } from './TerminalView'
+
+// WebglAddon simulado: o jsdom não tem WebGL. `mode` escolhe a falha.
+const webgl = vi.hoisted(() => ({
+  mode: 'ok' as 'ok' | 'ctor' | 'activate',
+  loseContext: null as null | (() => void),
+  disposed: 0,
+}))
+vi.mock('@xterm/addon-webgl', () => ({
+  WebglAddon: class {
+    constructor() { if (webgl.mode === 'ctor') throw new Error('sem WebGL2') }
+    onContextLoss(cb: () => void) { webgl.loseContext = cb; return { dispose() {} } }
+    activate() { if (webgl.mode === 'activate') throw new Error('WebGL2 not supported') }
+    dispose() { webgl.disposed++ }
+  },
+}))
 
 class FakeTerm implements TermLike {
   cols = 100
@@ -10,6 +28,8 @@ class FakeTerm implements TermLike {
   resized: [number, number][] = []
   fits = 0
   fontSize = 13
+  cursorBlink = true
+  renderer: 'dom' | 'webgl' = 'dom'
   fonts: number[] = []
   resets = 0
   disposed = false
@@ -310,5 +330,249 @@ describe('TerminalView', () => {
     unmount()
     expect(socks[0].closed).toBe(true)
     expect(term.disposed).toBe(true)
+  })
+})
+
+describe('wsUrl', () => {
+  const loc = { protocol: 'https:', host: 'h:1' }
+  it('acrescenta batch=1 à query só quando pedido', () => {
+    expect(wsUrl('t1', false, loc)).toBe('wss://h:1/api/terminals/t1/ws')
+    expect(wsUrl('t1', true, loc)).toBe('wss://h:1/api/terminals/t1/ws?readonly=1')
+    expect(wsUrl('t1', true, loc, true)).toBe('wss://h:1/api/terminals/t1/ws?readonly=1&batch=1')
+    expect(wsUrl('t1', false, loc, true)).toBe('wss://h:1/api/terminals/t1/ws?batch=1')
+  })
+})
+
+describe('TerminalView na grade', () => {
+  function gridSetup(props: { readonly?: boolean; active?: boolean; onMode?: (ro: boolean) => void; onStatus?: (s: string) => void } = {}) {
+    const term = new FakeTerm()
+    const socks: FakeWs[] = []
+    const factory = vi.fn((_o?: unknown) => term)
+    const wsFactory = (url: string) => { const w = new FakeWs(url); socks.push(w); return w }
+    const ref = createRef<TerminalHandle>()
+    const ui = (p: typeof props) => <TerminalView ref={ref} id="t1" grid termFactory={factory} wsFactory={wsFactory} {...p} />
+    const r = render(ui(props))
+    return { term, socks, factory, ref, rerender: (p: typeof props) => r.rerender(ui(p)) }
+  }
+
+  it('sem grid: sem batch=1, fábrica com o padrão de hoje e a barra de botões aparece', () => {
+    const term = new FakeTerm()
+    const factory = vi.fn((_o?: unknown) => term)
+    const socks: FakeWs[] = []
+    render(<TerminalView id="t1" readonly termFactory={factory} wsFactory={(u) => { const w = new FakeWs(u); socks.push(w); return w }} />)
+    expect(socks[0].url).not.toMatch(/batch/)
+    expect(factory).toHaveBeenCalledWith()
+    expect(term.cursorBlink).toBe(true)
+    expect(screen.getByRole('button', { name: 'Interagir' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Encerrar agente' })).toBeInTheDocument()
+  })
+
+  it('com grid a fábrica recebe scrollback 1000 e WebGL', () => {
+    const { factory } = gridSetup({ readonly: true })
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({ scrollback: 1000, webgl: true }))
+  })
+
+  it('com grid não renderiza a barra de botões própria', () => {
+    gridSetup({ readonly: true })
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(host()).toBeInTheDocument()
+  })
+
+  it('assistindo pede readonly=1 e batch=1; setReadonly(false) reconecta sem nenhum dos dois', () => {
+    const onMode = vi.fn()
+    const { socks, ref, term } = gridSetup({ readonly: true, onMode })
+    expect(socks[0].url).toMatch(/\?readonly=1&batch=1$/)
+    act(() => ref.current!.setReadonly(false))
+    expect(socks[0].closed).toBe(true)
+    expect(socks).toHaveLength(2)
+    expect(socks[1].url).not.toMatch(/readonly|batch/)
+    expect(onMode).toHaveBeenLastCalledWith(false)
+    // conta como "Interagir": ao abrir, ajusta ao contêiner e manda o resize
+    act(() => socks[1].open())
+    expect(term.fits).toBeGreaterThan(0)
+    expect(resizes(socks[1])).toEqual([{ type: 'resize', cols: 100, rows: 30 }])
+  })
+
+  it('onMode avisa só a troca, não o modo inicial', () => {
+    const onMode = vi.fn()
+    const { ref } = gridSetup({ readonly: true, onMode })
+    expect(onMode).not.toHaveBeenCalled()
+    act(() => ref.current!.setReadonly(true))
+    expect(onMode).not.toHaveBeenCalled()
+    act(() => ref.current!.setReadonly(false))
+    act(() => ref.current!.setReadonly(true))
+    expect(onMode.mock.calls).toEqual([[false], [true]])
+  })
+
+  it('três mensagens antes do próximo quadro viram um único write; o snapshot não espera o quadro', () => {
+    vi.useFakeTimers()
+    const { term, socks } = gridSetup({ readonly: true })
+    act(() => socks[0].open())
+    act(() => socks[0].msg(new TextEncoder().encode('hist').buffer))
+    expect(term.written.map(text)).toEqual(['hist']) // snapshot escrito na hora
+    for (const s of ['a', 'b', 'c']) act(() => socks[0].msg(new TextEncoder().encode(s).buffer))
+    expect(term.written).toHaveLength(1)
+    act(() => { vi.advanceTimersToNextFrame() })
+    expect(term.written.map(text)).toEqual(['hist', 'abc'])
+  })
+
+  it('na grade a entrada continua esperando o snapshot ser escrito', () => {
+    vi.useFakeTimers()
+    const { term, socks } = gridSetup()
+    act(() => socks[0].open())
+    act(() => socks[0].msg(new TextEncoder().encode('\x1b[c').buffer))
+    term.dataCb('\x1b[?1;2c')
+    act(() => { vi.advanceTimersToNextFrame() })
+    expect(socks[0].sent).toHaveLength(0)
+    act(() => term.flush())
+    term.dataCb('ls')
+    expect(text(socks[0].sent.at(-1) as Uint8Array)).toBe('ls')
+  })
+
+  it('a saída pendente da conexão antiga é descartada ao reconectar', () => {
+    vi.useFakeTimers()
+    const { term, socks, ref } = gridSetup({ readonly: true })
+    act(() => socks[0].open())
+    snapshot(socks[0], term)
+    act(() => socks[0].msg(new TextEncoder().encode('velho').buffer))
+    act(() => ref.current!.reconnect())
+    act(() => socks[1].open())
+    act(() => { vi.advanceTimersToNextFrame() })
+    expect(term.written.map(text)).toEqual(['hist'])
+  })
+
+  it('active controla o cursor piscando', () => {
+    const { term, rerender } = gridSetup({ readonly: true, active: false })
+    expect(term.cursorBlink).toBe(false)
+    rerender({ readonly: true, active: true })
+    expect(term.cursorBlink).toBe(true)
+    rerender({ readonly: true, active: false })
+    expect(term.cursorBlink).toBe(false)
+  })
+
+  it('assistindo, fit() não ajusta ao contêiner nem manda resize ao PTY', () => {
+    vi.useFakeTimers()
+    const { term, socks, ref } = gridSetup({ readonly: true })
+    act(() => socks[0].open())
+    snapshot(socks[0], term)
+    act(() => socks[0].msg(JSON.stringify({ type: 'info', id: 't1', cols: 120, rows: 40 })))
+    act(() => ref.current!.fit())
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(term.fits).toBe(0)
+    expect(socks[0].sent).toHaveLength(0)
+  })
+
+  it('interagindo, fit() ajusta ao contêiner', () => {
+    const { term, socks, ref } = gridSetup()
+    act(() => socks[0].open())
+    snapshot(socks[0], term)
+    fireEvent.keyDown(host(), { key: 'a' })
+    const before = term.fits
+    act(() => ref.current!.fit())
+    expect(term.fits).toBe(before + 1)
+  })
+
+  it('esgotadas as 3 tentativas avisa desconectado; reconnect() abre uma conexão nova', () => {
+    vi.useFakeTimers()
+    const onStatus = vi.fn()
+    const { socks, ref } = gridSetup({ readonly: true, onStatus })
+    expect(onStatus).toHaveBeenLastCalledWith('conectando')
+    act(() => socks[0].open())
+    expect(onStatus).toHaveBeenLastCalledWith('conectado')
+    act(() => socks[0].drop())
+    expect(onStatus).toHaveBeenLastCalledWith('reconectando')
+    act(() => { vi.advanceTimersByTime(500) }); act(() => socks[1].drop())
+    act(() => { vi.advanceTimersByTime(1000) }); act(() => socks[2].drop())
+    act(() => { vi.advanceTimersByTime(2000) }); act(() => socks[3].drop())
+    act(() => { vi.advanceTimersByTime(60000) })
+    expect(socks).toHaveLength(4)
+    expect(onStatus).toHaveBeenLastCalledWith('desconectado')
+    act(() => ref.current!.reconnect())
+    expect(socks).toHaveLength(5)
+    expect(socks[4].url).toMatch(/\?readonly=1&batch=1$/)
+    expect(onStatus).toHaveBeenLastCalledWith('conectando')
+    act(() => socks[4].open())
+    expect(onStatus).toHaveBeenLastCalledWith('conectado')
+  })
+
+  it('kill() chama o DELETE do terminal', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { ref } = gridSetup({ readonly: true })
+    await act(async () => { ref.current!.kill() })
+    expect(fetchMock).toHaveBeenCalledWith('/api/terminals/t1', expect.objectContaining({ method: 'DELETE' }))
+  })
+
+  it('o LazyTerminalView repassa o ref ao TerminalView', async () => {
+    const ref = createRef<TerminalHandle>()
+    const socks: FakeWs[] = []
+    render(<LazyTerminalView ref={ref} id="t1" grid readonly termFactory={() => new FakeTerm()} wsFactory={(u) => { const w = new FakeWs(u); socks.push(w); return w }} />)
+    await screen.findByRole('group', { name: 'Terminal do agente' })
+    expect(typeof ref.current?.reconnect).toBe('function')
+    act(() => ref.current!.reconnect())
+    expect(socks).toHaveLength(2)
+  })
+})
+
+describe('xtermFactory', () => {
+  beforeEach(() => {
+    webgl.mode = 'ok'; webgl.loseContext = null; webgl.disposed = 0
+    // o xterm real consulta matchMedia ao abrir; o jsdom não tem
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }))
+  })
+  const openReal = (o?: Parameters<typeof xtermFactory>[0]) => {
+    const t = xtermFactory(o)
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    t.open(el)
+    return t
+  }
+  const writes = (t: TermLike, d: string) => new Promise<void>((r) => t.write(d, r))
+
+  it('com webgl usa o renderizador WebGL', () => {
+    const t = openReal({ webgl: true })
+    expect(t.renderer).toBe('webgl')
+    t.dispose()
+  })
+
+  it('sem webgl fica no DOM', () => {
+    const t = openReal()
+    expect(t.renderer).toBe('dom')
+    t.dispose()
+  })
+
+  it('addon que falha no construtor fica no DOM e write funciona', async () => {
+    webgl.mode = 'ctor'
+    const t = openReal({ webgl: true })
+    expect(t.renderer).toBe('dom')
+    await writes(t, 'oi')
+    t.dispose()
+  })
+
+  it('addon que falha ao ativar (sem WebGL2) fica no DOM e write funciona', async () => {
+    webgl.mode = 'activate'
+    const t = openReal({ webgl: true })
+    expect(t.renderer).toBe('dom')
+    await writes(t, 'oi')
+    t.dispose()
+  })
+
+  it('perda de contexto descarta o addon e volta ao DOM', async () => {
+    const t = openReal({ webgl: true })
+    expect(t.renderer).toBe('webgl')
+    webgl.loseContext!()
+    expect(t.renderer).toBe('dom')
+    expect(webgl.disposed).toBeGreaterThan(0)
+    await writes(t, 'oi')
+    t.dispose()
+  })
+
+  it('aplica scrollback e cursorBlink das opções e muda cursorBlink depois', () => {
+    const t = openReal({ scrollback: 1000, cursorBlink: false })
+    expect(t.cursorBlink).toBe(false)
+    t.cursorBlink = true
+    expect(t.cursorBlink).toBe(true)
+    t.dispose()
   })
 })
