@@ -4,7 +4,7 @@ import type { CardSummary, Project } from '../../api/types'
 import { projectForPath } from '../../app/project'
 
 export const DEF_H = 360, MIN_H = 200, MAX_H = 900, DEF_COLS = 3
-const FULL_H = 520
+export const FULL_H = 520
 const STEP_H = 90
 
 export type Cols = 1 | 2 | 3
