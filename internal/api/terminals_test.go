@@ -657,3 +657,49 @@ func TestTerminalEnvDropsDaemonNobreVarsAndSetsColorterm(t *testing.T) {
 		t.Fatalf("saída = %q", out)
 	}
 }
+
+// drainWS lê até o fechamento e devolve a saída binária concatenada e a
+// última mensagem de texto.
+func drainWS(t *testing.T, c *websocket.Conn) (string, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var out strings.Builder
+	var lastText string
+	for {
+		typ, data, err := c.Read(ctx)
+		if err != nil {
+			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+				t.Fatalf("fechamento = %v", err)
+			}
+			return out.String(), lastText
+		}
+		if typ == websocket.MessageBinary {
+			out.Write(data)
+		} else {
+			lastText = string(data)
+		}
+	}
+}
+
+func TestTerminalWSBatchDeliversAllOutputThenExit(t *testing.T) {
+	const exitMsg = `{"type":"exit","code":0,"reason":"agent"}`
+	script := "printf um; sleep 0.15; printf dois; sleep 0.15; printf tres"
+	var got [2]string
+	for i, query := range []string{"", "?batch=1"} {
+		e := newTermEnv(t, "/bin/sh")
+		_, info := e.create(t, map[string]any{"args": []string{"-c", script}})
+		c, _, err := e.dial(t, info.ID, query, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, last := drainWS(t, c)
+		if last != exitMsg {
+			t.Fatalf("query %q: última mensagem = %q", query, last)
+		}
+		got[i] = out
+	}
+	if got[0] != "umdoistres" || got[1] != got[0] {
+		t.Fatalf("sem batch = %q, com batch = %q", got[0], got[1])
+	}
+}
