@@ -222,11 +222,16 @@ func (f CardFields) body() map[string]any {
 	return b
 }
 
-// Start cria um card e liga a sessão a ele.
-func (c *Client) Start(ctx context.Context, title, goal, doneWhen string, f CardFields) (domain.Card, error) {
+// Start cria um card e liga a sessão a ele. cwd é a pasta onde o comando
+// rodou (o daemon escolhe o projeto por ela); vazio não vai no corpo e vale o
+// projeto da sessão.
+func (c *Client) Start(ctx context.Context, title, goal, doneWhen, cwd string, f CardFields) (domain.Card, error) {
 	var card domain.Card
 	body := f.body()
 	body["title"], body["goal"], body["done_when"] = title, goal, doneWhen
+	if cwd != "" {
+		body["cwd"] = cwd
+	}
 	err := c.Do(ctx, "POST", "/api/me/start", body, &card)
 	return card, err
 }
@@ -442,7 +447,8 @@ func (c *Client) DismissSuggestions(ctx context.Context, id int64, rels []string
 	return c.Do(ctx, "POST", "/api/projects/"+strconv.FormatInt(id, 10)+"/suggestions/dismiss", map[string][]string{"rels": rels}, nil)
 }
 
-// AddCard cria um card no projeto da sessão sem ligar a sessão a ele.
+// AddCard cria um card sem ligar a sessão a ele: no projeto da pasta
+// in["cwd"] (onde o comando rodou), se ela veio; senão, no da sessão.
 func (c *Client) AddCard(ctx context.Context, in map[string]string, f CardFields) (domain.Card, error) {
 	var card domain.Card
 	body := f.body()

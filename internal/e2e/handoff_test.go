@@ -243,7 +243,7 @@ func TestHandoffEndToEnd(t *testing.T) {
 	// --- Sessão A (PID 100) ---
 	e.hook(100, sessA, "SessionStart", map[string]any{"source": "startup"}, nil)
 	a := e.agent(100)
-	card, err := a.Start(ctx, "Refresh de token OAuth", "Renovar o token sem logout", "Refresh automático passa nos testes", client.CardFields{})
+	card, err := a.Start(ctx, "Refresh de token OAuth", "Renovar o token sem logout", "Refresh automático passa nos testes", "", client.CardFields{})
 	must(t, err)
 	if card.Key != "NAC-1" {
 		t.Fatalf("chave = %q", card.Key)

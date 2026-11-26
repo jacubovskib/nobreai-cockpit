@@ -66,6 +66,21 @@ func (f fieldFlags) fields(fs *flag.FlagSet) (client.CardFields, error) {
 	return cf, nil
 }
 
+// commandDir é a pasta onde o comando rodou, que nobre start e nobre card add
+// enviam ao daemon: o card nasce no projeto dela (o repositório filho de uma
+// pasta de repositórios, por exemplo), não no da pasta em que a sessão
+// começou. "" quando não dá para ler a pasta: vale o projeto da sessão.
+func (c *cli) commandDir() string {
+	if c.cwd == nil {
+		return ""
+	}
+	dir, err := c.cwd()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
 func (c *cli) start(args []string) error {
 	const u = `uso: nobre start "<título>" [--goal ...] [--done-when ...] [--type epico|historia|tarefa|bug] [--epic <KEY>] [--priority ...] [--label ... | --no-labels] [--points n]`
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
@@ -84,7 +99,7 @@ func (c *cli) start(args []string) error {
 	if err != nil {
 		return err
 	}
-	card, err := c.client().Start(ctx(), title, *goal, *done, cf)
+	card, err := c.client().Start(ctx(), title, *goal, *done, c.commandDir(), cf)
 	if err != nil {
 		return err
 	}
@@ -120,8 +135,12 @@ func (c *cli) card(args []string) error {
 	if err != nil {
 		return err
 	}
-	card, err := c.client().AddCard(ctx(), map[string]string{"title": title, "goal": *goal, "done_when": *done,
-		"branch": *branch, "where_stopped": *where, "column": *column}, cf)
+	in := map[string]string{"title": title, "goal": *goal, "done_when": *done,
+		"branch": *branch, "where_stopped": *where, "column": *column}
+	if dir := c.commandDir(); dir != "" {
+		in["cwd"] = dir
+	}
+	card, err := c.client().AddCard(ctx(), in, cf)
 	if err != nil {
 		return err
 	}

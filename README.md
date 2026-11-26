@@ -361,6 +361,8 @@ Grupo com pasta: uma pasta que não é repositório git (por exemplo `~/workspac
 nobre project add ~/workspace/clientes                   # pasta sem git: cadastra um grupo com pasta, se achar repositórios dentro dela
 ```
 
+- `nobre start` e `nobre card add` criam o card no projeto da pasta onde o comando rodou: o projeto cadastrado mais específico que a contém. Numa sessão aberta na pasta do grupo (ou numa pasta-mãe sem cadastro), rode o comando dentro do repositório filho para o card nascer nele, com o branch de lá. Se a pasta do comando não tem projeto, vale o projeto da sessão.
+- Para o card cair num repositório do grupo, esse repositório precisa estar cadastrado: `nobre project add <grupo>/<repositório> --pai <grupo>`. `nobre project add` na pasta do grupo cadastra só o grupo e lista os repositórios como sugestão.
 - O grupo com pasta não usa git: não tem branch, worktree nem base. Ele aceita cards (o grupo sem pasta continua recusando) e aparece em Worktrees só como cabeçalho, com os repositórios dos filhos abaixo.
 - Na Configuração, "Adicionar projeto" abre o seletor de pasta. Escolha a pasta e o Cockpit varre os sub-projetos (repositório, monorepo ou grupo) e cadastra tudo de uma vez, com os sub-projetos que você marcar. "Varrer de novo" repete a varredura numa pasta já cadastrada.
 - Na página do projeto principal, a linha "geral" da tabela "Por app" mostra `(raiz)`: é o que caiu no principal e não em um app.
