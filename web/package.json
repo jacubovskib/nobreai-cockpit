@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "bench": "vite --open /bench/index.html",
     "build": "tsc --noEmit && vite build && touch dist/.gitkeep",
     "test": "vitest"
   },
