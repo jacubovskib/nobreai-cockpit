@@ -182,17 +182,19 @@ describe('Board', () => {
   const mk = (key: string, column: string, agent: string, extra = {}) => ({ ...card(key, 't-' + key), column, agent, ...extra })
   const cards = [mk('NAC-1', 'backlog', 'claude'), mk('NAC-2', 'backlog', 'codex')]
 
-  it('select "Mover para" envia PATCH column', async () => {
+  it('botão ⋯ "Mover" abre as colunas e envia PATCH column', async () => {
     const fn = mock({ '/api/cards': cards, 'PATCH /api/cards/NAC-1': {} })
     wrap(<Board />)
-    fireEvent.change(await screen.findByLabelText('Mover NAC-1 para'), { target: { value: 'revisao' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Mover NAC-1' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Mover NAC-1 para' })).getByRole('button', { name: 'Revisão' }))
     await waitFor(() => expect(calls(fn, 'PATCH', '/api/cards/NAC-1')).toEqual([{ column: 'revisao' }]))
   })
 
   it('falha no PATCH mostra o erro do servidor e mantém a coluna', async () => {
     mock({ '/api/cards': cards, 'PATCH /api/cards/NAC-1': { status: 409, body: { error: 'movimento recusado' } } })
     wrap(<Board />)
-    fireEvent.change(await screen.findByLabelText('Mover NAC-1 para'), { target: { value: 'concluido' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Mover NAC-1' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Mover NAC-1 para' })).getByRole('button', { name: 'Concluído' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('movimento recusado')
     const backlog = screen.getByRole('region', { name: 'Backlog' })
     expect(within(backlog).getByText('t-NAC-1')).toBeInTheDocument()
@@ -224,7 +226,7 @@ describe('Board', () => {
   })
 
   it('custo respeita BRL da configuração', async () => {
-    mock({ '/api/cards': [mk('NAC-5', 'backlog', 'claude', { totals: { ...total, cost_usd: 2 } })] })
+    mock({ '/api/cards': [mk('NAC-5', 'pausado', 'claude', { session_count: 1, totals: { ...total, cost_usd: 2 } })] })
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(
       <QueryClientProvider client={qc}><MemoryRouter>

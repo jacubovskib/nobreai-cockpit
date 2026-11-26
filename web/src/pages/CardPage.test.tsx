@@ -410,3 +410,22 @@ describe('CardPage · hierarquia', () => {
     expect(screen.queryByLabelText('Épico')).toBeNull()
   })
 })
+
+describe('CardPage · âncora (NAC-61)', () => {
+  it('com #cont-t rola até o painel Continuar depois que o card carrega', async () => {
+    const scroll = vi.fn()
+    Element.prototype.scrollIntoView = scroll
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, live: null } })
+    wrap(<CardPage />, '/cards/NAC-42#cont-t')
+    const h = await screen.findByRole('heading', { name: 'Continuar com outro agente' })
+    await waitFor(() => expect(scroll.mock.contexts).toContain(h))
+  })
+  it('sem âncora não rola', async () => {
+    const scroll = vi.fn()
+    Element.prototype.scrollIntoView = scroll
+    mock({ ...base, '/api/cards/NAC-42': { ...detail, live: null } })
+    wrap(<CardPage />)
+    await screen.findByRole('heading', { name: 'Continuar com outro agente' })
+    expect(scroll).not.toHaveBeenCalled()
+  })
+})

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { patch } from '../api/client'
 import { useCard, useLimits, useProjects, useSettings } from '../api/queries'
@@ -50,6 +50,13 @@ export function CardPage() {
     mutationFn: (projectId: number) => patch(`/api/cards/${key}`, { project_id: projectId }),
     onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: ['card', key] }), qc.invalidateQueries({ queryKey: ['cards'] })]),
   })
+
+  // Âncora na URL (ex.: #cont-t, vinda de "Continuar" no board): rola até ela quando o card carrega.
+  const { hash } = useLocation()
+  const loaded = !!card.data
+  useEffect(() => {
+    if (loaded && hash.length > 1) document.getElementById(hash.slice(1))?.scrollIntoView?.({ block: 'start' })
+  }, [loaded, hash])
 
   if (card.isLoading) return <p className="placeholder">Carregando…</p>
   if (card.error instanceof ApiError && card.error.status === 404) {
