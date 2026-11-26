@@ -28,8 +28,16 @@ export function liveSet(i: BudgetInput, max: number = MAX_LIVE): Set<string> {
       ({ id }) =>
         id !== i.focused && i.onScreen.has(id) && (!i.ended.has(id) || i.woken.has(id)),
     )
-    // Mais recente primeiro; empate fica na ordem da grade.
-    .sort((a, b) => (i.lastUsed[b.id] ?? 0) - (i.lastUsed[a.id] ?? 0) || a.ordem - b.ordem)
+    // Mais recente primeiro; no empate, rodando antes de encerrado (um tile
+    // que ficou ligado ao encerrar não tira a vaga de um agente vivo), e
+    // depois a ordem da grade. Só desempate: encerrado usado mais
+    // recentemente ainda vence.
+    .sort(
+      (a, b) =>
+        (i.lastUsed[b.id] ?? 0) - (i.lastUsed[a.id] ?? 0) ||
+        Number(i.ended.has(a.id)) - Number(i.ended.has(b.id)) ||
+        a.ordem - b.ordem,
+    )
 
   for (const { id } of candidatos) {
     if (live.size >= max) break

@@ -53,6 +53,26 @@ describe('liveSet', () => {
     expect([...r].sort()).toEqual(nomes(9).sort())
   })
 
+  it('no empate de lastUsed, rodando vem antes de encerrado (depois, ordem da grade)', () => {
+    // t1 encerrou com o tile ligado (woken) e nunca foi usado: não tira a vaga de t10.
+    const ids = nomes(10)
+    const r = liveSet(entrada({ ids, ended: new Set(['t1']), woken: new Set(['t1']) }))
+    expect(r.size).toBe(9)
+    expect(r.has('t1')).toBe(false)
+    expect(r.has('t10')).toBe(true)
+  })
+
+  it('encerrado usado mais recentemente ainda vence rodando usado antes', () => {
+    const ids = nomes(10)
+    const lastUsed: Record<string, number> = {}
+    ids.forEach((id, i) => (lastUsed[id] = i + 1)) // t1 é o menos recente dos rodando
+    lastUsed.t10 = 1000 // encerrado que o usuário clicou por último
+    const r = liveSet(entrada({ ids, lastUsed, ended: new Set(['t10']), woken: new Set(['t10']) }))
+    expect(r.size).toBe(9)
+    expect(r.has('t10')).toBe(true)
+    expect(r.has('t1')).toBe(false)
+  })
+
   it('lastUsed ausente conta como 0', () => {
     const ids = nomes(10)
     const r = liveSet(entrada({ ids, lastUsed: { t10: 5 } }))
