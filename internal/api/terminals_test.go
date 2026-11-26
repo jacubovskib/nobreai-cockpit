@@ -703,3 +703,57 @@ func TestTerminalWSBatchDeliversAllOutputThenExit(t *testing.T) {
 		t.Fatalf("sem batch = %q, com batch = %q", got[0], got[1])
 	}
 }
+
+// drainWSCounts é como drainWS, mas também conta as mensagens binárias.
+func drainWSCounts(t *testing.T, c *websocket.Conn) (out string, binMsgs int, last string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var sb strings.Builder
+	for {
+		typ, data, err := c.Read(ctx)
+		if err != nil {
+			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+				t.Fatalf("fechamento = %v", err)
+			}
+			return sb.String(), binMsgs, last
+		}
+		if typ == websocket.MessageBinary {
+			sb.Write(data)
+			binMsgs++
+		} else {
+			last = string(data)
+		}
+	}
+}
+
+// Rajada sem pausas: quem assiste com ?batch=1 recebe os mesmos bytes em
+// menos mensagens binárias, e o exit vem por último nos dois casos.
+func TestTerminalWSBatchCoalescesBurst(t *testing.T) {
+	const exitMsg = `{"type":"exit","code":0,"reason":"agent"}`
+	// A pausa inicial dá tempo de o cliente assistir antes da rajada (sem
+	// ela o snapshot entregaria tudo numa mensagem só).
+	script := "sleep 0.5; i=0; while [ $i -lt 400 ]; do echo linha$i; i=$((i+1)); done"
+	var outs [2]string
+	var msgs [2]int
+	for i, query := range []string{"", "?batch=1"} {
+		e := newTermEnv(t, "/bin/sh")
+		_, info := e.create(t, map[string]any{"args": []string{"-c", script}})
+		c, _, err := e.dial(t, info.ID, query, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var last string
+		outs[i], msgs[i], last = drainWSCounts(t, c)
+		if last != exitMsg {
+			t.Fatalf("query %q: última mensagem = %q", query, last)
+		}
+	}
+	if !strings.Contains(outs[0], "linha399") || outs[1] != outs[0] {
+		t.Fatalf("bytes diferem: sem batch %d, com batch %d", len(outs[0]), len(outs[1]))
+	}
+	if msgs[1] >= msgs[0] {
+		t.Fatalf("mensagens binárias: sem batch %d, com batch %d (queria menos)", msgs[0], msgs[1])
+	}
+	t.Logf("mensagens binárias: sem batch %d, com batch %d", msgs[0], msgs[1])
+}
