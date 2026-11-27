@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ErrorLine } from './card/shared'
 import { useOverview, useProjects, useSettings } from '../api/queries'
 import { forCard, isLive, useTerminals, type TerminalInfo } from '../api/terminals'
+import { terminalOfSession } from './terminals/sessionMatch'
 import { get, patch, post } from '../api/client'
 import type { ActiveSession, AgentSpend, Alert, Card, DomainEvent, InstallReport, SessionWithUsage, Total } from '../api/types'
 import { useWithProject } from '../app/project'
@@ -291,7 +292,7 @@ function eventText(e: DomainEvent): string {
 // agente); sem pid igual, um terminal vivo do card que não seja de outra sessão.
 function terminalFor(s: ActiveSession, terminals: TerminalInfo[] | undefined, sessionPids: Set<number>): string | undefined {
   const live = (terminals ?? []).filter(isLive)
-  const own = s.pid ? live.find((t) => t.pid === s.pid) : undefined
+  const own = terminalOfSession(s, live)
   if (own) return own.id
   if (!s.card) return undefined
   return forCard(live, s.card.key).find((t) => !sessionPids.has(t.pid))?.id
