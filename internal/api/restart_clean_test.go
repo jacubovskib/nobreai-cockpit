@@ -234,3 +234,33 @@ func TestRestartCleanInvalidModeChangesNothing(t *testing.T) {
 		})
 	}
 }
+
+// Gerenciador de terminais no limite: recusa antes de desligar o card, com o
+// mesmo erro da abertura e sem o sufixo de card pausado.
+func TestRestartCleanBackgroundAtTerminalLimitChangesNothing(t *testing.T) {
+	proj := realTempDir(t)
+	mgr := pty.NewManager(pty.Options{MaxLive: 1})
+	t.Cleanup(mgr.Close)
+	if _, err := mgr.Start(pty.StartSpec{Argv: []string{"cat"}}); err != nil {
+		t.Fatal(err)
+	}
+	a, l := continueAPIWith(t, &fakeGit{branch: "main", clean: true}, mgr, bgClaude(t))
+	p, _ := a.st.CreateProject("real", proj)
+	if _, err := a.st.CreateCard(domain.Card{Title: "bg", ProjectID: p.ID}); err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, "NAC-2")
+	before, _ := a.st.GetCard("NAC-2")
+	got := restartErr(t, a, "claude:s", http.StatusConflict, map[string]any{"where_stopped": "aqui", "mode": "background"})
+	if got != pty.ErrTooMany.Error() {
+		t.Fatalf("erro = %q", got)
+	}
+	s, _ := a.st.GetSession("claude:s")
+	c, _ := a.st.GetCard("NAC-2")
+	if s.CardID == nil || c.Column != before.Column || len(l.calls) != 0 {
+		t.Fatalf("mudou algo: card %v coluna %s (antes %s) lançamentos %d", s.CardID, c.Column, before.Column, len(l.calls))
+	}
+	if n := len(mgr.List()); n != 1 {
+		t.Fatalf("terminais = %d", n)
+	}
+}

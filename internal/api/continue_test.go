@@ -361,6 +361,33 @@ func bgClaude(t *testing.T) string {
 	return p
 }
 
+// No limite de terminais o Continuar em segundo plano recusa antes do
+// checkout, com o mesmo erro do Start.
+func TestContinueBackgroundAtTerminalLimit(t *testing.T) {
+	proj := realTempDir(t)
+	g := &fakeGit{branch: "main", clean: true}
+	mgr := pty.NewManager(pty.Options{MaxLive: 1})
+	t.Cleanup(mgr.Close)
+	if _, err := mgr.Start(pty.StartSpec{Argv: []string{"cat"}}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := continueAPIWith(t, g, mgr, bgClaude(t))
+	p, _ := a.st.CreateProject("real", proj)
+	if _, err := a.st.CreateCard(domain.Card{Title: "bg", ProjectID: p.ID, Branch: "feat/y"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/cards/NAC-2/continue", map[string]any{"agent": "claude", "mode": "background", "prompt_slug": "nenhum"}, 0)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[map[string]string](t, rec)["error"]; got != pty.ErrTooMany.Error() {
+		t.Fatalf("erro = %q", got)
+	}
+	if len(g.checkouts) != 0 {
+		t.Fatalf("checkouts = %v", g.checkouts)
+	}
+}
+
 func TestContinueBackgroundStartsTerminal(t *testing.T) {
 	proj := realTempDir(t)
 	g := &fakeGit{branch: "main", clean: true}

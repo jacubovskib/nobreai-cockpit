@@ -146,8 +146,8 @@ func (s *server) continueKey(w http.ResponseWriter, key string, in continueInput
 }
 
 // prepareContinue faz as validações do Continuar que não têm efeito colateral
-// (agente, modo, terminal, projeto, sessão viva se checkLive, prompt, argv e
-// árvore suja). Em erro já respondeu e devolve false.
+// (agente, modo, terminal, projeto, sessão viva se checkLive, prompt, argv,
+// árvore suja e vaga no gerenciador de terminais). Em erro já respondeu e devolve false.
 func (s *server) prepareContinue(w http.ResponseWriter, key string, in continueInput, checkLive bool) (continuePlan, bool) {
 	var none continuePlan
 	if in.Agent == "" {
@@ -257,6 +257,13 @@ func (s *server) prepareContinue(w http.ResponseWriter, key string, in continueI
 	if g := s.deps.Git; !inWorktree && !skipCheckout && g != nil && c.Branch != "" &&
 		g.Branch(p.Path) != c.Branch && !g.Clean(p.Path) {
 		writeError(w, http.StatusConflict, msgDirtyTree)
+		return none, false
+	}
+	// Gerenciador cheio: recusa já com o erro do Start, antes do checkout (e,
+	// no recomeço, antes de desligar o card). Não fecha a corrida com outro
+	// Start, mas tira o caso comum.
+	if background && s.deps.Terminals.Full() {
+		writeError(w, http.StatusConflict, pty.ErrTooMany.Error())
 		return none, false
 	}
 	return continuePlan{in: in, c: c, p: p, background: background, argv: argv, dir: dir,

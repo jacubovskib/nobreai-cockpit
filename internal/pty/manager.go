@@ -136,13 +136,7 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 		return nil, ErrEnded
 	}
 	m.pruneLocked()
-	live := 0
-	for _, t := range m.terms {
-		if !t.ended() {
-			live++
-		}
-	}
-	if live >= m.opts.MaxLive {
+	if m.fullLocked() {
 		return nil, ErrTooMany
 	}
 	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
@@ -184,6 +178,25 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	m.wg.Add(1)
 	go func() { defer m.wg.Done(); t.run() }()
 	return t, nil
+}
+
+// Full diz se um Start agora recusaria por limite (ErrTooMany). Só consulta:
+// outro Start pode ocupar a vaga entre esta checagem e o seu.
+func (m *Manager) Full() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.fullLocked()
+}
+
+// fullLocked conta os terminais vivos contra o limite; exige mu.
+func (m *Manager) fullLocked() bool {
+	live := 0
+	for _, t := range m.terms {
+		if !t.ended() {
+			live++
+		}
+	}
+	return live >= m.opts.MaxLive
 }
 
 // pollable recria o master em modo não bloqueante: assim Close interrompe o
