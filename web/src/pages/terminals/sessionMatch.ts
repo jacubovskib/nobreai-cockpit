@@ -5,6 +5,8 @@ export interface SessionRef {
   id: string
   pid: number
   started_at: string
+  // last_event_at: última atividade; ausente ou vazio vale o started_at.
+  last_event_at?: string
   ended_at: string | null
   pid_dead_at: string | null
 }
@@ -22,15 +24,23 @@ export function terminalOfSession(s: Pick<SessionRef, 'pid'>, liveTerminals: rea
 }
 
 const startedMs = (s: SessionRef) => Date.parse(s.started_at) || 0
+const activityMs = (s: SessionRef) => (s.last_event_at && Date.parse(s.last_event_at)) || startedMs(s)
+
+// newer: s vence best pela última atividade, depois pelo início; empate fica com s.
+const newer = (s: SessionRef, best: SessionRef) =>
+  activityMs(s) > activityMs(best) || (activityMs(s) === activityMs(best) && startedMs(s) >= startedMs(best))
 
 // sessionOfTerminal: a sessão viva de mesmo pid do terminal vivo; com mais de
-// uma, a de started_at mais recente (empate: a última da lista). Sem atalho por card.
+// uma, a de last_event_at mais recente, depois a de started_at mais recente
+// (empate: a última da lista), como o daemon decide a sessão atual do
+// processo (SessionByPID). Uma conversa reaberta mantém o started_at antigo,
+// por isso o início sozinho não basta. Sem atalho por card.
 export function sessionOfTerminal<S extends SessionRef>(t: TerminalInfo, sessions: readonly S[]): S | undefined {
   if (!isLive(t)) return undefined
   let best: S | undefined
   for (const s of sessions) {
     if (!sessionAlive(s) || !samePid(t.pid, s.pid)) continue
-    if (!best || startedMs(s) >= startedMs(best)) best = s
+    if (!best || newer(s, best)) best = s
   }
   return best
 }

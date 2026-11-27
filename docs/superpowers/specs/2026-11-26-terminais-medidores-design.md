@@ -50,7 +50,7 @@ Na grade o usuário acompanha vários agentes lado a lado, mas não vê quanto d
 ### Ligação terminal → sessão
 
 - Módulo novo no web, usado pela grade e pela Sala de Controle (o `terminalFor` de lá passa a usar o mesmo casamento por pid; o comportamento da Sala de Controle não muda).
-- Regra: a sessão do terminal é a sessão **viva** (sem `ended_at` e sem `pid_dead_at`) com `pid` igual ao do terminal. Havendo mais de uma (um `/clear` ou uma retomada cria sessão nova no mesmo processo), vale a de início mais recente.
+- Regra: a sessão do terminal é a sessão **viva** (sem `ended_at` e sem `pid_dead_at`) com `pid` igual ao do terminal. Havendo mais de uma (um `/clear` cria sessão nova no mesmo processo; uma conversa retomada pode reabrir uma sessão antiga, que mantém o `started_at` de antes), vale a de `last_event_at` mais recente, depois a de `started_at` mais recente, depois a última da lista; `last_event_at` ausente ou vazio vale o `started_at`. É a mesma ordem com que o daemon decide a sessão atual do processo (`SessionByPID`).
 - **Sem o atalho por `card_key`** que o `terminalFor` tem: na grade ele mostraria no tile antigo o contexto da sessão nova.
 - Terminal encerrado, ou sem sessão casada: sem medidor e sem "Limpar e continuar".
 - **O card do tile passa a ser o da sessão casada**, quando houver; sem sessão casada, vale o `card_key` do terminal, como hoje. Isso corrige o "sem card" de quem fez `nobre start` depois de abrir o terminal. As abas de projeto seguem a mesma regra (o projeto do card da sessão).

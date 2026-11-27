@@ -39,6 +39,33 @@ describe('casamento terminal → sessão', () => {
     expect(sessionOfTerminal(term({ id: 't1', pid: 100 }), [a, b])?.id).toBe('b')
   })
 
+  it('sessão reaberta, de início mais antigo e atividade mais recente, vence', () => {
+    // O processo voltou a uma conversa antiga (reaberta: o started_at fica o de antes).
+    const abandonada = sess({ id: 'abandonada', pid: 100, started_at: '2026-01-01T10:00:00Z', last_event_at: '2026-01-01T10:30:00Z' })
+    const reaberta = sess({ id: 'reaberta', pid: 100, started_at: '2025-12-31T09:00:00Z', last_event_at: '2026-01-01T11:00:00Z' })
+    expect(sessionOfTerminal(term({ id: 't1', pid: 100 }), [abandonada, reaberta])?.id).toBe('reaberta')
+    expect(sessionOfTerminal(term({ id: 't1', pid: 100 }), [reaberta, abandonada])?.id).toBe('reaberta')
+  })
+
+  it('empate de last_event_at: a de started_at mais recente', () => {
+    const velha = sess({ id: 'velha', pid: 100, started_at: '2026-01-01T00:00:00Z', last_event_at: '2026-01-01T05:00:00Z' })
+    const nova = sess({ id: 'nova', pid: 100, started_at: '2026-01-01T02:00:00Z', last_event_at: '2026-01-01T05:00:00Z' })
+    expect(sessionOfTerminal(term({ id: 't1', pid: 100 }), [nova, velha])?.id).toBe('nova')
+    expect(sessionOfTerminal(term({ id: 't1', pid: 100 }), [velha, nova])?.id).toBe('nova')
+  })
+
+  it('last_event_at ausente ou vazio vale o started_at da própria sessão', () => {
+    // Sem atividade registrada, a sessão recém-aberta conta pelo início: vence a de atividade mais antiga.
+    const antiga = sess({ id: 'antiga', pid: 100, started_at: '2026-01-01T00:00:00Z', last_event_at: '2026-01-01T01:00:00Z' })
+    const semData = sess({ id: 'sem-data', pid: 100, started_at: '2026-01-01T02:00:00Z' })
+    const vazia = sess({ id: 'vazia', pid: 100, started_at: '2026-01-01T02:00:00Z', last_event_at: '' })
+    expect(sessionOfTerminal(term({ id: 't1', pid: 100 }), [semData, antiga])?.id).toBe('sem-data')
+    expect(sessionOfTerminal(term({ id: 't1', pid: 100 }), [vazia, antiga])?.id).toBe('vazia')
+    // E perde para uma atividade mais recente que o próprio início.
+    const ativa = sess({ id: 'ativa', pid: 100, started_at: '2026-01-01T00:00:00Z', last_event_at: '2026-01-01T03:00:00Z' })
+    expect(sessionOfTerminal(term({ id: 't1', pid: 100 }), [ativa, semData])?.id).toBe('ativa')
+  })
+
   it('pid 0 na sessão ou no terminal nunca casa', () => {
     expect(sessionOfTerminal(term({ id: 't1', pid: 100 }), [sess({ id: 's1', pid: 0 })])).toBeUndefined()
     expect(sessionOfTerminal(term({ id: 't1', pid: 0 }), [sess({ id: 's1', pid: 0 })])).toBeUndefined()
