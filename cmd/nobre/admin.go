@@ -151,7 +151,8 @@ func (c *cli) project(args []string) error {
 // Os repositórios vão sem nome: o daemon usa o da pasta e, se ele já existe no
 // grupo, um nome distinto, que a saída mostra; o projeto solto cujo nome já
 // existe no grupo não é ligado e é citado.
-// Num grupo já cadastrado, só acrescenta os que faltam. Com semFilhos,
+// Num grupo já cadastrado, só acrescenta os repositórios novos: um projeto
+// solto dentro da pasta não é religado, só citado. Com semFilhos,
 // cadastra só o grupo e lista os repositórios como sugestões. Pasta sem
 // repositórios continua recusada.
 func (c *cli) addGroupFolder(name, path string, semFilhos bool) error {
@@ -181,6 +182,11 @@ func (c *cli) addGroupFolder(name, path string, semFilhos bool) error {
 			out = append(out, fmt.Sprintf("%s (%s)", x.Rel, x.Blocked))
 		case reg != nil && reg.ParentID != nil && *reg.ParentID == groupID:
 			// já é filho deste grupo
+		case reg != nil && scan.Registered != nil:
+			// Projeto solto dentro de um grupo que já existia: pode ter sido
+			// desligado pelo usuário (project pai --nenhum). Religar trocaria a
+			// captura dele pela do grupo; só quem pede (project pai) religa.
+			out = append(out, fmt.Sprintf("%s (projeto solto: ligue com nobre project pai)", x.Rel))
 		default:
 			if reg == nil {
 				open = append(open, fmt.Sprintf("  %s  (%s)\n", x.Rel, x.Source))

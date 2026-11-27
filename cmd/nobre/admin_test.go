@@ -274,15 +274,20 @@ func TestProjectAddGroupFolderRegistersRepos(t *testing.T) {
 	}
 }
 
-// De novo num grupo já cadastrado: só os repositórios novos entram.
+// De novo num grupo já cadastrado: só os repositórios novos entram. O projeto
+// solto dentro da pasta (o usuário pode tê-lo desligado do grupo) não é
+// religado nem tem a captura trocada: é só citado.
 func TestProjectAddGroupFolderAgainAddsOnlyNewRepos(t *testing.T) {
 	var batch string
 	r := runProjectCLI(t, groupServer(t, true, &batch), "/w/grupo", testRepos, "project", "add")
 	want := "Grupo grupo já cadastrado: /w/grupo\n" +
-		"Repositórios ligados ao grupo: a, b\n" +
-		"Fora do grupo: d (pertence a outro)\n"
+		"Repositórios ligados ao grupo: a\n" +
+		"Fora do grupo: b (projeto solto: ligue com nobre project pai), d (pertence a outro)\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("%+v\nquer %q", r, want)
+	}
+	if strings.Contains(batch, "/w/grupo/b") {
+		t.Fatalf("religou o projeto solto: %s", batch)
 	}
 }
 
