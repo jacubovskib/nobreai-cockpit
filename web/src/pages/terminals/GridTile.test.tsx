@@ -202,3 +202,82 @@ describe('GridTile', () => {
     expect(section.style.gridColumn).toBe('span 1')
   })
 })
+
+describe('contexto no tile', () => {
+  const ctx = { sessionId: 's1', ctxPct: 62, ctxTokens: 124000, ctxWindow: 200000 }
+  const none = () => {
+    expect(screen.queryByTestId('ctx-chip')).toBeNull()
+    expect(screen.queryByTestId('ctx-strip')).toBeNull()
+    expect(screen.queryByTestId('ctx-warning')).toBeNull()
+  }
+
+  it('sem as props novas não mostra nada do medidor', () => {
+    setup()
+    none()
+  })
+
+  it('detalhado mostra a faixa com Limpar, sem chip nem aviso', () => {
+    setup(ctx)
+    expect(screen.getByTestId('ctx-strip')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Limpar' })).toBeInTheDocument()
+    expect(screen.queryByTestId('ctx-chip')).toBeNull()
+    expect(screen.queryByTestId('ctx-warning')).toBeNull()
+  })
+
+  it('simples mostra o chip antes do estado, sem faixa', () => {
+    setup({ ...ctx, simple: true })
+    const chip = screen.getByTestId('ctx-chip')
+    const state = screen.getByText('conectando')
+    expect(chip.compareDocumentPosition(state) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByTestId('ctx-strip')).toBeNull()
+  })
+
+  it.each([false, true])('aviso nos dois modos (simples=%s)', (simple) => {
+    const { unmount } = setup({ ...ctx, simple, ctxPct: 84 })
+    expect(screen.getByTestId('ctx-warning')).toHaveAttribute('data-level', 'warn')
+    unmount()
+    setup({ ...ctx, simple, ctxPct: 92 })
+    expect(screen.getByTestId('ctx-warning')).toHaveAttribute('data-level', 'crit')
+  })
+
+  it('limite 95 com 92% não avisa', () => {
+    setup({ ...ctx, ctxPct: 92, ctxLimit: 95 })
+    expect(screen.queryByTestId('ctx-warning')).toBeNull()
+  })
+
+  it('sessão sem card: faixa sem Limpar, sem aviso, e o cabeçalho diz sem card', () => {
+    setup({ ...ctx, cardKey: '', ctxPct: 84, t: term({ card_key: 'NAC-7' }) })
+    expect(screen.getByTestId('ctx-strip')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Limpar' })).toBeNull()
+    expect(screen.queryByTestId('ctx-warning')).toBeNull()
+    expect(screen.getByText('sem card')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'NAC-7' })).toBeNull()
+  })
+
+  it('sem sessão: sem Limpar e sem aviso', () => {
+    setup({ ...ctx, sessionId: '', ctxPct: 84 })
+    expect(screen.queryByRole('button', { name: 'Limpar' })).toBeNull()
+    expect(screen.queryByTestId('ctx-warning')).toBeNull()
+  })
+
+  it('cardKey vale no lugar do card do terminal', () => {
+    setup({ ...ctx, cardKey: 'NAC-9', t: term({ card_key: '' }) })
+    expect(screen.getByRole('link', { name: 'NAC-9' })).toHaveAttribute('href', '/cards/NAC-9')
+    expect(screen.getByLabelText('Terminal Claude Code do card NAC-9')).toBeInTheDocument()
+  })
+
+  it('terminal encerrado não mostra o medidor', () => {
+    setup({ ...ctx, ctxPct: 92, t: term({ ended_at: new Date().toISOString(), exit_code: 0 }) })
+    none()
+  })
+
+  it('sem dado (ctxPct nulo) não mostra o medidor', () => {
+    setup({ ...ctx, ctxPct: null })
+    none()
+  })
+
+  it('tile em pausa também mostra a faixa', () => {
+    setup({ ...ctx, live: false })
+    expect(screen.getByTestId('ctx-strip')).toBeInTheDocument()
+  })
+})
