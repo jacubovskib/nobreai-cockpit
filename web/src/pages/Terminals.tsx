@@ -4,7 +4,9 @@ import { isLive, useTerminals, type TerminalInfo } from '../api/terminals'
 import { useCards, useContextLive, useOverview, useProjects, useSettings } from '../api/queries'
 import type { ActiveSession, CardSummary, LiveContextSummary, Project } from '../api/types'
 import { useProjectFilter } from '../app/project'
+import { agentInfo } from '../ui/agents'
 import { GridTile } from './terminals/GridTile'
+import { Palette } from './terminals/Palette'
 import { PlanStrip } from './terminals/PlanStrip'
 import { ctxLimit, tileMeter } from './terminals/contextLevel'
 import {
@@ -165,6 +167,8 @@ export function Terminals() {
   const [layout, dispatch] = useReducer(reducer, undefined, loadLayout)
   const [filter, setFilter] = useState<StateFilter>('all')
   const [focused, setFocused] = useState<string | null>(null)
+  // Paleta Ctrl+K: estado só da página; nada que vá para o TileSlot depende dele.
+  const [palette, setPalette] = useState(false)
   const [mark, setMark] = useState<{ id: string; after: boolean } | null>(null)
   // lastUsed e woken ficam em ref: lidos no render, mudam junto com o foco.
   const lastUsed = useRef<Record<string, number>>({})
@@ -300,6 +304,24 @@ export function Terminals() {
     el.scrollIntoView?.({ block: 'nearest' })
   })
 
+  // Ctrl+K: um listener só. Com o foco no terminal em "Interagir" a tecla é do
+  // agente e passa direto.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) return
+      if (document.activeElement?.closest('[data-interactive="1"]')) return
+      e.preventDefault()
+      setPalette(true)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  const closePalette = useCallback(() => setPalette(false), [])
+  const target = focused === null ? undefined : list.find((t) => t.id === focused)
+  const targetPlaced = target ? placedById.get(target.id) : undefined
+  const targetPid = targetPlaced ? targetPlaced.subId ?? targetPlaced.rootId : null
+  const targetCard = target ? meters.get(target.id)?.cardKey ?? '' : ''
+
   const current = list.find((t) => t.id === selected)
 
   return (
@@ -322,6 +344,7 @@ export function Terminals() {
               <button type="button" aria-pressed={filter === 'live'} style={seg(filter === 'live')} onClick={() => setFilter('live')}>Ao vivo</button>
             </div>
             <button type="button" style={seg(false)} onClick={() => dispatch({ type: 'reset', newestFirst: list.map((t) => t.id) })}>Restaurar layout</button>
+            <button type="button" style={seg(false)} onClick={() => setPalette(true)}>Buscar <kbd>Ctrl K</kbd></button>
           </>
         )}
       </div>
@@ -393,6 +416,15 @@ export function Terminals() {
           )
         })}
       </div>
+      {palette && (
+        <Palette
+          targetId={target ? target.id : null}
+          targetLabel={target ? agentInfo(target.agent).name + (targetCard ? ' · ' + targetCard : '') : ''}
+          agent={target ? target.agent : ''}
+          project={targetPid === null ? null : projectById.get(targetPid) ?? null}
+          onClose={closePalette}
+        />
+      )}
     </div>
   )
 }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nobretech/nobreai-cockpit/internal/agents"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +15,8 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nobretech/nobreai-cockpit/internal/agents"
+	"github.com/nobretech/nobreai-cockpit/internal/domain"
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
 	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
@@ -33,6 +34,7 @@ type termEnv struct {
 	srv *httptest.Server
 	mgr *pty.Manager
 	hub *Hub
+	st  *store.Store
 }
 
 func newTermEnv(t *testing.T, bin string) *termEnv {
@@ -54,7 +56,7 @@ func newTermEnvOpts(t *testing.T, bin string, opts pty.Options) *termEnv {
 	srv := httptest.NewServer(New(st, Deps{Hub: hub, Terminals: mgr,
 		Agents: agents.New(&binAdapter{bin: bin})}))
 	t.Cleanup(srv.Close)
-	return &termEnv{srv: srv, mgr: mgr, hub: hub}
+	return &termEnv{srv: srv, mgr: mgr, hub: hub, st: st}
 }
 
 func (e *termEnv) create(t *testing.T, body map[string]any) (*http.Response, pty.Info) {
@@ -756,4 +758,95 @@ func TestTerminalWSBatchCoalescesBurst(t *testing.T) {
 		t.Fatalf("mensagens binárias: sem batch %d, com batch %d (queria menos)", msgs[0], msgs[1])
 	}
 	t.Logf("mensagens binárias: sem batch %d, com batch %d", msgs[0], msgs[1])
+}
+
+func (e *termEnv) postInput(t *testing.T, id string, body any, ct string) int {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", e.srv.URL+"/api/terminals/"+id+"/input", bytes.NewReader(b))
+	if ct != "" {
+		req.Header.Set("Content-Type", ct)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+func TestTerminalInputWrites(t *testing.T) {
+	e := newTermEnvOpts(t, "/bin/cat", pty.Options{PasteSettle: time.Millisecond})
+	_, info := e.create(t, map[string]any{"args": []string{"-v"}, "cols": 90, "rows": 25})
+	c, _, err := e.dial(t, info.ID, "?readonly=1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// O ESC do texto sai (o cat -v mostraria ^[); os marcadores do Submit ficam.
+	if code := e.postInput(t, info.ID, map[string]any{"text": "oi\x1b[31m\r\nmundo\x1b\n"}, "application/json"); code != http.StatusNoContent {
+		t.Fatalf("status = %d", code)
+	}
+	out, _ := readUntil(t, c, func(o string) bool { return strings.Contains(o, "mundo^[[201~") })
+	if !strings.Contains(out, "^[[200~oi[31m") || !strings.Contains(out, "mundo^[[201~") || strings.Contains(out, "mundo^[^[") {
+		t.Fatalf("saída = %q", out)
+	}
+	if got := mustTerm(t, e, info.ID).Info(); got.Cols != 90 || got.Rows != 25 {
+		t.Fatalf("tamanho mudou: %dx%d", got.Cols, got.Rows)
+	}
+}
+
+func TestTerminalInputValidation(t *testing.T) {
+	e := newTermEnvOpts(t, "/bin/cat", pty.Options{PasteSettle: time.Millisecond})
+	_, info := e.create(t, map[string]any{"args": []string{"-v"}})
+	js := "application/json"
+	if code := e.postInput(t, info.ID, map[string]any{"text": "\n\n"}, js); code != http.StatusBadRequest {
+		t.Errorf("vazio: %d", code)
+	}
+	if code := e.postInput(t, "nao-existe", map[string]any{"text": "x"}, js); code != http.StatusNotFound {
+		t.Errorf("inexistente: %d", code)
+	}
+	if code := e.postInput(t, info.ID, map[string]any{"text": strings.Repeat("a", pty.MaxInput+1)}, js); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("grande: %d", code)
+	}
+	if code := e.postInput(t, info.ID, map[string]any{"text": "x"}, ""); code != http.StatusUnsupportedMediaType {
+		t.Errorf("sem content-type: %d", code)
+	}
+	tm := mustTerm(t, e, info.ID)
+	if err := e.mgr.Kill(info.ID); err != nil {
+		t.Fatal(err)
+	}
+	<-tm.Done()
+	if code := e.postInput(t, info.ID, map[string]any{"text": "x"}, js); code != http.StatusConflict {
+		t.Errorf("encerrado: %d", code)
+	}
+}
+
+func TestTerminalInputMarksPromptUsed(t *testing.T) {
+	e := newTermEnvOpts(t, "/bin/cat", pty.Options{PasteSettle: time.Millisecond})
+	if _, err := e.st.CreatePrompt(domain.Prompt{Name: "Revisar", Slug: "revisar", Body: "revise", Agents: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	_, info := e.create(t, map[string]any{"args": []string{"-v"}})
+	js := "application/json"
+	uses := func() int {
+		p, err := e.st.GetPrompt("revisar")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Uses
+	}
+	if code := e.postInput(t, info.ID, map[string]any{"text": "oi", "prompt": "revisar"}, js); code != http.StatusNoContent || uses() != 1 {
+		t.Fatalf("status=%d uses=%d", code, uses())
+	}
+	if code := e.postInput(t, info.ID, map[string]any{"text": "oi", "prompt": "fantasma"}, js); code != http.StatusNoContent {
+		t.Fatalf("slug inexistente: %d", code)
+	}
+	tm := mustTerm(t, e, info.ID)
+	if err := e.mgr.Kill(info.ID); err != nil {
+		t.Fatal(err)
+	}
+	<-tm.Done()
+	if code := e.postInput(t, info.ID, map[string]any{"text": "oi", "prompt": "revisar"}, js); code != http.StatusConflict || uses() != 1 {
+		t.Fatalf("encerrado: status=%d uses=%d", code, uses())
+	}
 }

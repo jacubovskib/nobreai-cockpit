@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nobretech/nobreai-cockpit/internal/pty"
+	"github.com/nobretech/nobreai-cockpit/internal/store"
 )
 
 const (
@@ -46,6 +47,7 @@ func (s *server) terminalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/terminals", guard(s.createTerminal))
 	mux.HandleFunc("DELETE /api/terminals/{id}", guard(s.deleteTerminal))
 	mux.HandleFunc("GET /api/terminals/{id}/ws", guard(s.terminalWS))
+	mux.HandleFunc("POST /api/terminals/{id}/input", guard(s.terminalInput))
 }
 
 func (s *server) listTerminals(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +190,53 @@ func (s *server) deleteTerminal(w http.ResponseWriter, r *http.Request) {
 	if err := s.deps.Terminals.Kill(r.PathValue("id")); err != nil {
 		writeError(w, http.StatusNotFound, msgTerminalMissing)
 		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// terminalInput: POST /api/terminals/{id}/input digita o texto no agente como
+// colagem marcada e envia Enter (a entrada por HTTP, além do binário do
+// WebSocket). Não usa r.Context(): a sequência não é interrompida no meio se o
+// cliente desistir. Nunca redimensiona o PTY.
+func (s *server) terminalInput(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Text   string `json:"text"`
+		Prompt string `json:"prompt"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	text := pty.CleanInput(in.Text)
+	if text == "" {
+		writeError(w, http.StatusBadRequest, "texto vazio")
+		return
+	}
+	if len(text) > pty.MaxInput {
+		writeError(w, http.StatusRequestEntityTooLarge, "texto grande demais")
+		return
+	}
+	tm, ok := s.deps.Terminals.Get(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, msgTerminalMissing)
+		return
+	}
+	switch err := tm.Submit(text); {
+	case errors.Is(err, pty.ErrEnded):
+		writeError(w, http.StatusConflict, "terminal encerrado")
+		return
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		writeError(w, http.StatusGatewayTimeout, "o agente não leu a entrada")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "não consegui enviar a entrada: "+err.Error())
+		return
+	}
+	if in.Prompt != "" {
+		if err := s.st.MarkPromptUsed(in.Prompt, s.now()); err == nil {
+			s.publish("prompts")
+		} else if !errors.Is(err, store.ErrNotFound) {
+			log.Printf("terminal %s: contar uso do prompt %q: %v", tm.Info().ID, in.Prompt, err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

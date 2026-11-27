@@ -12,6 +12,8 @@ import { clampH, snapSpan, type Cols, type TileSize } from './gridModel'
 import { CTX_DEFAULT_LIMIT, ctxLevel } from './contextLevel'
 import { CtxChip, CtxStrip, CtxWarning } from './TileContext'
 import { RestartPanel, overlay } from './TileRestart'
+import { TileInput } from './TileInput'
+import { dropDraft } from './inputDrafts'
 
 export interface GridTileProps {
   t: TerminalInfo; project: Project | null; projects: Project[]
@@ -73,6 +75,8 @@ function GridTileView(p: GridTileProps) {
     setRo(true); setStatus('conectando'); setMenu(false); setConfirming(false)
   }, [live])
   useEffect(() => { if (!live || ended) { setMenu(false); setConfirming(false) } }, [live, ended])
+  // Encerrado, o rascunho da barra não tem mais para onde ir.
+  useEffect(() => { if (ended) dropDraft(t.id) }, [ended, t.id])
 
   // Posição do ponteiro na metade direita do tile = soltar depois dele.
   const isAfter = (clientX: number) => {
@@ -218,7 +222,7 @@ function GridTileView(p: GridTileProps) {
       )}
       <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', position: 'relative' }}>
         {live ? (
-          <div style={{ flex: 1, minWidth: 0, padding: 4 }}>
+          <div data-interactive={ro ? undefined : '1'} style={{ flex: 1, minWidth: 0, padding: 4 }}>
             <LazyTerminalView
               ref={term}
               id={t.id}
@@ -258,6 +262,9 @@ function GridTileView(p: GridTileProps) {
           </div>
         )}
       </div>
+      {live && !ended && (
+        <TileInput terminalId={t.id} agent={t.agent} agentName={agent.name} cardKey={card} project={project} run={t.origin === 'nobre run'} simple={simple} />
+      )}
       {hint && (
         <span role="status" style={{ position: 'absolute', right: 24, bottom: 8, padding: '2px 8px', borderRadius: 6, background: '#000c', fontSize: 12, pointerEvents: 'none' }}>{hint}</span>
       )}
