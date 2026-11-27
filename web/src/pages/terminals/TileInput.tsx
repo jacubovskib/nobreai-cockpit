@@ -65,6 +65,8 @@ function TileInputView(p: TileInputProps) {
         const start = el?.selectionStart ?? cur.length
         const end = el?.selectionEnd ?? cur.length
         pickSeq.current++
+        // Inserir sobre o texto todo selecionado troca o prompt escolhido.
+        if (slug.current !== '' && start === 0 && end === cur.length) { slug.current = ''; setPreview(null) }
         const r = insertAt(cur, start, end, piece)
         caret.current = r.caret
         setText(r.text)

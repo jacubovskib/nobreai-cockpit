@@ -425,6 +425,33 @@ describe('TileInput', () => {
       await waitFor(() => expect(bodies(fn)).toEqual([{ text: 'Texto de alfa NAC-7 e mais isto', prompt: 'alfa' }]))
     })
 
+    it('escolher, selecionar tudo e inserir um card pela paleta esquece o slug', async () => {
+      const fn = mockApi()
+      setup()
+      type('#')
+      await waitFor(() => expect(opts()).toHaveLength(2))
+      fireEvent.click(opts()[0])
+      await waitFor(() => expect(box()).toHaveValue('Texto de alfa NAC-7'))
+      box().setSelectionRange(0, box().value.length)
+      act(() => inputFor('t1')!.insert('NAC-9 · Outro'))
+      expect(box()).toHaveValue('NAC-9 · Outro')
+      expect(screen.queryByText(/^Prévia:/)).toBeNull()
+      fireEvent.keyDown(box(), { key: 'Enter' })
+      await waitFor(() => expect(bodies(fn)).toEqual([{ text: 'NAC-9 · Outro', prompt: '' }]))
+    })
+
+    it('escolher e inserir um card no fim pela paleta mantém o slug', async () => {
+      const fn = mockApi()
+      setup()
+      type('#')
+      await waitFor(() => expect(opts()).toHaveLength(2))
+      fireEvent.click(opts()[0])
+      await waitFor(() => expect(box()).toHaveValue('Texto de alfa NAC-7'))
+      act(() => inputFor('t1')!.insert(' NAC-9'))
+      fireEvent.keyDown(box(), { key: 'Enter' })
+      await waitFor(() => expect(bodies(fn)).toEqual([{ text: 'Texto de alfa NAC-7 NAC-9', prompt: 'alfa' }]))
+    })
+
     it('a lista abre por cima da barra (absoluta), sem mudar a altura do terminal', async () => {
       mockApi()
       setup()
