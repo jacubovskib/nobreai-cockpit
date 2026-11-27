@@ -48,6 +48,7 @@ function api(terms: object[], projects: object[] = [], cards: object[] = [], ext
     }
     if (url === '/api/projects') return json(projects)
     if (url === '/api/cards') return json(cards)
+    if (url === '/api/prompts' || url.startsWith('/api/memories')) return json([])
     if (url === '/api/overview') return json(overview())
     if (url === '/api/context/live') return json([])
     if (url === '/api/settings') return json({ context_warn_pcts: [60, 80] })
@@ -526,6 +527,70 @@ describe('Terminais em grade', () => {
     expect(screen.getAllByTestId('tv')).toHaveLength(2)
     expect(screen.queryByTestId('ctx-strip')).toBeNull()
     expect(screen.queryByRole('region', { name: 'Uso do plano' })).toBeNull()
+  })
+
+  it('o botão Buscar abre a paleta; Esc fecha', async () => {
+    api([info({ id: 'a' })])
+    renderAt()
+    await screen.findByText('plataforma')
+    expect(screen.queryByRole('dialog', { name: 'Buscar' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Buscar/ }))
+    const dlg = await screen.findByRole('dialog', { name: 'Buscar' })
+    fireEvent.keyDown(dlg, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Buscar' })).toBeNull()
+  })
+
+  it('Ctrl+K em window abre a paleta e impede o padrão do navegador', async () => {
+    api([info({ id: 'a' })])
+    renderAt()
+    await screen.findByText('plataforma')
+    const ev = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true })
+    act(() => { window.dispatchEvent(ev) })
+    expect(ev.defaultPrevented).toBe(true)
+    expect(await screen.findByRole('dialog', { name: 'Buscar' })).toBeInTheDocument()
+  })
+
+  it('Ctrl+K com o foco dentro de um terminal em modo Interagir não abre nem impede o padrão', async () => {
+    api([info({ id: 'a' })])
+    renderAt()
+    await screen.findByText('plataforma')
+    const wrap = document.createElement('div')
+    wrap.setAttribute('data-interactive', '1')
+    const inner = document.createElement('textarea')
+    wrap.appendChild(inner)
+    document.body.appendChild(wrap)
+    inner.focus()
+    const ev = new KeyboardEvent('keydown', { key: 'K', metaKey: true, bubbles: true, cancelable: true })
+    act(() => { inner.dispatchEvent(ev) })
+    expect(ev.defaultPrevented).toBe(false)
+    expect(screen.queryByRole('dialog', { name: 'Buscar' })).toBeNull()
+    wrap.remove()
+  })
+
+  it('abrir e fechar a paleta não redesenha os tiles', async () => {
+    api([info({ id: 'a', started_at: ago(1) }), info({ id: 'b', card_key: 'NAC-2', started_at: ago(2) })])
+    renderAt()
+    await waitFor(() => expect(screen.getAllByTestId('tv')).toHaveLength(2))
+    await settle()
+    const a = renders.a, b = renders.b
+    fireEvent.click(screen.getByRole('button', { name: /Buscar/ }))
+    await screen.findByRole('dialog', { name: 'Buscar' })
+    await settle()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: 'Buscar' })).toBeNull()
+    expect(renders.a).toBe(a)
+    expect(renders.b).toBe(b)
+  })
+
+  it('a paleta insere no terminal em foco, com o agente e o card no cabeçalho', async () => {
+    api([info({ id: 'a', agent: 'claude', card_key: 'NAC-1' })], PROJECTS)
+    renderAt()
+    await screen.findByText('plataforma')
+    fireEvent.click(within(tile('a')).getByRole('button', { name: 'Aumentar terminal' }))
+    fireEvent.click(screen.getByRole('button', { name: /Buscar/ }))
+    await screen.findByRole('dialog', { name: 'Buscar' })
+    expect(screen.getByText('Inserir em: Claude Code · NAC-1')).toBeInTheDocument()
   })
 
   it('mostra carregando', () => {
