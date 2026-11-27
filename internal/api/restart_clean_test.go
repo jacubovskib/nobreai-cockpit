@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nobretech/nobreai-cockpit/internal/domain"
+	"github.com/nobretech/nobreai-cockpit/internal/pty"
 )
 
 func restartErr(t *testing.T, a *testAPI, id string, code int, body map[string]any) string {
@@ -170,5 +171,66 @@ func TestRestartCleanEndedSessionConflict(t *testing.T) {
 	}
 	if s, _ := a.st.GetSession("claude:s"); s.CardID == nil {
 		t.Fatal("desligou apesar do erro")
+	}
+}
+
+// mode "background" abre o agente novo no gerenciador de terminais, mesmo com
+// o padrão das configurações em terminal.
+func TestRestartCleanModeBackgroundOpensOnPlatform(t *testing.T) {
+	proj := realTempDir(t)
+	mgr := pty.NewManager(pty.Options{})
+	t.Cleanup(mgr.Close)
+	a, l := continueAPIWith(t, &fakeGit{branch: "main", clean: true}, mgr, bgClaude(t))
+	p, _ := a.st.CreateProject("real", proj)
+	if _, err := a.st.CreateCard(domain.Card{Title: "bg", ProjectID: p.ID}); err != nil {
+		t.Fatal(err)
+	}
+	a.liveSession(t, "claude:s", 4242, "NAC-2")
+	rec := a.do(t, "POST", "/api/sessions/claude:s/restart-clean", map[string]any{"where_stopped": "aqui", "mode": "background"}, 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	id, _ := decode[map[string]any](t, rec)["terminal_id"].(string)
+	if id == "" {
+		t.Fatalf("faltou terminal_id: %s", rec.Body)
+	}
+	if _, ok := mgr.Get(id); !ok {
+		t.Fatal("terminal não registrado")
+	}
+	if len(l.calls) != 0 {
+		t.Fatal("modo background não deve abrir terminal externo")
+	}
+	s, _ := a.st.GetSession("claude:s")
+	c, _ := a.st.GetCard("NAC-2")
+	if s.CardID != nil || !s.Live() || c.Column != domain.Pausado {
+		t.Fatalf("card %v viva %v coluna %s", s.CardID, s.Live(), c.Column)
+	}
+}
+
+// mode inválido, ou background sem gerenciador, recusa antes de desligar o card.
+func TestRestartCleanInvalidModeChangesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mgr  *pty.Manager
+		mode string
+		code int
+		want string
+	}{
+		{"invalido", nil, "xyz", http.StatusBadRequest, "modo ainda não disponível no piloto"},
+		{"sem gerenciador", nil, "background", http.StatusServiceUnavailable, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, l := continueAPI(t, &fakeGit{branch: "feat/x", clean: true})
+			a.liveSession(t, "claude:s", 4242, "NAC-1")
+			got := restartErr(t, a, "claude:s", tc.code, map[string]any{"where_stopped": "aqui", "mode": tc.mode})
+			if tc.want != "" && !strings.Contains(got, tc.want) {
+				t.Fatalf("erro = %q", got)
+			}
+			s, _ := a.st.GetSession("claude:s")
+			c, _ := a.st.GetCard("NAC-1")
+			if s.CardID == nil || c.Column != domain.EmAndamento || len(l.calls) != 0 {
+				t.Fatalf("mudou algo: card %v coluna %s lançamentos %d", s.CardID, c.Column, len(l.calls))
+			}
+		})
 	}
 }
