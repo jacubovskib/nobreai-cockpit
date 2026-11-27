@@ -31,7 +31,9 @@ func cleanBatchPath(p string) (string, string) {
 }
 
 // batchProjects: POST /api/projects/batch cadastra o principal (se ainda não
-// existe) e os filhos de uma vez, tudo ou nada.
+// existe) e os filhos de uma vez, tudo ou nada. Num grupo, filho sem nome
+// informado cujo nome bate com outro da família não recusa o lote: entra com
+// um nome distinto ou, se já era um projeto solto, fica de fora de children.
 func (s *server) batchProjects(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		batchItem
@@ -52,11 +54,14 @@ func (s *server) batchProjects(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
+		// Sem nome informado vale o da pasta, que num grupo pode ser trocado
+		// por um distinto se já existe na família (store.ChildSpec.Auto).
 		name := strings.TrimSpace(c.Name)
-		if name == "" {
+		auto := name == ""
+		if auto {
 			name = filepath.Base(cp)
 		}
-		specs = append(specs, store.ChildSpec{Name: name, Path: cp})
+		specs = append(specs, store.ChildSpec{Name: name, Path: cp, Auto: auto})
 	}
 	ps, err := s.st.ListProjects()
 	if err != nil {

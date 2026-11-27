@@ -390,3 +390,33 @@ func TestPatchCardIntoGroupClearsBranch(t *testing.T) {
 		t.Fatalf("branch gravado = %q", got.Branch)
 	}
 }
+
+// Filhos sem nome informado num grupo (o nobre project add da pasta): nome que
+// bate com o do grupo ou com o de outro filho vira um nome distinto em vez de
+// recusar o lote; um projeto solto já cadastrado cujo nome bate fica de fora
+// (não é renomeado) e o resto entra.
+func TestBatchGroupNameClashNeverBlocks(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "a/api", "b/api", "turing", "solto")
+	if _, err := a.st.CreateProject("API", dir+"/solto"); err != nil {
+		t.Fatal(err)
+	}
+	rec := a.do(t, "POST", "/api/projects/batch", map[string]any{
+		"path": dir, "name": "turing",
+		"children": []map[string]string{{"path": dir + "/a/api"}, {"path": dir + "/b/api"}, {"path": dir + "/solto"}, {"path": dir + "/turing"}},
+	}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[batchResp](t, rec)
+	var names []string
+	for _, c := range got.Children {
+		names = append(names, c.Name)
+	}
+	if strings.Join(names, ",") != "api,b/api,turing-2" {
+		t.Fatalf("filhos = %v", names)
+	}
+	if p := a.projectAt(t, dir+"/solto"); p == nil || p.ParentID != nil || p.Name != "API" {
+		t.Fatalf("solto = %+v", p)
+	}
+}

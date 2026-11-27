@@ -18,6 +18,9 @@ var ErrFamily = errors.New("regra de sub-projeto")
 
 func familyErr(msg string) error { return fmt.Errorf("%w: %s", ErrFamily, msg) }
 
+// ErrNameTaken é a recusa de checkNameFree (também é um ErrFamily).
+var ErrNameTaken = familyErr("já existe um projeto com esse nome nesta família")
+
 // Moved diz quanto histórico mudou de projeto ao ligar um sub-projeto.
 type Moved struct {
 	Sessions int `json:"sessions"`
@@ -86,9 +89,37 @@ func checkNameFree(q querier, p domain.Project, name string) error {
 		return err
 	}
 	if taken {
-		return familyErr("já existe um projeto com esse nome nesta família")
+		return ErrNameTaken
 	}
 	return nil
+}
+
+// freeChildName escolhe o nome de um filho novo do grupo parent quando o nome
+// não foi escolhido pelo usuário: name; se já existe na família, o caminho da
+// pasta relativo ao grupo (x/api); se nem ele serve, esse caminho com sufixo
+// numerado (x/api-2, x/api-3...).
+func freeChildName(q querier, parent domain.Project, name, path string) (string, error) {
+	stem := name
+	if parent.Path != "" && inside(parent.Path, path) {
+		stem = filepath.ToSlash(strings.TrimPrefix(path, strings.TrimRight(parent.Path, "/")+"/"))
+	}
+	probe := domain.Project{ParentID: &parent.ID}
+	cands := []string{name}
+	if stem != name {
+		cands = append(cands, stem)
+	}
+	for n := 2; ; n++ {
+		for _, cand := range cands {
+			err := checkNameFree(q, probe, cand)
+			if err == nil {
+				return cand, nil
+			}
+			if !errors.Is(err, ErrNameTaken) {
+				return "", err
+			}
+		}
+		cands = []string{fmt.Sprintf("%s-%d", stem, n)}
+	}
 }
 
 // CreateGroup cria um grupo de repositórios sem pasta.
@@ -394,10 +425,13 @@ func DisplayName(p domain.Project, parent *domain.Project) string {
 	return parent.Name + " › " + p.Name
 }
 
-// ChildSpec é um sub-projeto a cadastrar ou ligar em CreateFamily.
+// ChildSpec é um sub-projeto a cadastrar ou ligar em CreateFamily. Auto diz
+// que o nome não foi escolhido pelo usuário (é o da pasta): num grupo, nome
+// que bate com outro da família não recusa o lote (ver CreateFamily).
 type ChildSpec struct {
 	Name string
 	Path string
+	Auto bool
 }
 
 func projectAtTx(q querier, path string) (*domain.Project, error) {
@@ -430,6 +464,9 @@ func insertProjectTx(q querier, name, path, kind string, capture bool, parentID 
 // cria: grupo com pasta se parent.Kind é "group", repositório senão) e liga
 // os filhos: um projeto solto já cadastrado na pasta é ligado, os demais são
 // criados. Qualquer item inválido desfaz tudo. Os filhos voltam na ordem dada.
+// Num grupo, o filho com Auto cujo nome bate com outro da família não é item
+// inválido: o novo entra com um nome distinto (freeChildName) e o projeto
+// solto já cadastrado fica de fora, sem ser renomeado nem voltar na lista.
 func (s *Store) CreateFamily(parent domain.Project, children []ChildSpec) (domain.Project, []domain.Project, Moved, error) {
 	var total Moved
 	tx, err := s.DB.Begin()
@@ -458,8 +495,14 @@ func (s *Store) CreateFamily(parent domain.Project, children []ChildSpec) (domai
 		if err != nil {
 			return domain.Project{}, nil, total, err
 		}
+		auto := c.Auto && parent.IsGroup()
 		switch {
 		case cur == nil:
+			if auto {
+				if c.Name, err = freeChildName(tx, parent, c.Name, c.Path); err != nil {
+					return domain.Project{}, nil, total, err
+				}
+			}
 			child := domain.Project{Name: c.Name, Path: c.Path, Capture: parent.Capture, ParentID: &parent.ID}
 			if err := checkAttach(tx, child, parent); err != nil {
 				return domain.Project{}, nil, total, err
@@ -490,7 +533,9 @@ func (s *Store) CreateFamily(parent domain.Project, children []ChildSpec) (domai
 			if len(sub) > 0 {
 				return domain.Project{}, nil, total, familyErr(cur.Name + " tem sub-projetos")
 			}
-			if err := checkAttach(tx, *cur, parent); err != nil {
+			if err := checkAttach(tx, *cur, parent); auto && errors.Is(err, ErrNameTaken) {
+				continue
+			} else if err != nil {
 				return domain.Project{}, nil, total, err
 			}
 			if _, err := tx.Exec(`UPDATE projects SET parent_id=?, capture=? WHERE id=?`, parent.ID, parent.Capture, cur.ID); err != nil {
