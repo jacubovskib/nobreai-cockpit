@@ -268,8 +268,9 @@ func TestProjectAddGroupFolderRegistersRepos(t *testing.T) {
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("%+v\nquer %q", r, want)
 	}
-	// Sem nome: é o daemon que escolhe (o da pasta ou, se já existe, outro).
-	if !strings.Contains(batch, `"children":[{"name":"","path":"/w/grupo/a"},{"name":"","path":"/w/grupo/b"}]`) {
+	// Sem nome e com auto_name: é o daemon que escolhe (o da pasta ou, se já
+	// existe no grupo, outro).
+	if !strings.Contains(batch, `"children":[{"name":"","path":"/w/grupo/a","auto_name":true},{"name":"","path":"/w/grupo/b","auto_name":true}]`) {
 		t.Fatalf("batch = %s", batch)
 	}
 }

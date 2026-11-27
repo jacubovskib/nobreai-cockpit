@@ -148,7 +148,7 @@ func (c *cli) project(args []string) error {
 // addGroupFolder cadastra uma pasta que não é git como grupo com pasta e liga
 // a ele os repositórios que a varredura acha dentro dela: os novos e os
 // projetos soltos; o que pertence a outro projeto fica de fora e é citado.
-// Os repositórios vão sem nome: o daemon usa o da pasta e, se ele já existe no
+// Os repositórios vão sem nome (auto_name): o daemon usa o da pasta e, se ele já existe no
 // grupo, um nome distinto, que a saída mostra; o projeto solto cujo nome já
 // existe no grupo não é ligado e é citado.
 // Num grupo já cadastrado, só acrescenta os repositórios novos: um projeto
@@ -192,7 +192,7 @@ func (c *cli) addGroupFolder(name, path string, semFilhos bool) error {
 				open = append(open, fmt.Sprintf("  %s  (%s)\n", x.Rel, x.Source))
 			}
 			if !semFilhos {
-				kids = append(kids, client.BatchChild{Path: x.Path})
+				kids = append(kids, client.BatchChild{Path: x.Path, AutoName: true})
 				sent = append(sent, x.Rel)
 			}
 		}

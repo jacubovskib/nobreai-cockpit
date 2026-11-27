@@ -384,10 +384,13 @@ type BatchResult struct {
 	Moved    Moved            `json:"moved"`
 }
 
-// BatchChild é um filho do lote: a pasta e o nome.
+// BatchChild é um filho do lote: a pasta e o nome. AutoName, sem nome, deixa
+// o daemon usar o da pasta e trocá-lo por um distinto se já existe no grupo
+// (o daemon antigo ignora o campo e recusa o lote com nome repetido).
 type BatchChild struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	AutoName bool   `json:"auto_name,omitempty"`
 }
 
 // ProjectsBatch cadastra o principal de path (grupo, se a pasta não é git; o

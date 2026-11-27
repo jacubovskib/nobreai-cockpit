@@ -15,6 +15,9 @@ import (
 type batchItem struct {
 	Path string `json:"path"`
 	Name string `json:"name"`
+	// AutoName, num filho sem nome, deixa o daemon trocar o nome da pasta por
+	// um distinto se ele já existe no grupo (só o nobre project add manda).
+	AutoName bool `json:"auto_name"`
 }
 
 // cleanBatchPath valida um caminho do lote (absoluto, fora da raiz e da home)
@@ -31,9 +34,9 @@ func cleanBatchPath(p string) (string, string) {
 }
 
 // batchProjects: POST /api/projects/batch cadastra o principal (se ainda não
-// existe) e os filhos de uma vez, tudo ou nada. Num grupo, filho sem nome
-// informado cujo nome bate com outro da família não recusa o lote: entra com
-// um nome distinto ou, se já era um projeto solto, fica de fora de children.
+// existe) e os filhos de uma vez, tudo ou nada. Num grupo, filho com auto_name
+// cujo nome bate com outro da família não recusa o lote: entra com um nome
+// distinto ou, se já era um projeto solto, fica de fora de children.
 func (s *server) batchProjects(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		batchItem
@@ -54,11 +57,9 @@ func (s *server) batchProjects(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
-		// Sem nome informado vale o da pasta, que num grupo pode ser trocado
-		// por um distinto se já existe na família (store.ChildSpec.Auto).
 		name := strings.TrimSpace(c.Name)
-		auto := name == ""
-		if auto {
+		auto := c.AutoName && name == ""
+		if name == "" {
 			name = filepath.Base(cp)
 		}
 		specs = append(specs, store.ChildSpec{Name: name, Path: cp, Auto: auto})
