@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -237,6 +238,11 @@ func groupServer(t *testing.T, registered bool, batch *string) string {
 				Children []map[string]string `json:"children"`
 			}
 			json.Unmarshal(b, &in)
+			for _, c := range in.Children {
+				if c["name"] == "" { // sem nome vale o da pasta
+					c["name"] = filepath.Base(c["path"])
+				}
+			}
 			kids, _ := json.Marshal(in.Children)
 			if registered {
 				w.WriteHeader(200)
@@ -262,7 +268,8 @@ func TestProjectAddGroupFolderRegistersRepos(t *testing.T) {
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("%+v\nquer %q", r, want)
 	}
-	if !strings.Contains(batch, `"children":[{"name":"a","path":"/w/grupo/a"},{"name":"b","path":"/w/grupo/b"}]`) {
+	// Sem nome: é o daemon que escolhe (o da pasta ou, se já existe, outro).
+	if !strings.Contains(batch, `"children":[{"name":"","path":"/w/grupo/a"},{"name":"","path":"/w/grupo/b"}]`) {
 		t.Fatalf("batch = %s", batch)
 	}
 }
@@ -291,6 +298,45 @@ func TestProjectAddGroupFolderSemFilhos(t *testing.T) {
 	}
 	if !strings.Contains(batch, `"children":[]`) {
 		t.Fatalf("batch = %s", batch)
+	}
+}
+
+// Nome repetido não impede o cadastro do grupo: a saída diz o nome que o
+// daemon deu ao repositório e cita o que ficou de fora (o projeto solto cujo
+// nome já existia no grupo).
+func TestProjectAddGroupFolderSaysRenamedAndSkipped(t *testing.T) {
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/fs/scan":
+			w.Write([]byte(`{"path":"/w/grupo","git":false,"kind":"group","name":"grupo","registered":null,"suggestions":[
+				{"path":"/w/grupo/a/api","rel":"a/api","name":"api","source":"git","registered":null,"blocked":""},
+				{"path":"/w/grupo/b/api","rel":"b/api","name":"api","source":"git","registered":null,"blocked":""},
+				{"path":"/w/grupo/grupo","rel":"grupo","name":"grupo","source":"git","registered":null,"blocked":""},
+				{"path":"/w/grupo/solto","rel":"solto","name":"solto","source":"git","registered":{"id":8,"name":"API"},"blocked":""}]}`))
+		case "/api/projects/batch":
+			w.WriteHeader(201)
+			w.Write([]byte(`{"project":{"id":1,"name":"grupo","path":"/w/grupo","kind":"group"},"children":[
+				{"id":2,"name":"api","path":"/w/grupo/a/api"},{"id":3,"name":"b/api","path":"/w/grupo/b/api"},
+				{"id":4,"name":"grupo-2","path":"/w/grupo/grupo"}],"moved":{"sessions":0,"cards":0}}`))
+		}
+	})
+	r := runProjectCLI(t, addr, "/w/grupo", testRepos, "project", "add")
+	want := "Grupo grupo cadastrado: /w/grupo\n" +
+		"Repositórios ligados ao grupo: a/api, b/api (como b/api), grupo (como grupo-2)\n" +
+		"Não ligados, já existe um projeto com esse nome no grupo: solto\n"
+	if r.code != 0 || r.stdout != want {
+		t.Fatalf("%+v\nquer %q", r, want)
+	}
+}
+
+// nobre project add <repo> com --name que já existe no grupo da pasta: o
+// projeto nasce solto e a saída diz que não foi ligado.
+func TestCLIProjectAddInsideGroupSaysNotAttached(t *testing.T) {
+	var body, paths []string
+	addr := projectServer(t, `{"id":8,"name":"api","path":"/w/api","not_attached":"Bravonix","reassigned":0}`, &body, &paths)
+	r := runProjectCLI(t, addr, "/w/api", testRepos, "project", "add", "--name", "api")
+	if r.code != 0 || !strings.Contains(r.stdout, "Não ligado ao grupo Bravonix: já existe um projeto com esse nome nele.\n") {
+		t.Fatalf("%+v", r)
 	}
 }
 

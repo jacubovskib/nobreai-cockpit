@@ -591,4 +591,19 @@ func TestStartAndCardAddSayProjectAndLinkedRepo(t *testing.T) {
 	if r := runCLI(t, addr, "", nil, "start", "x"); r.stdout != want {
 		t.Fatalf("ligado: %q", r.stdout)
 	}
+	// O nome da pasta já existia no grupo: a saída diz com que nome ficou.
+	reply = `{"key":"NAC-2","column":"backlog","project_label":"Bravonix › x/turing-back","linked_repo":"x/turing-back","linked_group":"Bravonix","linked_dir":"turing-back"}`
+	want = "Repositório turing-back cadastrado no grupo Bravonix com o nome x/turing-back (já existe turing-back no grupo).\n" +
+		"Card NAC-2 criado em Bravonix › x/turing-back, no backlog (sessão não ligada).\n"
+	if r := runCLI(t, addr, "", nil, "card", "add", "x"); r.stdout != want {
+		t.Fatalf("ligado com outro nome: %q", r.stdout)
+	}
+	// O grupo recusou o repositório: a saída diz isso e onde o card ficou.
+	reply = `{"key":"NAC-2","column":"backlog","link_refused":"novo","linked_group":"Bravonix"}`
+	want = "Repositório novo não pôde ser ligado ao grupo Bravonix: o card ficou no grupo.\n"
+	for _, args := range [][]string{{"start", "x"}, {"card", "add", "x"}} {
+		if r := runCLI(t, addr, "", nil, args...); !strings.HasPrefix(r.stdout, want) {
+			t.Fatalf("%v recusado: %q", args, r.stdout)
+		}
+	}
 }

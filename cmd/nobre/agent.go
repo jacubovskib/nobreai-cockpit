@@ -81,9 +81,16 @@ func (c *cli) commandDir() string {
 	return dir
 }
 
-// printLinked avisa do repositório que o comando cadastrou no grupo.
+// printLinked avisa do repositório que o comando cadastrou no grupo (e com
+// que nome, se o da pasta já existia lá) ou que o grupo recusou.
 func (c *cli) printLinked(card client.CreatedCard) {
-	if card.LinkedRepo != "" {
+	switch {
+	case card.LinkRefused != "":
+		fmt.Fprintf(c.out, "Repositório %s não pôde ser ligado ao grupo %s: o card ficou no grupo.\n", card.LinkRefused, card.LinkedGroup)
+	case card.LinkedDir != "":
+		fmt.Fprintf(c.out, "Repositório %s cadastrado no grupo %s com o nome %s (já existe %s no grupo).\n",
+			card.LinkedDir, card.LinkedGroup, card.LinkedRepo, card.LinkedDir)
+	case card.LinkedRepo != "":
 		fmt.Fprintf(c.out, "Repositório %s cadastrado no grupo %s.\n", card.LinkedRepo, card.LinkedGroup)
 	}
 }

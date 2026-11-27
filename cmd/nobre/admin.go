@@ -76,6 +76,9 @@ func (c *cli) project(args []string) error {
 		if p.AttachedTo != "" {
 			fmt.Fprintf(c.out, "Ligado ao grupo %s.\n", p.AttachedTo)
 		}
+		if p.NotAttached != "" {
+			fmt.Fprintf(c.out, "Não ligado ao grupo %s: já existe um projeto com esse nome nele.\n", p.NotAttached)
+		}
 		c.printMoved(p.Moved, p.Name)
 		if sg := p.Suggestions; len(sg) > 0 {
 			const max = 5
@@ -145,6 +148,9 @@ func (c *cli) project(args []string) error {
 // addGroupFolder cadastra uma pasta que não é git como grupo com pasta e liga
 // a ele os repositórios que a varredura acha dentro dela: os novos e os
 // projetos soltos; o que pertence a outro projeto fica de fora e é citado.
+// Os repositórios vão sem nome: o daemon usa o da pasta e, se ele já existe no
+// grupo, um nome distinto, que a saída mostra; o projeto solto cujo nome já
+// existe no grupo não é ligado e é citado.
 // Num grupo já cadastrado, só acrescenta os que faltam. Com semFilhos,
 // cadastra só o grupo e lista os repositórios como sugestões. Pasta sem
 // repositórios continua recusada.
@@ -168,7 +174,7 @@ func (c *cli) addGroupFolder(name, path string, semFilhos bool) error {
 		groupID = scan.Registered.ID
 	}
 	var kids []client.BatchChild
-	var linked, open, out []string
+	var sent, open, out []string
 	for _, x := range scan.Suggestions {
 		switch reg := x.Registered; {
 		case x.Blocked != "":
@@ -180,8 +186,8 @@ func (c *cli) addGroupFolder(name, path string, semFilhos bool) error {
 				open = append(open, fmt.Sprintf("  %s  (%s)\n", x.Rel, x.Source))
 			}
 			if !semFilhos {
-				kids = append(kids, client.BatchChild{Name: x.Name, Path: x.Path})
-				linked = append(linked, x.Rel)
+				kids = append(kids, client.BatchChild{Path: x.Path})
+				sent = append(sent, x.Rel)
 			}
 		}
 	}
@@ -196,8 +202,28 @@ func (c *cli) addGroupFolder(name, path string, semFilhos bool) error {
 	fmt.Fprintf(c.out, "Grupo %s %s: %s\n", res.Project.Name, state, res.Project.Path)
 	c.printMoved(res.Moved, res.Project.Name)
 	if !semFilhos {
+		// O que o daemon ligou, pelo caminho: o nome pode não ser o da pasta e
+		// o que não voltou ficou de fora.
+		names := map[string]string{}
+		for _, k := range res.Children {
+			names[k.Path] = k.Name
+		}
+		var linked, clash []string
+		for i, k := range kids {
+			switch name, ok := names[k.Path]; {
+			case !ok:
+				clash = append(clash, sent[i])
+			case name != filepath.Base(k.Path):
+				linked = append(linked, fmt.Sprintf("%s (como %s)", sent[i], name))
+			default:
+				linked = append(linked, sent[i])
+			}
+		}
 		if len(linked) > 0 {
 			fmt.Fprintf(c.out, "Repositórios ligados ao grupo: %s\n", strings.Join(linked, ", "))
+		}
+		if len(clash) > 0 {
+			fmt.Fprintf(c.out, "Não ligados, já existe um projeto com esse nome no grupo: %s\n", strings.Join(clash, ", "))
 		}
 		if len(out) > 0 {
 			fmt.Fprintf(c.out, "Fora do grupo: %s\n", strings.Join(out, ", "))

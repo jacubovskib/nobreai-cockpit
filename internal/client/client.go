@@ -224,12 +224,16 @@ func (f CardFields) body() map[string]any {
 
 // CreatedCard é o card criado por nobre start ou nobre card add. ProjectLabel
 // vem preenchido quando o projeto não é o da sessão; LinkedRepo e LinkedGroup,
-// quando o comando cadastrou o repositório no grupo.
+// quando o comando cadastrou o repositório no grupo (LinkedDir é o nome da
+// pasta, se o projeto entrou com outro nome); LinkRefused é o repositório que
+// o grupo LinkedGroup recusou (o card ficou no grupo).
 type CreatedCard struct {
 	domain.Card
 	ProjectLabel string `json:"project_label"`
 	LinkedRepo   string `json:"linked_repo"`
 	LinkedGroup  string `json:"linked_group"`
+	LinkedDir    string `json:"linked_dir"`
+	LinkRefused  string `json:"link_refused"`
 }
 
 // Start cria um card e liga a sessão a ele. cwd é a pasta onde o comando
@@ -511,6 +515,9 @@ type AddedProject struct {
 	// AttachedTo é o grupo a que o daemon ligou o projeto por conta própria
 	// (a pasta fica dentro da pasta do grupo e nenhum pai foi informado).
 	AttachedTo string `json:"attached_to"`
+	// NotAttached é o grupo da pasta a que o projeto não foi ligado porque o
+	// nome escolhido já existe nele.
+	NotAttached string `json:"not_attached"`
 }
 
 // RememberResult é a memória gravada por `nobre lembrar` e as parecidas que já existiam.
