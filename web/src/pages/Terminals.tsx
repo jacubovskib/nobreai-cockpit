@@ -1,22 +1,27 @@
 import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { isLive, useTerminals, type TerminalInfo } from '../api/terminals'
-import { useCards, useProjects } from '../api/queries'
-import type { CardSummary, Project } from '../api/types'
+import { useCards, useContextLive, useOverview, useProjects, useSettings } from '../api/queries'
+import type { ActiveSession, CardSummary, LiveContextSummary, Project } from '../api/types'
 import { useProjectFilter } from '../app/project'
 import { GridTile } from './terminals/GridTile'
+import { PlanStrip } from './terminals/PlanStrip'
+import { ctxLimit, tileMeter } from './terminals/contextLevel'
 import {
   FULL_H, chips, move, place, reconcile, sizeOf, step, tabs, toggleFull, visible,
   type Cols, type Layout, type Placed, type StateFilter, type TileSize,
 } from './terminals/gridModel'
 import { loadLayout, saveLayout } from './terminals/gridStore'
 import { liveSet } from './terminals/liveBudget'
+import { matchSessions } from './terminals/sessionMatch'
 import { useOnScreen } from './terminals/useOnScreen'
 import { usePageHidden } from './terminals/usePageHidden'
 
 // Listas vazias fixas: um [] novo a cada render quebraria o memo dos tiles.
 const NO_PROJECTS: Project[] = []
 const NO_CARDS: CardSummary[] = []
+const NO_SESSIONS: ActiveSession[] = []
+const NO_CTX: LiveContextSummary[] = []
 
 type Action =
   | { type: 'reconcile'; newestFirst: string[] }
@@ -93,6 +98,7 @@ interface TileActions {
   dragOver(id: string, after: boolean): void
   drop(id: string, after: boolean): void
   dragEnd(): void
+  restarted(terminalId: string): void // "Limpar e continuar" abriu o agente novo neste terminal
 }
 
 interface SlotProps {
@@ -100,6 +106,10 @@ interface SlotProps {
   span: number; h: number; cols: Cols; simple: boolean
   live: boolean; focused: boolean; dropMark: 'before' | 'after' | null
   actions: TileActions
+  // Sessão casada e contexto dela, só primitivos (vêm do tileMeter).
+  cardKey: string; sessionId: string
+  ctxPct: number | null; ctxTokens: number; ctxWindow: number; ctxPctOnly: boolean; ctxLimit: number
+  whereStopped: string; whereStoppedAt: string | null
 }
 
 // TileSlot recebe só valores simples e objetos estáveis, e monta o tamanho e
@@ -115,11 +125,13 @@ const TileSlot = memo(function TileSlot({ t, span, h, actions, ...rest }: SlotPr
   const onDragStart = useCallback(() => actions.dragStart(id), [actions, id])
   const onDragOverTile = useCallback((after: boolean) => actions.dragOver(id, after), [actions, id])
   const onDropTile = useCallback((after: boolean) => actions.drop(id, after), [actions, id])
+  const onRestarted = useCallback((tid: string) => actions.restarted(tid), [actions])
   return (
     <GridTile
       {...rest} t={t} size={size}
       onFocus={onFocus} onWake={onWake} onStep={onStep} onToggleFull={onToggleFull} onResize={onResize}
       onDragStart={onDragStart} onDragOverTile={onDragOverTile} onDropTile={onDropTile} onDragEnd={actions.dragEnd}
+      onRestarted={onRestarted}
     />
   )
 })
@@ -138,6 +150,13 @@ export function Terminals() {
   const projects = projectsQ.data ?? NO_PROJECTS
   const cardsQ = useCards()
   const cards = Array.isArray(cardsQ.data) ? cardsQ.data : NO_CARDS
+  // Respostas fora do formato (ou com erro) deixam a grade sem medidor, sem lançar.
+  const overviewQ = useOverview()
+  const sessions = Array.isArray(overviewQ.data?.active) ? overviewQ.data.active : NO_SESSIONS
+  const ctxQ = useContextLive()
+  const ctxRows = Array.isArray(ctxQ.data) ? ctxQ.data : NO_CTX
+  const settingsQ = useSettings()
+  const limit = ctxLimit(settingsQ.data?.context_warn_pcts)
   const { root, app } = useProjectFilter()
   const [params] = useSearchParams()
   const selected = params.get('id') ?? ''
@@ -155,6 +174,8 @@ export function Terminals() {
   const dragging = useRef<string | null>(null)
   // Estado (não ref): a rolagem roda no render que já aplicou o "linha toda".
   const [scrollTo, setScrollTo] = useState<string | null>(null)
+  // Terminal do agente novo de um "Limpar e continuar": ganha o foco quando chega na lista.
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const onScreen = useOnScreen(gridRef)
   const pageHidden = usePageHidden()
@@ -181,11 +202,21 @@ export function Terminals() {
       if (from !== null && from !== id) dispatch({ type: 'move', id: from, target: id, after })
     },
     dragEnd() { dragging.current = null; setMark(null) },
+    restarted(terminalId) { setPendingFocus(terminalId) },
   }), [])
 
   // Mais novo primeiro, como a tabela de antes; terminal novo entra no início.
   const list = useMemo(() => [...(data ?? [])].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at)), [data])
-  const placed = useMemo(() => place(list, projects, cards), [list, projects, cards])
+  const hasKiro = useMemo(() => list.some((t) => t.agent === 'kiro'), [list])
+  // Sessão casada por terminal (pelo pid) e o que o tile mostra dela. Os
+  // objetos são novos a cada leitura; o tile recebe só os primitivos.
+  const ctxById = useMemo(() => new Map(ctxRows.map((c) => [c.id, c])), [ctxRows])
+  const matched = useMemo(() => matchSessions(list, sessions), [list, sessions])
+  const meters = useMemo(
+    () => new Map(list.map((t) => [t.id, tileMeter(t, matched.get(t.id), ctxById.get(matched.get(t.id)?.id ?? ''))])),
+    [list, matched, ctxById],
+  )
+  const placed = useMemo(() => place(list, projects, cards, meters), [list, projects, cards, meters])
   const placedById = useMemo(() => new Map<string, Placed>(placed.map((x) => [x.t.id, x])), [placed])
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
   const tabList = useMemo(() => tabs(placed, projects), [placed, projects])
@@ -251,6 +282,14 @@ export function Terminals() {
     actions.focus(selected)
     setScrollTo(selected)
   }, [selected, data, actions])
+  // O agente novo entra no início da grade pelo reconcile; quando chega, fica
+  // em foco e rolado até ele (sem trocar de aba nem ampliar o tile).
+  useEffect(() => {
+    if (!pendingFocus || !data?.some((t) => t.id === pendingFocus)) return
+    actions.focus(pendingFocus)
+    setScrollTo(pendingFocus)
+    setPendingFocus(null)
+  }, [pendingFocus, data, actions])
   // Sem dependências: rola assim que o tile aparecer na grade.
   useEffect(() => {
     if (!scrollTo) return
@@ -285,6 +324,7 @@ export function Terminals() {
           </>
         )}
       </div>
+      {list.length > 0 && <PlanStrip simple={layout.simple} hasKiro={hasKiro} />}
       {isError && <p role="alert" style={{ margin: 0, color: 'var(--err)' }}>Não foi possível carregar os terminais.</p>}
       {isPending && <p className="placeholder">Carregando…</p>}
       {!isPending && !isError && list.length === 0 && (
@@ -324,6 +364,7 @@ export function Terminals() {
           const x = placedById.get(t.id)
           const pid = x ? x.subId ?? x.rootId : null
           const s = sizeOf(layout, t.id)
+          const m = meters.get(t.id)!
           return (
             <TileSlot
               key={t.id}
@@ -338,6 +379,15 @@ export function Terminals() {
               focused={focused === t.id}
               dropMark={mark?.id === t.id ? (mark.after ? 'after' : 'before') : null}
               actions={actions}
+              cardKey={m.cardKey}
+              sessionId={m.sessionId}
+              ctxPct={m.ctxPct}
+              ctxTokens={m.ctxTokens}
+              ctxWindow={m.ctxWindow}
+              ctxPctOnly={m.ctxPctOnly}
+              ctxLimit={limit}
+              whereStopped={m.whereStopped}
+              whereStoppedAt={m.whereStoppedAt}
             />
           )
         })}

@@ -17,11 +17,20 @@ export const defaultLayout = (): Layout => ({ order: [], sizes: {}, cols: DEF_CO
 // subId null = o terminal está direto no projeto raiz (ou sem projeto).
 export interface Placed { t: TerminalInfo; rootId: number | null; subId: number | null }
 
+// Sessão casada com o terminal: o projeto efetivo e o card dela.
+export interface PlaceOverride { sessionId: string; cardKey: string; projectId: number | null }
+
 // place: terminal com card segue o projeto do card; só sem card vale o diretório.
-export function place(terms: TerminalInfo[], projects: Project[], cards: CardSummary[]): Placed[] {
+// Com sessão casada (over), vale o projeto da sessão; sem ele, o card da sessão
+// (o do terminal não conta); sem os dois, o diretório.
+export function place(terms: TerminalInfo[], projects: Project[], cards: CardSummary[], over?: ReadonlyMap<string, PlaceOverride>): Placed[] {
   return terms.map((t) => {
-    const card = t.card_key ? cards.find((c) => c.key === t.card_key) : undefined
-    const project = card ? projects.find((p) => p.id === card.project_id) ?? null : t.dir ? projectForPath(projects, t.dir) : null
+    const o = over?.get(t.id)
+    const matched = !!o && o.sessionId !== ''
+    const cardKey = matched ? o.cardKey : t.card_key
+    const own = matched && o.projectId !== null ? projects.find((p) => p.id === o.projectId) : undefined
+    const card = !own && cardKey ? cards.find((c) => c.key === cardKey) : undefined
+    const project = own ?? (card ? projects.find((p) => p.id === card.project_id) ?? null : t.dir ? projectForPath(projects, t.dir) : null)
     if (!project) return { t, rootId: null, subId: null }
     // Raiz: sobe por parent_id até null (com trava contra ciclo).
     let root = project

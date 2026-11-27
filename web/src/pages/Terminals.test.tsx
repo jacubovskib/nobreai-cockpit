@@ -3,6 +3,7 @@ import { forwardRef, useImperativeHandle } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { invalidateForKind } from '../api/useStream'
 import type { TerminalHandle, TerminalViewProps } from '../ui/TerminalView'
 import { KEY } from './terminals/gridStore'
 import { Terminals } from './Terminals'
@@ -31,13 +32,42 @@ const FAMILY = [
   info({ id: 't4', card_key: 'NAC-4', dir: '/outro', started_at: ago(4) }),
 ]
 
-function api(terms: object[], projects: object[] = [], cards: object[] = []) {
-  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(
-    url === '/api/projects' ? projects : url === '/api/cards' ? cards : terms,
-  ), { status: 200 }))
+const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status })
+const overview = (active: object[] = []) => ({ active, today: { per_agent: [] }, alerts: [], no_card: [], events: [] })
+const NO_PLAN = { five_hour: null, seven_day: null, history: { five_hour: null, seven_day: null }, warn_pct: 80 }
+
+// Responde por URL. extra[url] vence: um valor vira JSON com 200; uma função
+// monta a resposta (estado mutável, erro HTTP, POST). Sem entrada, o resto
+// da lista de terminais.
+type Reply = (init?: RequestInit) => Response
+function api(terms: object[], projects: object[] = [], cards: object[] = [], extra: Record<string, unknown> = {}) {
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url in extra) {
+      const v = extra[url]
+      return typeof v === 'function' ? (v as Reply)(init) : json(v)
+    }
+    if (url === '/api/projects') return json(projects)
+    if (url === '/api/cards') return json(cards)
+    if (url === '/api/overview') return json(overview())
+    if (url === '/api/context/live') return json([])
+    if (url === '/api/settings') return json({ context_warn_pcts: [60, 80] })
+    if (url.startsWith('/api/plan-limits')) return json(NO_PLAN)
+    return json(terms)
+  })
   vi.stubGlobal('fetch', fetch)
   return fetch
 }
+
+// Sessão da overview e resumo do contexto ao vivo, com o "Onde parei" recente.
+const sess = (id: string, pid: number, key: string | null, o: object = {}) => ({
+  id, agent: 'claude', pid, started_at: ago(5), ended_at: null, pid_dead_at: null, effective_project_id: null, last_activity: '',
+  card: key ? { key, title: key, project_id: 1, where_stopped: 'Parei no passo 3', where_stopped_at: new Date().toISOString() } : null,
+  ...o,
+})
+const ctx = (id: string, pct: number, o: object = {}) => ({
+  id, card_key: '', card_title: '', tokens: pct * 2000, window_tokens: 200000, pct, over80: pct > 80, rewrite: false, idle_over_ttl: false, ...o,
+})
+const planWindow = (pct: number) => ({ used_pct: pct, resets_at: new Date(Date.now() + 3600000).toISOString(), received_at: new Date().toISOString(), expired: false })
 
 function Where() {
   return <output data-testid="where">{useLocation().search}</output>
@@ -313,6 +343,159 @@ describe('Terminais em grade', () => {
     expect(tile('a').style.gridColumn).toBe('span 3')
     expect(renders.a).toBeGreaterThan(a)
     expect(renders.b).toBe(b)
+  })
+
+  it('o card e o projeto do tile vêm da sessão casada; sem sessão, do terminal', async () => {
+    api([
+      info({ id: 'a', pid: 101, card_key: '', dir: '/outro', started_at: ago(1) }),
+      info({ id: 'b', pid: 102, card_key: 'NAC-2', started_at: ago(2) }),
+      info({ id: 'c', pid: 103, card_key: 'NAC-3', started_at: ago(3) }),
+    ], PROJECTS, [], {
+      '/api/overview': overview([sess('sa', 101, 'NAC-9', { effective_project_id: 4 }), sess('sb', 102, null)]),
+    })
+    renderAt()
+    expect(await within(await findTabList()).findByRole('tab', { name: 'solo 1' })).toBeInTheDocument()
+    expect(within(tile('a')).getByRole('link', { name: 'NAC-9' })).toBeInTheDocument()
+    expect(within(tile('a')).getByText('solo')).toBeInTheDocument()
+    expect(within(tile('b')).getByText('sem card')).toBeInTheDocument()
+    expect(within(tile('b')).queryByRole('link')).toBeNull()
+    expect(within(tile('c')).getByRole('link', { name: 'NAC-3' })).toBeInTheDocument()
+  })
+
+  it('o contexto vai ao tile da sessão certa e o traço usa o limite das configurações', async () => {
+    api([
+      info({ id: 'a', pid: 101, card_key: 'NAC-1', started_at: ago(1) }),
+      info({ id: 'b', pid: 102, card_key: 'NAC-2', started_at: ago(2) }),
+      info({ id: 'c', pid: 103, card_key: 'NAC-3', started_at: ago(3) }),
+    ], [], [], {
+      '/api/overview': overview([sess('sa', 101, 'NAC-1'), sess('sb', 102, 'NAC-2')]),
+      '/api/context/live': [ctx('sa', 62), ctx('sb', 84)],
+      '/api/settings': { context_warn_pcts: [50, 70] },
+    })
+    renderAt()
+    await waitFor(() => expect(within(tile('a')).getByText('Contexto 62%')).toBeInTheDocument())
+    await waitFor(() => expect(within(tile('a')).getByTestId('ctx-limit')).toHaveAttribute('title', 'Limite configurado 70%'))
+    expect(within(tile('b')).getByText('Contexto 84%')).toBeInTheDocument()
+    expect(within(tile('c')).queryByTestId('ctx-strip')).toBeNull()
+  })
+
+  it('um evento sessions que não muda os valores de um tile não o redesenha', async () => {
+    // Objetos criados uma vez: o "Onde parei" de cada sessão não muda entre as leituras.
+    const sa = sess('sa', 101, 'NAC-1'), sb = sess('sb', 102, 'NAC-2'), sx = sess('sx', 999, null)
+    let active: object[] = [sa, sb, sx]
+    let live: object[] = [ctx('sa', 62), ctx('sb', 40)]
+    const fetch = api([
+      info({ id: 'a', pid: 101, card_key: 'NAC-1', started_at: ago(1) }),
+      info({ id: 'b', pid: 102, card_key: 'NAC-2', started_at: ago(2) }),
+    ], [], [], {
+      '/api/overview': () => json(overview(active)),
+      '/api/context/live': () => json(live),
+    })
+    const overviewReads = () => fetch.mock.calls.filter(([u]) => u === '/api/overview').length
+    const { qc } = renderAt()
+    await waitFor(() => expect(within(tile('a')).getByText('Contexto 62%')).toBeInTheDocument())
+    await settle()
+    const a = renders.a, b = renders.b
+
+    // (1) Só muda o que não chega aos tiles: a página relê, os tiles ficam.
+    active = [{ ...sa, last_activity: ago(0), last_event_at: ago(0) }, sb, sx]
+    live = [ctx('sa', 62), ctx('sb', 40), ctx('sx', 10)]
+    const before = overviewReads()
+    await act(async () => { invalidateForKind(qc, 'sessions') })
+    await settle()
+    expect(overviewReads()).toBeGreaterThan(before)
+    expect(renders.a).toBe(a)
+    expect(renders.b).toBe(b)
+
+    // (2) O contexto de A muda: só A redesenha.
+    live = [ctx('sa', 71), ctx('sb', 40), ctx('sx', 10)]
+    await act(async () => { invalidateForKind(qc, 'sessions') })
+    await settle()
+    expect(within(tile('a')).getByText('Contexto 71%')).toBeInTheDocument()
+    expect(renders.a).toBeGreaterThan(a)
+    expect(renders.b).toBe(b)
+  })
+
+  it('faixa do plano sob o cabeçalho, antes das abas; no Simples vira um chip', async () => {
+    api([info({ id: 'a' })], [], [], { '/api/plan-limits?hours=24': { ...NO_PLAN, five_hour: planWindow(62), seven_day: planWindow(41) } })
+    renderAt()
+    const strip = await screen.findByRole('region', { name: 'Uso do plano' })
+    expect(strip.compareDocumentPosition(tabList()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(within(screen.getByRole('group', { name: 'Modo' })).getByRole('button', { name: 'Simples' }))
+    expect(within(screen.getByRole('region', { name: 'Uso do plano' })).getByText('Claude 5 h 62% · sem 41%')).toBeInTheDocument()
+  })
+
+  it('sem dado do plano não há faixa', async () => {
+    api([info({ id: 'a' })])
+    renderAt()
+    await screen.findByTestId('tv')
+    await settle()
+    expect(screen.queryByRole('region', { name: 'Uso do plano' })).toBeNull()
+  })
+
+  it('Limpar e continuar abre o agente novo no início da grade, em foco; o antigo fica sem card no mesmo projeto', async () => {
+    const seen: string[] = []
+    const spy = vi.fn(function (this: HTMLElement) { seen.push(this.getAttribute('data-tile') ?? '') })
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: spy, configurable: true, writable: true })
+    try {
+      const a = info({ id: 'a', pid: 101, card_key: 'NAC-1', dir: '/w/solo', started_at: ago(2) })
+      const novo = info({ id: 'novo', pid: 201, card_key: 'NAC-1', started_at: ago(0) })
+      let terms: object[] = [a]
+      let active: object[] = [sess('sa', 101, 'NAC-1', { effective_project_id: 4 })]
+      let posted: unknown = null
+      api([], PROJECTS, [], {
+        '/api/terminals': () => json(terms),
+        '/api/overview': () => json(overview(active)),
+        '/api/context/live': [ctx('sa', 84)],
+        '/api/sessions/sa/restart-clean': (init?: RequestInit) => {
+          posted = JSON.parse(String(init?.body))
+          terms = [novo, a]
+          active = [sess('sa', 101, null, { effective_project_id: 4 }), sess('sn', 201, 'NAC-1', { effective_project_id: 4 })]
+          return json({ ok: true, terminal_id: 'novo' })
+        },
+      })
+      renderAt()
+      const warning = await waitFor(() => within(tile('a')).getByTestId('ctx-warning'))
+      fireEvent.click(within(warning).getByRole('button', { name: 'Limpar e continuar' }))
+      const panel = within(tile('a')).getByRole('region', { name: 'Recomeçar limpo' })
+      fireEvent.click(within(panel).getByRole('button', { name: 'Limpar e continuar' }))
+
+      await waitFor(() => expect(tileIds()).toEqual(['novo', 'a']))
+      await waitFor(() => expect(within(tile('novo')).getByTestId('tv')).toHaveAttribute('data-active', 'true'))
+      await waitFor(() => expect(seen).toContain('novo'))
+      await waitFor(() => expect(within(tile('a')).getByText('sem card')).toBeInTheDocument())
+      expect(within(tile('a')).getByText('Contexto limpo. O agente novo abriu em outro terminal.')).toBeInTheDocument()
+      expect(posted).toEqual({ mode: 'background' })
+      fireEvent.click(within(tabList()).getByRole('tab', { name: 'solo 2' }))
+      expect(tileIds()).toEqual(['novo', 'a'])
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
+  // Review Focus 2: nenhuma dessas respostas derruba a grade; ela só fica sem medidor e sem faixa.
+  const fail = () => json({ error: 'falhou' }, 500)
+  it.each([
+    ['tipo trocado no topo', { '/api/overview': [], '/api/context/live': {}, '/api/settings': [], '/api/plan-limits?hours=24': [] }],
+    ['erro 500', { '/api/overview': fail, '/api/context/live': fail, '/api/settings': fail, '/api/plan-limits?hours=24': fail }],
+    ['tipo trocado por dentro', {
+      '/api/overview': { active: {}, today: { per_agent: {} } },
+      '/api/context/live': { rows: [] },
+      '/api/settings': { context_warn_pcts: {} },
+      '/api/plan-limits?hours=24': { five_hour: [], seven_day: 'x', warn_pct: 'y' },
+    }],
+  ])('respostas malformadas (%s) deixam a grade usável, sem medidor e sem faixa', async (_name, extra) => {
+    api([
+      info({ id: 'a', pid: 101, card_key: 'NAC-1', started_at: ago(1) }),
+      info({ id: 'b', pid: 102, card_key: 'NAC-2', started_at: ago(2) }),
+    ], [], [], extra)
+    renderAt()
+    await waitFor(() => expect(within(tile('a')).getByRole('link', { name: 'NAC-1' })).toBeInTheDocument())
+    await settle()
+    expect(within(tile('b')).getByRole('link', { name: 'NAC-2' })).toBeInTheDocument()
+    expect(screen.getAllByTestId('tv')).toHaveLength(2)
+    expect(screen.queryByTestId('ctx-strip')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Uso do plano' })).toBeNull()
   })
 
   it('mostra carregando', () => {
