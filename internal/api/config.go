@@ -318,7 +318,8 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		err   error
 	)
 	// Sem pai informado, um repositório dentro de um grupo com pasta nasce
-	// ligado a esse grupo (attached diz qual). Nome de pasta que já existe no
+	// ligado a esse grupo (attached diz qual), dentro das travas do vínculo
+	// automático (groupAccepts); fora delas nasce solto. Nome de pasta que já existe no
 	// grupo vira um nome distinto (store.ChildSpec.Auto); se quem bate é o nome
 	// que o usuário escolheu, o projeto nasce solto, como sem o vínculo
 	// automático, e notAttached diz de qual grupo ficou fora.
@@ -329,7 +330,14 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, err, "")
 			return
 		}
-		if g != nil && g.IsGroup() && filepath.Clean(g.Path) != in.Path {
+		ok := false
+		if g != nil {
+			if _, ok, err = s.groupAccepts(*g, in.Path); err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+		}
+		if ok {
 			var kids []domain.Project
 			_, kids, moved, err = s.st.CreateFamily(*g, []store.ChildSpec{{Name: in.Name, Path: in.Path, Auto: autoName}})
 			switch {

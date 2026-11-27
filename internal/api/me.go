@@ -284,37 +284,50 @@ func (s *server) linkRepo(w http.ResponseWriter, t *cardTarget) bool {
 	return true
 }
 
+// groupAccepts diz se o repositório da pasta root pode ser ligado ao grupo g
+// sem o usuário pedir, e devolve o caminho dele relativo ao grupo. O cadastro
+// do grupo é o consentimento, então só vale o que a varredura dele sugeriria:
+// grupo com pasta, até 2 níveis, fora das pastas que ela pula, e nada que o
+// usuário mandou não sugerir. Vale para o comando (linkRepoToGroup) e para o
+// POST /api/projects sem pai (createProject).
+func (s *server) groupAccepts(g domain.Project, root string) (string, bool, error) {
+	if !g.IsGroup() || g.Path == "" {
+		return "", false, nil
+	}
+	rel, err := filepath.Rel(filepath.Clean(g.Path), root)
+	if err != nil || !workspaces.InScan(rel) {
+		return "", false, nil
+	}
+	rel = filepath.ToSlash(rel)
+	hidden, err := s.dismissedFor(g.ID)
+	if err != nil {
+		return "", false, err
+	}
+	return rel, !hidden[rel], nil
+}
+
 // linkRepoToGroup cadastra como filho do grupo g o repositório git de loc (o
 // checkout principal: um worktree ligado nunca vira projeto) quando a pasta do
-// comando caiu no grupo por falta de projeto mais fundo. O cadastro do grupo é
-// o consentimento, então só vale o que a varredura dele sugeriria: até 2
-// níveis, fora das pastas que ela pula, e nada que o usuário mandou não
-// sugerir. Passa pelo cadastro em lote (addFamily), como os filhos marcados na
+// comando caiu no grupo por falta de projeto mais fundo, dentro das travas de
+// groupAccepts. Passa pelo cadastro em lote (addFamily), como os filhos marcados na
 // interface; nome de pasta que já existe no grupo não impede: o projeto entra
 // com um nome distinto (store.ChildSpec.Auto). Devolve nil quando não é o
 // caso; se as regras de família recusam o cadastro, o card fica no grupo e
 // refused é a pasta do repositório, para a CLI avisar.
 func (s *server) linkRepoToGroup(g domain.Project, loc gitinfo.Location) (child *domain.Project, refused string, err error) {
-	if !g.IsGroup() || g.Path == "" || loc.Root == "" || loc.Main == "" {
+	if loc.Root == "" || loc.Main == "" {
 		return nil, "", nil
 	}
 	root := filepath.Clean(loc.Main)
-	rel, err := filepath.Rel(filepath.Clean(g.Path), root)
-	if err != nil || !workspaces.InScan(rel) {
-		return nil, "", nil
-	}
-	hidden, err := s.dismissedFor(g.ID)
-	if err != nil {
+	rel, ok, err := s.groupAccepts(g, root)
+	if err != nil || !ok {
 		return nil, "", err
-	}
-	if hidden[filepath.ToSlash(rel)] {
-		return nil, "", nil
 	}
 	_, kids, _, err := s.addFamily(g, []store.ChildSpec{{Name: filepath.Base(root), Path: root, Auto: true}}, false)
 	if err != nil {
 		if errors.Is(err, store.ErrFamily) || isConstraint(err, "UNIQUE") {
 			log.Printf("ligar %s ao grupo %s: %v", root, g.Name, err)
-			return nil, filepath.ToSlash(rel), nil
+			return nil, rel, nil
 		}
 		return nil, "", err
 	}

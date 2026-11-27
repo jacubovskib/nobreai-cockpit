@@ -550,3 +550,20 @@ func TestMeCommandInvalidRequestLinksNothing(t *testing.T) {
 		t.Fatalf("válido = %+v", c)
 	}
 }
+
+// O vínculo automático do POST /api/projects segue as mesmas travas do
+// comando (a regra da varredura e o que o usuário mandou não sugerir): fora
+// delas o repositório nasce solto, como antes.
+func TestCreateProjectAutoAttachFollowsScanRules(t *testing.T) {
+	a := newTestAPI(t)
+	g, _ := a.bravonix(t)
+	if err := a.st.PutKV(dismissedKey, map[string][]string{strconv.FormatInt(g.ID, 10): {"recusado"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/w/bravonix/a/b/c", "/w/bravonix/node_modules/x", "/w/bravonix/recusado"} {
+		rec := a.do(t, "POST", "/api/projects", map[string]any{"path": path}, 0)
+		if rec.Code != http.StatusCreated || strings.Contains(rec.Body.String(), "attached_to") || decode[domain.Project](t, rec).ParentID != nil {
+			t.Fatalf("%s = %d %s", path, rec.Code, rec.Body)
+		}
+	}
+}
