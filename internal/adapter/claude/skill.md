@@ -28,7 +28,7 @@ Se o usuário não quiser o repositório no board, ele desliga a captura do proj
 
 ## Pasta não cadastrada
 
-Quando o contexto trouxer a frase "NobreAI Cockpit: esta pasta não está cadastrada no board", a sessão está numa pasta que não é git e tem repositórios dentro. Pergunte ao usuário se quer cadastrá-la como grupo; só rode `nobre project add <pasta>` (a pasta que a frase indica) se ele aceitar. Depois, liste ao usuário os sub-projetos sugeridos que o comando imprimir, sem cadastrá-los. Se ele recusar, siga com o pedido sem comandos `nobre`.
+Quando o contexto trouxer a frase "NobreAI Cockpit: esta pasta não está cadastrada no board", a sessão está numa pasta que não é git e tem repositórios dentro. Pergunte ao usuário se quer cadastrá-la como grupo; só rode `nobre project add <pasta>` (a pasta que a frase indica) se ele aceitar. O comando cadastra o grupo e liga a ele os repositórios que achar dentro da pasta; diga ao usuário quais entraram. Se ele recusar, siga com o pedido sem comandos `nobre`.
 
 ## Quando criar um card
 
@@ -58,7 +58,8 @@ Quando o contexto trouxer a frase "NobreAI Cockpit: esta pasta não está cadast
 - `nobre done`: marca o card como pronto para revisão. Recusa se "Como testar" estiver vazio ou mais antigo que a última edição de arquivo, ou se houver pergunta sem resposta. `nobre done --force` ignora essas recusas; use só depois de registrar o motivo com `nobre note`.
 - `nobre card add "Migrar sessões" --goal "..." --done-when "..." --branch feat/sessoes --where "parei na migration 3" --column pausado`: cria um card sem ligar esta sessão (`--column` aceita `backlog` ou `pausado`).
 - `nobre project scan`: levantamento só de leitura do projeto (inclui os sub-projetos sugeridos; `--nao-sugerir rel,rel` recusa); `nobre project base main`: define o branch base (`nobre project base <branch> [path]`).
-- `nobre project add <pasta>`: numa pasta que não é git e tem repositórios dentro, cadastra um grupo com pasta e lista os repositórios como sub-projetos sugeridos. Pergunte ao usuário antes de cadastrar a pasta; depois, mostre a lista e só cadastre um deles (`nobre project add <repo> --pai <id do grupo>`) se ele pedir.
+- `nobre project add <pasta>`: numa pasta que não é git e tem repositórios dentro, cadastra um grupo com pasta e liga a ele os repositórios que achar (`--sem-filhos` cadastra só o grupo). Pergunte ao usuário antes de cadastrar a pasta.
+- Numa pasta com vários repositórios, rode `nobre start` e `nobre card add` dentro do repositório do trabalho: o card nasce no projeto da pasta onde o comando rodou. Um repositório de um grupo cadastrado que ainda não é projeto é ligado ao grupo sozinho nessa hora (`nobre project add <repo>` dentro do grupo faz o mesmo, sem `--pai`).
 - `nobre status`: mostra o card, "Onde parei" e o que falta para o handoff.
 
 ## Memórias

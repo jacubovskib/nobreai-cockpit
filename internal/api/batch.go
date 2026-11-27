@@ -15,6 +15,9 @@ import (
 type batchItem struct {
 	Path string `json:"path"`
 	Name string `json:"name"`
+	// AutoName, num filho sem nome, deixa o daemon trocar o nome da pasta por
+	// um distinto se ele já existe no grupo (só o nobre project add manda).
+	AutoName bool `json:"auto_name"`
 }
 
 // cleanBatchPath valida um caminho do lote (absoluto, fora da raiz e da home)
@@ -31,7 +34,9 @@ func cleanBatchPath(p string) (string, string) {
 }
 
 // batchProjects: POST /api/projects/batch cadastra o principal (se ainda não
-// existe) e os filhos de uma vez, tudo ou nada.
+// existe) e os filhos de uma vez, tudo ou nada. Num grupo, filho com auto_name
+// cujo nome bate com outro da família não recusa o lote: entra com um nome
+// distinto ou, se já era um projeto solto, fica de fora de children.
 func (s *server) batchProjects(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		batchItem
@@ -53,10 +58,11 @@ func (s *server) batchProjects(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		name := strings.TrimSpace(c.Name)
+		auto := c.AutoName && name == ""
 		if name == "" {
 			name = filepath.Base(cp)
 		}
-		specs = append(specs, store.ChildSpec{Name: name, Path: cp})
+		specs = append(specs, store.ChildSpec{Name: name, Path: cp, Auto: auto})
 	}
 	ps, err := s.st.ListProjects()
 	if err != nil {
@@ -79,10 +85,31 @@ func (s *server) batchProjects(w http.ResponseWriter, r *http.Request) {
 			parent.Kind = "group"
 		}
 	}
-	p, kids, moved, err := s.st.CreateFamily(parent, specs)
+	p, kids, moved, err := s.addFamily(parent, specs, created)
 	if err != nil {
 		writeProjectError(w, err, "projeto não encontrado")
 		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, struct {
+		Project  domain.Project   `json:"project"`
+		Children []domain.Project `json:"children"`
+		Moved    store.Moved      `json:"moved"`
+	}{p, kids, moved})
+}
+
+// addFamily é o cadastro em lote: grava o principal (se parent.ID é 0) e liga
+// os filhos (store.CreateFamily), detecta as bases, adota as sessões soltas da
+// pasta e publica. created diz se o principal é novo. É o caminho do lote da
+// interface, do nobre project add e do repositório que um comando liga ao
+// grupo.
+func (s *server) addFamily(parent domain.Project, specs []store.ChildSpec, created bool) (domain.Project, []domain.Project, store.Moved, error) {
+	p, kids, moved, err := s.st.CreateFamily(parent, specs)
+	if err != nil {
+		return p, kids, moved, err
 	}
 	// A base do repositório novo e dos filhos de grupo (cada um é um repositório).
 	if br := s.branchReader(); br != nil {
@@ -106,15 +133,7 @@ func (s *server) batchProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	moved.Sessions += n
 	s.publish("config", "sessions", "cards")
-	status := http.StatusOK
-	if created {
-		status = http.StatusCreated
-	}
-	writeJSON(w, status, struct {
-		Project  domain.Project   `json:"project"`
-		Children []domain.Project `json:"children"`
-		Moved    store.Moved      `json:"moved"`
-	}{p, kids, moved})
+	return p, kids, moved, nil
 }
 
 // detectBase grava a base detectada do repositório p (falha só ignora).

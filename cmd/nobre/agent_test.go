@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -31,7 +32,7 @@ func TestAgentCommandsCallAPI(t *testing.T) {
 		{[]string{"test", "rode go test"}, "/api/me/test", `{"text":"rode go test"}`},
 		{[]string{"done"}, "/api/me/done", `{"force":false}`},
 		{[]string{"done", "--force"}, "/api/me/done", `{"force":true}`},
-		{[]string{"start", "Novo", "--goal", "g", "--done-when", "d"}, "/api/me/start", `{"done_when":"d","goal":"g","title":"Novo"}`},
+		{[]string{"start", "Novo", "--goal", "g", "--done-when", "d"}, "/api/me/start", `{"cwd":"/w/api","done_when":"d","goal":"g","title":"Novo"}`},
 		{[]string{"resume", "NAC-1", "--force"}, "/api/me/resume", `{"force":true,"key":"NAC-1"}`},
 	}
 	for _, c := range cases {
@@ -104,8 +105,8 @@ func TestDashLeadingTextIsNotAFlag(t *testing.T) {
 		{[]string{"decide", "-x", "--why", "y"}, `/api/me/decide {"what":"-x","why":"y"}`},
 		{[]string{"decide", "--why", "y", "--", "-x"}, `/api/me/decide {"what":"-x","why":"y"}`},
 		{[]string{"decide", "-x", "--why=y"}, `/api/me/decide {"what":"-x","why":"y"}`},
-		{[]string{"start", "-t", "--goal", "g"}, `/api/me/start {"done_when":"","goal":"g","title":"-t"}`},
-		{[]string{"start", "--goal", "g", "-t"}, `/api/me/start {"done_when":"","goal":"g","title":"-t"}`},
+		{[]string{"start", "-t", "--goal", "g"}, `/api/me/start {"cwd":"/w/api","done_when":"","goal":"g","title":"-t"}`},
+		{[]string{"start", "--goal", "g", "-t"}, `/api/me/start {"cwd":"/w/api","done_when":"","goal":"g","title":"-t"}`},
 		{[]string{"file", "-weird.go", "--why", "w"}, `/api/me/file {"lines":"","path":"-weird.go","why":"w"}`},
 	}
 	for _, c := range cases {
@@ -268,7 +269,7 @@ func TestCLICardAdd(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("%+v", r)
 	}
-	want := `{"branch":"","column":"pausado","done_when":"","goal":"","title":"B","where_stopped":"x"}`
+	want := `{"branch":"","column":"pausado","cwd":"/w/api","done_when":"","goal":"","title":"B","where_stopped":"x"}`
 	if body != want {
 		t.Fatalf("body = %s", body)
 	}
@@ -463,9 +464,9 @@ func TestStartAndCardFlagsSendHierarchyFields(t *testing.T) {
 		path, body string
 	}{
 		{[]string{"start", "x", "--type", "historia", "--epic", "NAC-1", "--priority", "alta", "--label", "front", "--label", "api", "--points", "2"},
-			"/api/me/start", `{"done_when":"","goal":"","labels":["front","api"],"parent_key":"NAC-1","points":2,"priority":"alta","title":"x","type":"historia"}`},
+			"/api/me/start", `{"cwd":"/w/api","done_when":"","goal":"","labels":["front","api"],"parent_key":"NAC-1","points":2,"priority":"alta","title":"x","type":"historia"}`},
 		{[]string{"card", "add", "y", "--type", "bug", "--points", "0.5"},
-			"/api/me/cards", `{"branch":"","column":"","done_when":"","goal":"","points":0.5,"title":"y","type":"bug","where_stopped":""}`},
+			"/api/me/cards", `{"branch":"","column":"","cwd":"/w/api","done_when":"","goal":"","points":0.5,"title":"y","type":"bug","where_stopped":""}`},
 		{[]string{"card", "set", "NAC-2", "--no-epic"}, "/api/me/card-set", `{"key":"NAC-2","parent_key":""}`},
 		{[]string{"card", "set", "--no-points"}, "/api/me/card-set", `{"points":null}`},
 		{[]string{"card", "set", "--no-labels"}, "/api/me/card-set", `{"labels":[]}`},
@@ -523,6 +524,86 @@ func TestStatusShowsKindLine(t *testing.T) {
 		card = c.card
 		if r := runCLI(t, addr, "", nil, "status"); !strings.Contains(r.stdout, c.want) {
 			t.Fatalf("falta %q em:\n%s", c.want, r.stdout)
+		}
+	}
+}
+
+// nobre start e nobre card add enviam a pasta onde o comando rodou (o daemon
+// escolhe o projeto por ela); se a pasta não pode ser lida, o campo não vai e
+// vale a regra da sessão.
+func TestStartAndCardAddSendCommandFolder(t *testing.T) {
+	var got map[string]any
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		got = nil
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"key":"NAC-2"}`))
+	})
+	run := func(cwd func() (string, error), args ...string) {
+		t.Helper()
+		var out, errb strings.Builder
+		c := &cli{in: strings.NewReader(""), out: &out, err: &errb, cwd: cwd,
+			getenv: func(k string) string {
+				if k == "NOBRE_ADDR" {
+					return addr
+				}
+				return ""
+			}}
+		if code := c.run(args); code != 0 {
+			t.Fatalf("%v: code %d %s", args, code, errb.String())
+		}
+	}
+	t.Setenv("NOBRE_AGENT_PID", "77")
+	in := func() (string, error) { return "/w/bravonix/turing-back", nil }
+	for _, args := range [][]string{{"start", "x"}, {"card", "add", "y"}} {
+		run(in, args...)
+		if got["cwd"] != "/w/bravonix/turing-back" {
+			t.Fatalf("%v: cwd = %v", args, got["cwd"])
+		}
+		run(func() (string, error) { return "", errors.New("pasta removida") }, args...)
+		if _, ok := got["cwd"]; ok {
+			t.Fatalf("%v: cwd enviado sem pasta: %v", args, got)
+		}
+	}
+	// Os demais comandos da sessão não dependem da pasta e não a enviam.
+	run(in, "note", "parei")
+	if _, ok := got["cwd"]; ok {
+		t.Fatalf("note enviou cwd: %v", got)
+	}
+}
+
+// nobre start e nobre card add dizem o projeto quando ele não é o da sessão e
+// avisam, numa linha, do repositório que o comando ligou ao grupo.
+func TestStartAndCardAddSayProjectAndLinkedRepo(t *testing.T) {
+	reply := `{"key":"NAC-2","column":"backlog"}`
+	addr := fake(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(reply)) })
+	if r := runCLI(t, addr, "", nil, "start", "x"); r.stdout != "Card NAC-2 criado e ligado a esta sessão.\n" {
+		t.Fatalf("mesmo projeto: %q", r.stdout)
+	}
+	reply = `{"key":"NAC-2","column":"backlog","project_label":"Bravonix › turing-back"}`
+	if r := runCLI(t, addr, "", nil, "start", "x"); r.stdout != "Card NAC-2 criado em Bravonix › turing-back e ligado a esta sessão.\n" {
+		t.Fatalf("outro projeto: %q", r.stdout)
+	}
+	if r := runCLI(t, addr, "", nil, "card", "add", "x"); r.stdout != "Card NAC-2 criado em Bravonix › turing-back, no backlog (sessão não ligada).\n" {
+		t.Fatalf("card add: %q", r.stdout)
+	}
+	reply = `{"key":"NAC-2","column":"backlog","project_label":"Bravonix › turing-front","linked_repo":"turing-front","linked_group":"Bravonix"}`
+	want := "Repositório turing-front cadastrado no grupo Bravonix.\nCard NAC-2 criado em Bravonix › turing-front e ligado a esta sessão.\n"
+	if r := runCLI(t, addr, "", nil, "start", "x"); r.stdout != want {
+		t.Fatalf("ligado: %q", r.stdout)
+	}
+	// O nome da pasta já existia no grupo: a saída diz com que nome ficou.
+	reply = `{"key":"NAC-2","column":"backlog","project_label":"Bravonix › x/turing-back","linked_repo":"x/turing-back","linked_group":"Bravonix","linked_dir":"turing-back"}`
+	want = "Repositório turing-back cadastrado no grupo Bravonix com o nome x/turing-back (já existe turing-back no grupo).\n" +
+		"Card NAC-2 criado em Bravonix › x/turing-back, no backlog (sessão não ligada).\n"
+	if r := runCLI(t, addr, "", nil, "card", "add", "x"); r.stdout != want {
+		t.Fatalf("ligado com outro nome: %q", r.stdout)
+	}
+	// O grupo recusou o repositório: a saída diz isso e onde o card ficou.
+	reply = `{"key":"NAC-2","column":"backlog","link_refused":"novo","linked_group":"Bravonix"}`
+	want = "Repositório novo não pôde ser ligado ao grupo Bravonix: o card ficou no grupo.\n"
+	for _, args := range [][]string{{"start", "x"}, {"card", "add", "x"}} {
+		if r := runCLI(t, addr, "", nil, args...); !strings.HasPrefix(r.stdout, want) {
+			t.Fatalf("%v recusado: %q", args, r.stdout)
 		}
 	}
 }

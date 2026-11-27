@@ -390,3 +390,42 @@ func TestPatchCardIntoGroupClearsBranch(t *testing.T) {
 		t.Fatalf("branch gravado = %q", got.Branch)
 	}
 }
+
+// Filhos com auto_name num grupo (o nobre project add da pasta): nome que
+// bate com o do grupo ou com o de outro filho vira um nome distinto em vez de
+// recusar o lote; um projeto solto já cadastrado cujo nome bate fica de fora
+// (não é renomeado) e o resto entra.
+func TestBatchGroupNameClashNeverBlocks(t *testing.T) {
+	a := newTestAPI(t)
+	dir := repoDirs(t, "a/api", "b/api", "turing", "solto")
+	if _, err := a.st.CreateProject("API", dir+"/solto"); err != nil {
+		t.Fatal(err)
+	}
+	kids := func(auto bool) []map[string]any {
+		var out []map[string]any
+		for _, rel := range []string{"a/api", "b/api", "solto", "turing"} {
+			out = append(out, map[string]any{"path": dir + "/" + rel, "auto_name": auto})
+		}
+		return out
+	}
+	// Sem auto_name (a interface, a CLI antiga) o lote continua tudo ou nada.
+	rec := a.do(t, "POST", "/api/projects/batch", map[string]any{"path": dir, "name": "turing", "children": kids(false)}, 0)
+	if rec.Code != http.StatusBadRequest || projectCount(t, a) != 1 {
+		t.Fatalf("sem auto_name = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/projects/batch", map[string]any{"path": dir, "name": "turing", "children": kids(true)}, 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("batch = %d %s", rec.Code, rec.Body)
+	}
+	got := decode[batchResp](t, rec)
+	var names []string
+	for _, c := range got.Children {
+		names = append(names, c.Name)
+	}
+	if strings.Join(names, ",") != "api,b/api,turing-2" {
+		t.Fatalf("filhos = %v", names)
+	}
+	if p := a.projectAt(t, dir+"/solto"); p == nil || p.ParentID != nil || p.Name != "API" {
+		t.Fatalf("solto = %+v", p)
+	}
+}

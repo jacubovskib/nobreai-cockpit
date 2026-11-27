@@ -45,7 +45,7 @@ Agente (use dentro de uma sessão de agente):
   nobre status                                            mostra o card e a prontidão do handoff
 
 Administração:
-  nobre project add [path] [--name <nome>]                cadastra um projeto (padrão: diretório atual)
+  nobre project add [path] [--name <nome>] [--sem-filhos] cadastra um projeto (padrão: diretório atual); numa pasta de repositórios, o grupo e os repositórios dentro dela (--sem-filhos: só o grupo)
   nobre project scan [path]                               levanta branches, planos, sessões e cards do projeto (só leitura)
   nobre project base <branch> [path]                      define o branch base do projeto
   nobre project list                                      lista os projetos
