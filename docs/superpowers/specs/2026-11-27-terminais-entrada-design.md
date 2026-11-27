@@ -71,7 +71,7 @@ Não testei o envio com o agente parado num menu de permissão. Ver "Riscos acei
 
 `POST /api/terminals/{id}/input`, corpo `{"text": "...", "prompt": "slug-opcional"}`.
 
-- O daemon troca `\r\n` e `\r` por `\n`, remove do texto qualquer `ESC[200~` e `ESC[201~` (para o texto não fechar a colagem por conta própria) e tira quebras de linha do fim.
+- O daemon troca `\r\n` e `\r` por `\n`, remove do texto todo caractere `ESC` e todo `U+009B` (assim o texto não fecha a colagem por conta própria nem carrega sequências de controle; card e memória inseridos pela paleta são texto escrito por agente) e tira quebras de linha do fim.
 - Grava `ESC[200~` + texto + `ESC[201~`, espera 150 ms e grava `\r`. Dois envios ao mesmo terminal não se misturam: um termina antes de o outro começar.
 - Não redimensiona o PTY e não depende de haver alguém conectado ao WebSocket.
 - A sequência não é cancelada se o browser desistir do pedido no meio: depois da colagem, o Enter é sempre tentado. Se o terminal encerrar entre a colagem e o Enter, a resposta é `409` e o uso do prompt não é contado.
@@ -85,7 +85,7 @@ Não testei o envio com o agente parado num menu de permissão. Ver "Riscos acei
 - Fica no rodapé do tile, sob o terminal, em todo tile **ligado e não encerrado**. Tile em pausa e tile encerrado não mostram a barra.
 - Campo de texto que cresce de 1 até 6 linhas, com rolagem depois disso; a área do terminal encolhe na mesma medida (a barra não cobre o terminal). `Enter` envia; `Shift+Enter` quebra linha; `Enter` durante a composição de um caractere (IME) não envia. Botão "Enviar" ao lado.
 - Vale para os três agentes (Claude, Codex, Kiro).
-- Enviar chama o endpoint. Com `204` o campo esvazia e mantém o foco. Com erro o texto fica no campo e uma linha mostra o motivo (encerrado, grande demais, daemon sem a rota).
+- Enviar chama o endpoint. Com `204` o campo esvazia e mantém o foco; se o usuário digitou outra coisa durante o envio, o texto novo fica. O rascunho e o "Liberar entrada" sobrevivem à pausa do tile (ficam guardados por terminal até recarregar a página). Com erro o texto fica no campo e uma linha mostra o motivo (encerrado, grande demais, daemon sem a rota).
 - Enquanto um envio está pendente, o botão e o `Enter` ficam desligados.
 - **Terminal de `nobre run`:** o rodapé mostra "Sessão do `nobre run`: você só assiste." e o link "Liberar entrada", como no mock. Clicar mostra a barra naquele tile, até recarregar a página. Não muda o tamanho do PTY (diferente de "Interagir").
 - **Detalhado:** uma linha de dicas sob a barra (`/` `@` vão direto ao agente · `#` prompts · `Ctrl K` buscar). **Simples:** sem a linha de dicas.
@@ -101,7 +101,8 @@ Não testei o envio com o agente parado num menu de permissão. Ver "Riscos acei
 - Tile sem card: o prompt entra com as variáveis do card vazias e a prévia avisa "sem card: as variáveis do card ficaram vazias".
 - Variável desconhecida (422): a barra não muda e a lista mostra o erro com o nome da variável. Card do tile que não existe mais (404): renderiza como tile sem card.
 - Se o texto da barra começa com `#`, `/` ou `!` depois de um prompt entrar, a prévia avisa: "O agente pode tratar o primeiro caractere como comando."
-- O uso só é contado no envio: a barra manda o slug junto. Se o usuário apagar o texto inteiro ou clicar em "Limpar", o slug é esquecido.
+- O uso só é contado no envio: a barra manda o slug junto. Se o usuário apagar o texto inteiro, substituir o texto inteiro por outro ou clicar em "Limpar", o slug é esquecido. "Substituir inteiro" é detectado por aproximação: o texto novo não começa nem termina com o mesmo caractere do anterior.
+- A lista do `#` abre por cima do terminal, sem mudar a altura dele.
 - Com a lista fechada por `Esc`, `Enter` envia o texto como está, com o `#`.
 
 ### `Ctrl+K`: paleta
@@ -146,7 +147,7 @@ Não testei o envio com o agente parado num menu de permissão. Ver "Riscos acei
 
 ## Testes
 
-- Daemon (Go): limpeza do texto (quebras, marcadores no meio, fim), ordem colagem → espera → Enter com relógio falso, dois envios em série, 400/404/409/413, uso do prompt contado só com envio bem-sucedido, PTY não redimensionado.
+- Daemon (Go): limpeza do texto (quebras, marcadores no meio, fim), ordem colagem → espera → Enter com a espera injetada (sem relógio de parede), dois envios simultâneos que não se misturam, 400/404/409/413, uso do prompt contado só com envio bem-sucedido, PTY não redimensionado.
 - Unidade (vitest): filtro e ordem dos prompts por agente, projeto e texto; texto inserido por card e por memória; inserção na posição do cursor.
 - Componente: barra (Enter, Shift+Enter, pendente, erro mantém o texto), `nobre run` com "Liberar entrada", lista do `#` (abrir, filtrar, setas, escolher, Esc, 422, sem card), paleta (abrir pelo botão e pelo atalho, não abrir com foco no xterm em "Interagir", alvo, item desligado sem alvo, inserir).
 - Bancada de performance: rodada manual registrada no card antes do merge.
