@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react'
 import { useOverview, usePlanLimits } from '../../api/queries'
 import { agentInfo } from '../../ui/agents'
-import { claudeChip, claudeWindows, kiroText, worstTone, type PlanTone } from './planStrip'
+import { claudeChip, claudeWindows, kiroText, worstTone, type PlanTone } from './planStripModel'
 
 const COLOR: Record<PlanTone, string> = { ok: 'var(--ok)', warn: 'var(--warn)', crit: 'var(--err)', stale: 'var(--text-2)' }
 const sub: React.CSSProperties = { fontSize: 12, color: 'var(--text-2)' }

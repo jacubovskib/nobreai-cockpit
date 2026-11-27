@@ -1,4 +1,4 @@
-import { claudeChip, claudeWindows, kiroText, planWindow, worstTone } from './planStrip'
+import { claudeChip, claudeWindows, kiroText, planWindow, worstTone } from './planStripModel'
 import type { AgentSpend, PlanLimits, PlanWindowState } from '../../api/types'
 
 const now = new Date(2026, 10, 26, 15, 16).getTime()
