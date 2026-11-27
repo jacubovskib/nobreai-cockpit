@@ -25,6 +25,30 @@ describe('place', () => {
     )
     expect(r.map((x) => [x.rootId, x.subId])).toEqual([[1, 2], [1, 3], [null, null], [null, null]])
   })
+
+  it('com sessão casada, vale o projeto da sessão; sem projeto, o card dela; sem os dois, o diretório', () => {
+    const over = new Map([
+      ['a', { sessionId: 's1', cardKey: 'NAC-9', projectId: 3 }],
+      ['b', { sessionId: '', cardKey: '', projectId: null }],
+      ['c', { sessionId: 's2', cardKey: '', projectId: null }],
+      ['d', { sessionId: 's3', cardKey: 'NAC-9', projectId: 99 }],
+    ])
+    const r = place(
+      [
+        term('a', { dir: '/w/pessoal' }),
+        term('b', { card_key: 'NAC-1', dir: '/w/pessoal' }),
+        term('c', { card_key: 'NAC-1', dir: '/w/pessoal' }),
+        term('d', { dir: '/w/pessoal' }),
+      ],
+      projects,
+      [card('NAC-1', 2), card('NAC-9', 1)],
+      over,
+    )
+    // a: projeto da sessão (site, filho de NobreTech); b: sessionId vazio = regra de hoje (card NAC-1);
+    // c: sessão sem card e sem projeto = diretório (o card do terminal não conta);
+    // d: projeto inexistente = card da sessão (NAC-9, raiz NobreTech).
+    expect(r.map((x) => [x.rootId, x.subId])).toEqual([[1, 3], [1, 2], [4, null], [1, null]])
+  })
 })
 
 describe('tabs e chips', () => {

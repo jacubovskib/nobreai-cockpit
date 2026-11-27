@@ -199,6 +199,26 @@ func TestMaxLive(t *testing.T) {
 	}
 }
 
+// Full diz se o Start recusaria por limite; encerrados não contam.
+func TestFull(t *testing.T) {
+	m := NewManager(Options{MaxLive: 1})
+	defer m.Close()
+	if m.Full() {
+		t.Fatal("vazio não está cheio")
+	}
+	tm, err := m.Start(sh("sleep 0.2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Full() {
+		t.Fatal("deveria estar cheio com 1 de 1")
+	}
+	waitDone(t, tm)
+	if m.Full() {
+		t.Fatal("encerrado não conta como vivo")
+	}
+}
+
 func TestEndedDoesNotCountAsLive(t *testing.T) {
 	m := NewManager(Options{MaxLive: 1})
 	defer m.Close()

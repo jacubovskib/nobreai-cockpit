@@ -9,6 +9,9 @@ import { LazyTerminalView } from '../../ui/LazyTerminalView'
 import type { Status, TerminalHandle } from '../../ui/TerminalView'
 import { minutesSince } from '../boardModel'
 import { clampH, snapSpan, type Cols, type TileSize } from './gridModel'
+import { CTX_DEFAULT_LIMIT, ctxLevel } from './contextLevel'
+import { CtxChip, CtxStrip, CtxWarning } from './TileContext'
+import { RestartPanel, overlay } from './TileRestart'
 
 export interface GridTileProps {
   t: TerminalInfo; project: Project | null; projects: Project[]
@@ -21,6 +24,13 @@ export interface GridTileProps {
   onResize(s: TileSize): void          // ao soltar o canto
   onDragStart(): void; onDragOverTile(after: boolean): void; onDropTile(after: boolean): void; onDragEnd(): void
   dropMark: 'before' | 'after' | null
+  cardKey?: string         // card efetivo do tile; ausente = t.card_key
+  sessionId?: string       // '' ou ausente = sem sessão casada
+  ctxPct?: number | null   // inteiro; null ou ausente = sem dado
+  ctxTokens?: number; ctxWindow?: number; ctxPctOnly?: boolean
+  ctxLimit?: number        // ausente = 80
+  whereStopped?: string; whereStoppedAt?: string | null   // "Onde parei" do card da sessão casada
+  onRestarted?(terminalId: string): void                  // o agente novo abriu no terminal terminalId
 }
 
 const btn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 28, minHeight: 28, padding: '0 8px', borderRadius: 6, border: '1px solid #3A3F4B', background: 'transparent', color: 'var(--text)', font: 'inherit', cursor: 'pointer' }
@@ -42,9 +52,20 @@ function GridTileView(p: GridTileProps) {
   const [menu, setMenu] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [hint, setHint] = useState('')
+  // Sessão em que o painel abriu: depois de aberto ele não depende mais de canRestart
+  // nem do sessionId atual (um /clear troca a sessão do tile).
+  const [restartFor, setRestartFor] = useState<string | null>(null)
+  const [cleared, setCleared] = useState(false)
 
   const ended = !isLive(t) || endedHere
   const agent = agentInfo(t.agent)
+  const card = p.cardKey ?? t.card_key
+  const limit = p.ctxLimit ?? CTX_DEFAULT_LIMIT
+  const pct = p.ctxPct ?? null
+  const showCtx = !ended && pct !== null
+  const canRestart = !ended && !!p.sessionId && card !== ''
+  const openRestart = () => { setMenu(false); setRestartFor(p.sessionId ?? null) }
+  const restartBusy = restartFor !== null || cleared
 
   // Em pausa o terminal é desmontado: ao ligar de novo abre assistindo.
   useEffect(() => {
@@ -112,7 +133,7 @@ function GridTileView(p: GridTileProps) {
     <section
       ref={root}
       data-tile={t.id}
-      aria-label={`Terminal ${agent.name}${t.card_key ? ` do card ${t.card_key}` : ''}`}
+      aria-label={`Terminal ${agent.name}${card ? ` do card ${card}` : ''}`}
       onClick={p.onFocus}
       onFocus={p.onFocus}
       onDragOver={(e) => { e.preventDefault(); p.onDragOverTile(isAfter(e.clientX)) }}
@@ -139,9 +160,10 @@ function GridTileView(p: GridTileProps) {
           <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><circle cx="4" cy="4" r="4" fill={agent.color} /></svg>
           {agent.name}
         </span>
-        {t.card_key
-          ? <Link to={withP(`/cards/${t.card_key}`)} className="mono">{t.card_key}</Link>
+        {card
+          ? <Link to={withP(`/cards/${card}`)} className="mono">{card}</Link>
           : <span style={{ color: 'var(--text-2)' }}>sem card</span>}
+        {showCtx && simple && <CtxChip pct={pct} limit={limit} />}
         {ended
           ? <span role="status" style={{ color: 'var(--text-2)' }}>{stateText}</span>
           : lost
@@ -173,11 +195,20 @@ function GridTileView(p: GridTileProps) {
               <button type="button" role="menuitem" style={menuItem} onClick={() => { setMenu(false); term.current?.setReadonly(!ro) }}>
                 {ro ? 'Interagir' : 'Somente assistir'}
               </button>
+              {canRestart
+                ? <button type="button" role="menuitem" style={menuItem} onClick={openRestart}>Limpar e continuar</button>
+                : p.sessionId && <button type="button" role="menuitem" style={menuItem} disabled>Limpar e continuar (precisa de um card)</button>}
               <button type="button" role="menuitem" style={{ ...menuItem, color: 'var(--err)' }} onClick={() => { setMenu(false); setConfirming(true) }}>Encerrar agente</button>
             </div>
           )}
         </span>
       </header>
+      {showCtx && canRestart && !restartBusy && ctxLevel(pct, limit) !== 'ok' && (
+        <CtxWarning pct={pct} limit={limit} simple={simple} onClear={openRestart} />
+      )}
+      {showCtx && !simple && (
+        <CtxStrip pct={pct} tokens={p.ctxTokens ?? 0} windowTokens={p.ctxWindow ?? 0} pctOnly={p.ctxPctOnly ?? false} limit={limit} onClear={canRestart && !restartBusy ? openRestart : undefined} />
+      )}
       {confirming && live && !ended && (
         <span role="group" aria-label="Confirmar encerramento" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)' }}>
           <span style={{ fontSize: 13 }}>Encerrar o agente e o terminal?</span>
@@ -185,7 +216,7 @@ function GridTileView(p: GridTileProps) {
           <button type="button" style={btn} onClick={() => setConfirming(false)}>Cancelar</button>
         </span>
       )}
-      <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex' }}>
+      <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', position: 'relative' }}>
         {live ? (
           <div style={{ flex: 1, minWidth: 0, padding: 4 }}>
             <LazyTerminalView
@@ -207,6 +238,24 @@ function GridTileView(p: GridTileProps) {
           >
             Em pausa. Clique para ligar.
           </button>
+        )}
+        {restartFor !== null ? (
+          <RestartPanel
+            key={restartFor}
+            sessionId={restartFor}
+            whereStopped={p.whereStopped ?? ''}
+            whereStoppedAt={p.whereStoppedAt ?? null}
+            onDone={(terminalId) => { setRestartFor(null); setCleared(true); if (terminalId) p.onRestarted?.(terminalId) }}
+            onCancel={() => setRestartFor(null)}
+          />
+        ) : cleared && (
+          <div style={overlay}>
+            <div role="status">Contexto limpo. O agente novo abriu em outro terminal.</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {live && !ended && <button type="button" style={btnDanger} onClick={() => setConfirming(true)}>Encerrar este terminal</button>}
+              <button type="button" style={btn} onClick={() => setCleared(false)}>Fechar</button>
+            </div>
+          </div>
         )}
       </div>
       {hint && (

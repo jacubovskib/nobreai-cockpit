@@ -16,14 +16,16 @@ func (s *server) restartCleanRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{id}/restart-clean", s.restartClean)
 }
 
-// restartClean: POST /api/sessions/{id}/restart-clean {where_stopped}
+// restartClean: POST /api/sessions/{id}/restart-clean {where_stopped, mode}
 // só com a sessão viva (409 session_ended se já terminou); garante um
 // "Onde parei" recente, desliga o card da sessão (que segue viva,
 // sem card), pausa o card e abre um agente novo pelo mesmo caminho do
-// Continuar (mesmo agente, modo padrão das configurações).
+// Continuar (mesmo agente; mode vazio usa o padrão das configurações, "background"
+// abre no gerenciador de terminais; mode inválido recusa antes de desligar o card).
 func (s *server) restartClean(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		WhereStopped string `json:"where_stopped"`
+		Mode         string `json:"mode"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -65,7 +67,7 @@ func (s *server) restartClean(w http.ResponseWriter, r *http.Request) {
 	// Validações sem efeito colateral antes de mexer em qualquer coisa: se o
 	// Continuar vai recusar, nada muda. Sem checar sessão viva: a atual ainda
 	// é dona do card e é a que sai.
-	pl, ok := s.prepareContinue(w, c.Key, continueInput{Agent: sess.Agent}, false)
+	pl, ok := s.prepareContinue(w, c.Key, continueInput{Agent: sess.Agent, Mode: in.Mode}, false)
 	if !ok {
 		return
 	}
