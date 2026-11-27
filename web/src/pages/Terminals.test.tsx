@@ -362,6 +362,36 @@ describe('Terminais em grade', () => {
     expect(within(tile('c')).getByRole('link', { name: 'NAC-3' })).toBeInTheDocument()
   })
 
+  it('aba salva à qual só o projeto da sessão leva: espera a overview antes de cair em Todos', async () => {
+    localStorage.setItem(KEY, JSON.stringify({ order: [], sizes: {}, cols: 3, simple: false, tab: 4, sub: 'all' }))
+    let release: (r: Response) => void = () => {}
+    const gate = new Promise<Response>((r) => { release = r })
+    api([info({ id: 'a', pid: 101, card_key: '', dir: '/outro', started_at: ago(1) })], PROJECTS, [], { '/api/overview': () => gate })
+    renderAt()
+    await findTabList()
+    await settle()
+    // Lista, projetos e cards chegaram; a overview não: vale a aba salva.
+    expect(within(tabList()).getByRole('tab', { name: 'Todos 1' })).not.toHaveAttribute('aria-selected', 'true')
+    expect(tileIds()).toEqual([])
+    expect(saved().tab).toBe(4)
+    await act(async () => { release(json(overview([sess('sa', 101, 'NAC-9', { effective_project_id: 4 })]))) })
+    expect(await within(tabList()).findByRole('tab', { name: 'solo 1' })).toHaveAttribute('aria-selected', 'true')
+    expect(tileIds()).toEqual(['a'])
+  })
+
+  it('overview com erro 500 não segura a grade: a aba salva sem terminal cai em Todos', async () => {
+    localStorage.setItem(KEY, JSON.stringify({ order: [], sizes: {}, cols: 3, simple: false, tab: 4, sub: 'all' }))
+    api([info({ id: 'a', pid: 101, card_key: '', dir: '/outro', started_at: ago(1) })], PROJECTS, [], {
+      '/api/overview': () => json({ error: 'falhou' }, 500),
+    })
+    renderAt()
+    await findTabList()
+    await settle()
+    expect(within(tabList()).getByRole('tab', { name: 'Todos 1' })).toHaveAttribute('aria-selected', 'true')
+    expect(tileIds()).toEqual(['a'])
+    expect(screen.getAllByTestId('tv')).toHaveLength(1)
+  })
+
   it('o contexto vai ao tile da sessão certa e o traço usa o limite das configurações', async () => {
     api([
       info({ id: 'a', pid: 101, card_key: 'NAC-1', started_at: ago(1) }),

@@ -222,9 +222,10 @@ export function Terminals() {
   const tabList = useMemo(() => tabs(placed, projects), [placed, projects])
 
   // Aba ou chip salvos sem terminal caem em "Todos" (sem regravar). Antes da
-  // lista, dos projetos e dos cards chegarem, vale o salvo (o card decide o
-  // projeto do terminal).
-  const ready = !!data && !projectsQ.isPending && !cardsQ.isPending
+  // lista, dos projetos, dos cards e da overview chegarem, vale o salvo (o card
+  // e a sessão casada decidem o projeto do terminal). Overview com erro não
+  // está pendente: a grade segue sem ela.
+  const ready = !!data && !projectsQ.isPending && !cardsQ.isPending && !overviewQ.isPending
   const tab = !ready || tabList.some((x) => x.id === layout.tab) ? layout.tab : 'all'
   const chipList = useMemo(() => chips(placed, projects, tab), [placed, projects, tab])
   const sub = !ready || layout.sub === 'all' || chipList.some((x) => x.id === layout.sub) ? layout.sub : 'all'
