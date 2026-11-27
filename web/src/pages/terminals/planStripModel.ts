@@ -69,5 +69,7 @@ export function kiroText(perAgent: readonly AgentSpend[] | undefined, hasKiro: b
   if (!hasKiro || !Array.isArray(perAgent)) return null
   const credits = perAgent.find((a) => a?.agent === 'kiro')?.credits
   if (typeof credits !== 'number' || !(credits > 0)) return null
-  return `${credits.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} créditos hoje`
+  const n = credits.toLocaleString('pt-BR', { maximumFractionDigits: 1 })
+  // Singular pelo número mostrado: 1,04 aparece como "1".
+  return `${n} ${n === '1' ? 'crédito' : 'créditos'} hoje`
 }

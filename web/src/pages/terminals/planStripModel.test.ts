@@ -62,4 +62,11 @@ describe('kiroText', () => {
     expect(kiroText(k(0), true)).toBeNull()
     expect(kiroText(undefined, true)).toBeNull()
   })
+  it('singular só quando o número mostrado é 1', () => {
+    expect(kiroText(k(1), true)).toBe('1 crédito hoje')
+    expect(kiroText(k(1.04), true)).toBe('1 crédito hoje')
+    expect(kiroText(k(0.5), true)).toBe('0,5 créditos hoje')
+    expect(kiroText(k(1.5), true)).toBe('1,5 créditos hoje')
+    expect(kiroText(k(2), true)).toBe('2 créditos hoje')
+  })
 })
