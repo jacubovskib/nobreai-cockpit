@@ -520,3 +520,33 @@ func TestCreateProjectInsideGroupNameClash(t *testing.T) {
 		t.Fatalf("com nome = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// Pedido inválido não cadastra nada: o repositório só é ligado ao grupo
+// depois de tudo o que o usuário informou ter sido validado.
+func TestMeCommandInvalidRequestLinksNothing(t *testing.T) {
+	const front = "/w/bravonix/turing-front"
+	a := dirGitAPI(t, &dirGit{roots: map[string]string{front: front}})
+	g, _ := a.bravonix(t)
+	a.liveSess(t, domain.Session{ID: "claude:s", PID: 4242, Cwd: front})
+	for _, path := range []string{"/api/me/start", "/api/me/cards"} {
+		for name, extra := range map[string][2]string{
+			"tipo": {"type", "xx"}, "épico": {"parent_key", "NAC-999"}, "prioridade": {"priority", "xx"},
+		} {
+			in := map[string]string{"title": "T", "cwd": front, extra[0]: extra[1]}
+			rec := a.do(t, "POST", path, in, 4242)
+			if rec.Code != http.StatusBadRequest && rec.Code != http.StatusNotFound {
+				t.Fatalf("%s %s = %d %s", path, name, rec.Code, rec.Body)
+			}
+			if p := a.projectAt(t, front); p != nil {
+				t.Fatalf("%s %s: cadastrou %+v", path, name, p)
+			}
+			if s, _ := a.st.GetSession("claude:s"); s.ProjectID != nil {
+				t.Fatalf("%s %s: adotou a sessão: %+v", path, name, s)
+			}
+		}
+	}
+	// O pedido válido continua ligando.
+	if c := a.create(t, "/api/me/start", map[string]string{"title": "T", "cwd": front}, 4242); c.LinkedRepo != "turing-front" || c.LinkedGroup != g.Name {
+		t.Fatalf("válido = %+v", c)
+	}
+}

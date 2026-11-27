@@ -196,15 +196,20 @@ type cardTarget struct {
 	other                   bool
 	linkedRepo, linkedGroup string
 	linkedDir, linkRefused  string
+	// O que linkRepo usa: o projeto da sessão, o da pasta do comando e o
+	// repositório git dela.
+	own   *int64
+	found *domain.Project
+	loc   gitinfo.Location
 }
 
 // commandProject escolhe o projeto do card que o comando cria: o projeto
 // cadastrado mais fundo que contém cwd, a pasta onde o comando rodou (a regra
 // do hook, store.ProjectForLocation, com a tradução do worktree ligado); sem
-// projeto lá (ou sem cwd), o da sessão (o ligado ou o do cwd dela). Um
-// repositório ainda não cadastrado dentro de um grupo com pasta é ligado ao
-// grupo antes (linkRepoToGroup). Sem projeto, responde 409 com o aviso certo
-// para a pasta.
+// projeto lá (ou sem cwd), o da sessão (o ligado ou o do cwd dela). Só
+// escolhe, não grava nada: o repositório ainda não cadastrado dentro de um
+// grupo com pasta é ligado depois, por linkRepo, quando o pedido já foi
+// validado. Sem projeto, responde 409 com o aviso certo para a pasta.
 func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd string) (cardTarget, bool) {
 	fail := func(err error) (cardTarget, bool) {
 		writeStoreError(w, err, "")
@@ -233,19 +238,7 @@ func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd 
 			return fail(err)
 		}
 		if p != nil {
-			t := cardTarget{id: p.ID, from: dir}
-			if child, refused, err := s.linkRepoToGroup(*p, loc); err != nil {
-				return fail(err)
-			} else if child != nil {
-				t.id, t.linkedRepo, t.linkedGroup = child.ID, child.Name, p.Name
-				if dir := filepath.Base(child.Path); dir != child.Name {
-					t.linkedDir = dir
-				}
-			} else if refused != "" {
-				t.linkRefused, t.linkedGroup = refused, p.Name
-			}
-			t.other = own == nil || *own != t.id
-			return t, true
+			return cardTarget{id: p.ID, from: dir, other: own == nil || *own != p.ID, own: own, found: p, loc: loc}, true
 		}
 	}
 	if own != nil {
@@ -264,6 +257,31 @@ func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd 
 	}
 	writeError(w, http.StatusConflict, msg)
 	return cardTarget{}, false
+}
+
+// linkRepo liga ao grupo o repositório ainda não cadastrado da pasta do
+// comando (linkRepoToGroup) e passa o card para ele. É a única gravação da
+// escolha do projeto: os handlers chamam depois de validar o pedido, para um
+// pedido recusado não deixar o repositório cadastrado.
+func (s *server) linkRepo(w http.ResponseWriter, t *cardTarget) bool {
+	if t.found == nil {
+		return true
+	}
+	child, refused, err := s.linkRepoToGroup(*t.found, t.loc)
+	switch {
+	case err != nil:
+		writeStoreError(w, err, "")
+		return false
+	case child != nil:
+		t.id, t.linkedRepo, t.linkedGroup = child.ID, child.Name, t.found.Name
+		if dir := filepath.Base(child.Path); dir != child.Name {
+			t.linkedDir = dir
+		}
+		t.other = t.own == nil || *t.own != t.id
+	case refused != "":
+		t.linkRefused, t.linkedGroup = refused, t.found.Name
+	}
+	return true
 }
 
 // linkRepoToGroup cadastra como filho do grupo g o repositório git de loc (o
@@ -421,12 +439,17 @@ func (s *server) meStart(w http.ResponseWriter, r *http.Request, sess domain.Ses
 	if !ok {
 		return
 	}
-	projectID := target.id
-	nc := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, ProjectID: projectID}
+	nc := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen}
 	if code, msg := s.applyHierarchy(&nc, in.hierarchyInput, true); code != 0 {
 		writeError(w, code, msg)
 		return
 	}
+	// Pedido validado: só agora o repositório da pasta entra no grupo.
+	if !s.linkRepo(w, &target) {
+		return
+	}
+	projectID := target.id
+	nc.ProjectID = projectID
 	// o branch vem do syncBranch: a base nunca vira branch do card
 	c, err := s.st.CreateCardAndAttach(nc, sess.ID)
 	if err != nil {
@@ -478,8 +501,21 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 	if !ok {
 		return
 	}
+	// A hierarquia é validada num rascunho antes de qualquer gravação: só com
+	// o pedido aceito o repositório da pasta entra no grupo.
+	card := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, Column: col}
+	if code, msg := s.applyHierarchy(&card, in.hierarchyInput, true); code != 0 {
+		writeError(w, code, msg)
+		return
+	}
+	if !s.linkRepo(w, &target) {
+		return
+	}
 	projectID := target.id
 	branch := strings.TrimSpace(in.Branch)
+	if card.Type == domain.TypeEpico {
+		branch = "" // o épico nunca guarda branch
+	}
 	if gp, err := s.projectByID(projectID); err != nil {
 		writeStoreError(w, err, "")
 		return
@@ -496,15 +532,10 @@ func (s *server) meCards(w http.ResponseWriter, r *http.Request, sess domain.Ses
 			branch = ""
 		}
 	}
-	card := domain.Card{Title: in.Title, Goal: in.Goal, DoneWhen: in.DoneWhen, Branch: branch,
-		ProjectID: projectID, Column: col}
+	card.Branch, card.ProjectID = branch, projectID
 	if w := strings.TrimSpace(in.WhereStopped); w != "" {
 		now := s.now()
 		card.WhereStopped, card.WhereStoppedAt = w, &now
-	}
-	if code, msg := s.applyHierarchy(&card, in.hierarchyInput, true); code != 0 {
-		writeError(w, code, msg)
-		return
 	}
 	c, err := s.st.CreateCard(card)
 	if err != nil {
