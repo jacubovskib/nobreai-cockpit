@@ -3,6 +3,7 @@ import { TileInput, type TileInputProps } from './TileInput'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Prompt } from '../../api/types'
 import { inputFor } from './inputRegistry'
+import { draftFor, resetDrafts } from './inputDrafts'
 
 const URL = '/api/terminals/t1/input'
 
@@ -20,6 +21,7 @@ const setup = (over: Partial<TileInputProps> = {}) => {
 const box = () => screen.getByRole('textbox', { name: 'Enviar ao agente Claude Code' }) as HTMLTextAreaElement
 const type = (v: string) => fireEvent.change(box(), { target: { value: v } })
 
+beforeEach(() => resetDrafts())
 afterEach(() => vi.unstubAllGlobals())
 
 describe('TileInput', () => {
@@ -160,6 +162,39 @@ describe('TileInput', () => {
     expect(inputFor('t1')).not.toBeNull()
     a.unmount()
     expect(inputFor('t1')).toBeNull()
+  })
+
+  it('desmontar e montar de novo (pausa) devolve o texto e o Liberar entrada', () => {
+    const a = setup({ run: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Liberar entrada' }))
+    type('rascunho')
+    a.unmount()
+    expect(draftFor('t1')).toEqual({ text: 'rascunho', freed: true })
+    setup({ run: true })
+    expect(box()).toHaveValue('rascunho')
+  })
+
+  it('enviar esvazia o rascunho guardado', async () => {
+    mock()
+    const a = setup()
+    type('oi')
+    fireEvent.keyDown(box(), { key: 'Enter' })
+    await waitFor(() => expect(box()).toHaveValue(''))
+    a.unmount()
+    setup()
+    expect(box()).toHaveValue('')
+  })
+
+  it('envio que termina com a barra desmontada não deixa o texto enviado no rascunho', async () => {
+    let reply: (r: Response) => void = () => {}
+    vi.stubGlobal('fetch', vi.fn((url: string) => url === URL ? new Promise<Response>((res) => { reply = res }) : Promise.resolve(new Response('[]', { status: 200 }))))
+    const a = setup()
+    type('oi')
+    fireEvent.keyDown(box(), { key: 'Enter' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled())
+    a.unmount()
+    await act(async () => { reply(new Response('{}', { status: 200 })) })
+    expect(draftFor('t1').text).toBe('')
   })
 
   it('o rodapé reserva 30px à direita para o canto de redimensionar', () => {
@@ -351,6 +386,62 @@ describe('TileInput', () => {
       type('x')
       fireEvent.keyDown(box(), { key: 'Enter' })
       await waitFor(() => expect(bodies(fn)).toEqual([{ text: 'x', prompt: '' }]))
+    })
+
+    it('escolher, trocar o texto todo por x (selecionar tudo e digitar) e enviar manda prompt vazio', async () => {
+      const fn = mockApi()
+      setup()
+      type('#')
+      await waitFor(() => expect(opts()).toHaveLength(2))
+      fireEvent.click(opts()[0])
+      await waitFor(() => expect(box()).toHaveValue('Texto de alfa NAC-7'))
+      type('x')
+      expect(screen.queryByText(/^Prévia:/)).toBeNull()
+      fireEvent.keyDown(box(), { key: 'Enter' })
+      await waitFor(() => expect(bodies(fn)).toEqual([{ text: 'x', prompt: '' }]))
+    })
+
+    it('escolher, trocar o texto todo por # reabre a lista', async () => {
+      mockApi()
+      setup()
+      type('#')
+      await waitFor(() => expect(opts()).toHaveLength(2))
+      fireEvent.click(opts()[0])
+      await waitFor(() => expect(box()).toHaveValue('Texto de alfa NAC-7'))
+      type('#')
+      await waitFor(() => expect(list()).not.toBeNull())
+    })
+
+    it('escolher e acrescentar texto mantém o slug no envio', async () => {
+      const fn = mockApi()
+      setup()
+      type('#')
+      await waitFor(() => expect(opts()).toHaveLength(2))
+      fireEvent.click(opts()[0])
+      await waitFor(() => expect(box()).toHaveValue('Texto de alfa NAC-7'))
+      type('Texto de alfa NAC-7 e mais isto')
+      expect(screen.getByText(/^Prévia:/)).toBeInTheDocument()
+      fireEvent.keyDown(box(), { key: 'Enter' })
+      await waitFor(() => expect(bodies(fn)).toEqual([{ text: 'Texto de alfa NAC-7 e mais isto', prompt: 'alfa' }]))
+    })
+
+    it('a lista abre por cima da barra (absoluta), sem mudar a altura do terminal', async () => {
+      mockApi()
+      setup()
+      type('#')
+      await waitFor(() => expect(opts()).toHaveLength(2))
+      const lb = list() as HTMLElement
+      expect(lb.style.position).toBe('absolute')
+      expect(lb.style.bottom).toBe('100%')
+      expect((screen.getByTestId('tile-input') as HTMLElement).style.position).toBe('relative')
+    })
+
+    it('sem resultado, o aviso também fica por cima da barra', async () => {
+      mockApi()
+      setup()
+      type('#zzz')
+      const msg = await screen.findByText('Nenhum prompt com “zzz”.')
+      expect((msg as HTMLElement).style.position).toBe('absolute')
     })
 
     it('Limpar esvazia a barra e esquece o slug', async () => {

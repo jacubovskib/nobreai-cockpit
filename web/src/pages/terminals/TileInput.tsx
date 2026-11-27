@@ -2,11 +2,14 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, post } from '../../api/client'
 import { usePrompts } from '../../api/queries'
 import type { Project } from '../../api/types'
-import { commandWarning, inputError, insertAt, promptsFor, sendInput } from './inputModel'
+import { draftFor, saveFreed, saveText } from './inputDrafts'
+import { commandWarning, inputError, insertAt, promptsFor, replacedAll, sendInput } from './inputModel'
 import { registerInput } from './inputRegistry'
 
 // Barra de entrada do tile: o texto digitado vive aqui, em estado local, para
-// que digitar não renderize o tile nem a página.
+// que digitar não renderize o tile nem a página. O texto e o "Liberar entrada"
+// também vão para inputDrafts: em pausa o tile desmonta a barra e, ao ligar de
+// novo, ela volta com eles. O prompt escolhido (slug e prévia) não volta.
 
 export interface TileInputProps {
   terminalId: string; agent: string; agentName: string
@@ -17,7 +20,13 @@ export interface TileInputProps {
 
 const MAX_ROWS = 6
 const btn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minHeight: 28, padding: '0 10px', borderRadius: 6, border: '1px solid #3A3F4B', background: 'transparent', color: 'var(--text)', font: 'inherit', cursor: 'pointer' }
-const footer: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 30px 6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
+const footer: React.CSSProperties = { position: 'relative', display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 30px 6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
+// Lista do # por cima do terminal, ancorada no rodapé: abrir não muda a altura
+// do terminal (nem redimensiona o PTY no modo Interagir).
+const popup: React.CSSProperties = {
+  position: 'absolute', bottom: '100%', left: 8, right: 30, zIndex: 20, maxHeight: 160, overflowY: 'auto',
+  margin: 0, padding: 0, listStyle: 'none', border: '1px solid #3A3F4B', borderRadius: 6, background: 'var(--surface, #14171D)',
+}
 
 const firstLine = (s: string) => s.split('\n')[0]
 
@@ -25,8 +34,8 @@ const firstLine = (s: string) => s.split('\n')[0]
 interface Preview { noCard: boolean; command: boolean }
 
 function TileInputView(p: TileInputProps) {
-  const [freed, setFreed] = useState(false)
-  const [text, setText] = useState('')
+  const [freed, setFreed] = useState(() => draftFor(p.terminalId).freed)
+  const [text, setTextState] = useState(() => draftFor(p.terminalId).text)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [closed, setClosed] = useState(false)   // lista do # fechada por Esc
@@ -43,6 +52,7 @@ function TileInputView(p: TileInputProps) {
   const pickSeq = useRef(0)
   const pickRef = useRef<(slug: string) => void>(() => {})
   const bar = !p.run || freed
+  const setText = (v: string) => { saveText(p.terminalId, v); setTextState(v) }
 
   // Registro para a paleta e a lista do #: só enquanto a barra existe.
   useEffect(() => {
@@ -123,8 +133,9 @@ function TileInputView(p: TileInputProps) {
       await sendInput(p.terminalId, t, slug.current)
       slug.current = ''
       setPreview(null)
-      // Só esvazia se nada foi digitado enquanto o envio estava pendente.
-      if (textRef.current === t) { setText(''); setClosed(false) }
+      // Só esvazia se nada foi digitado enquanto o envio estava pendente. Pelo
+      // rascunho: a barra pode ter desmontado (pausa) durante o envio.
+      if (draftFor(p.terminalId).text === t) { setText(''); setClosed(false) }
       setError('')
       area.current?.focus()
     } catch (e) {
@@ -139,7 +150,7 @@ function TileInputView(p: TileInputProps) {
     return (
       <div data-testid="tile-input" style={{ ...footer, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <span style={{ color: 'var(--text-2)' }}>Sessão do nobre run: você só assiste.</span>
-        <button type="button" style={btn} onClick={() => setFreed(true)}>Liberar entrada</button>
+        <button type="button" style={btn} onClick={() => { saveFreed(p.terminalId); setFreed(true) }}>Liberar entrada</button>
       </div>
     )
   }
@@ -149,21 +160,19 @@ function TileInputView(p: TileInputProps) {
   const rows = Math.min(MAX_ROWS, Math.max(1, text.split('\n').length))
   return (
     <div data-testid="tile-input" style={footer}>
-      {open && (
-        <div>
-          <ul role="listbox" aria-label="Prompts salvos" style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: 160, overflowY: 'auto', border: '1px solid #3A3F4B', borderRadius: 6 }}>
-            {found.map((x, i) => (
-              <li key={x.id} role="option" aria-selected={i === sel} onMouseDown={(e) => e.preventDefault()} onClick={() => void pick(x.slug)}
-                style={{ padding: '4px 8px', cursor: 'pointer', background: i === sel ? 'var(--bg-2, #2A2F3A)' : 'transparent' }}>
-                <strong>{x.name}</strong>{' '}
-                <span style={{ color: 'var(--text-2)' }}>{firstLine(x.description || x.body)}</span>
-              </li>
-            ))}
-          </ul>
-          {found.length === 0 && <p style={{ margin: '4px 0 0', color: 'var(--text-2)' }}>Nenhum prompt com “{text.slice(1)}”.</p>}
-          {pickError && <p role="alert" style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--err)' }}>{pickError}</p>}
-        </div>
-      )}
+      {open && (found.length > 0 ? (
+        <ul role="listbox" aria-label="Prompts salvos" style={popup}>
+          {found.map((x, i) => (
+            <li key={x.id} role="option" aria-selected={i === sel} onMouseDown={(e) => e.preventDefault()} onClick={() => void pick(x.slug)}
+              style={{ padding: '4px 8px', cursor: 'pointer', background: i === sel ? 'var(--bg-2, #2A2F3A)' : 'transparent' }}>
+              <strong>{x.name}</strong>{' '}
+              <span style={{ color: 'var(--text-2)' }}>{firstLine(x.description || x.body)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p style={{ ...popup, padding: '4px 8px', color: 'var(--text-2)' }}>Nenhum prompt com “{text.slice(1)}”.</p>
+      ))}
       <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
         <textarea
           ref={area}
@@ -179,7 +188,12 @@ function TileInputView(p: TileInputProps) {
             setPickError('')
             setSel(0)
             if (!v.startsWith('#') || v === '') setClosed(false)
-            if (v === '') { slug.current = ''; setPreview(null) }
+            // Trocou o texto todo (ou apagou): já não é o prompt escolhido.
+            if (v === '' || (slug.current !== '' && replacedAll(textRef.current, v))) {
+              slug.current = ''
+              setPreview(null)
+              setClosed(false)
+            }
           }}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return
@@ -211,7 +225,7 @@ function TileInputView(p: TileInputProps) {
           {preview.command && <span>O agente pode tratar o primeiro caractere como comando.</span>}
         </div>
       )}
-      {!open && pickError && <p role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--err)' }}>{pickError}</p>}
+      {pickError && <p role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--err)' }}>{pickError}</p>}
       {error && <p role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--err)' }}>{error}</p>}
       {!p.simple && <span style={{ fontSize: 12, color: 'var(--text-2)' }}>/ @ vão direto ao agente · # prompts · Ctrl K buscar</span>}
     </div>

@@ -50,6 +50,14 @@ export function paletteMemories(mems: Memory[], project: Project | null, query: 
     .slice(0, MAX_GROUP)
 }
 
+// A edição trocou o texto inteiro (selecionar tudo e digitar, ou apagar tudo):
+// o novo não tem nem começo nem fim em comum com o anterior.
+export function replacedAll(prev: string, next: string): boolean {
+  if (prev === next) return false
+  if (prev === '' || next === '') return true
+  return prev[0] !== next[0] && prev[prev.length - 1] !== next[next.length - 1]
+}
+
 // Texto que o agente leria como comando (#, / ou !) em vez de conversa.
 export function commandWarning(text: string): boolean {
   return text !== '' && '#/!'.includes(text[0])

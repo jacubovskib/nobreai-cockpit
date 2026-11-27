@@ -13,6 +13,7 @@ import { CTX_DEFAULT_LIMIT, ctxLevel } from './contextLevel'
 import { CtxChip, CtxStrip, CtxWarning } from './TileContext'
 import { RestartPanel, overlay } from './TileRestart'
 import { TileInput } from './TileInput'
+import { dropDraft } from './inputDrafts'
 
 export interface GridTileProps {
   t: TerminalInfo; project: Project | null; projects: Project[]
@@ -74,6 +75,8 @@ function GridTileView(p: GridTileProps) {
     setRo(true); setStatus('conectando'); setMenu(false); setConfirming(false)
   }, [live])
   useEffect(() => { if (!live || ended) { setMenu(false); setConfirming(false) } }, [live, ended])
+  // Encerrado, o rascunho da barra não tem mais para onde ir.
+  useEffect(() => { if (ended) dropDraft(t.id) }, [ended, t.id])
 
   // Posição do ponteiro na metade direita do tile = soltar depois dele.
   const isAfter = (clientX: number) => {

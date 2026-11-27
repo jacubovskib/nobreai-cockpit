@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { TerminalInfo } from '../../api/terminals'
 import type { TerminalHandle, TerminalViewProps } from '../../ui/TerminalView'
 import { GridTile, type GridTileProps } from './GridTile'
+import { draftFor, resetDrafts } from './inputDrafts'
+import { inputFor } from './inputRegistry'
 
 // Terminal simulado: guarda as props e o handle para o teste comandar.
 const handle = { setReadonly: vi.fn(), kill: vi.fn(), fit: vi.fn(), reconnect: vi.fn(), holdFit: vi.fn(), releaseFit: vi.fn() }
@@ -34,7 +36,7 @@ function setup(over: Partial<GridTileProps> = {}) {
   return { props, ...r, rerenderWith: (o: Partial<GridTileProps>) => r.rerender(ui({ ...props, ...o })) }
 }
 
-beforeEach(() => { Object.values(handle).forEach((f) => f.mockClear()); last = null })
+beforeEach(() => { Object.values(handle).forEach((f) => f.mockClear()); last = null; resetDrafts() })
 
 describe('GridTile', () => {
   it('em pausa mostra o botão e clicar liga', () => {
@@ -471,6 +473,37 @@ describe('barra de entrada no tile', () => {
     fireEvent.change(bar()!, { target: { value: 'oi' } })
     const calls = Object.entries(props).filter(([, v]) => typeof v === 'function' && (v as ReturnType<typeof vi.fn>).mock?.calls.length)
     expect(calls.map(([k]) => k).filter((k) => k !== 'onFocus')).toEqual([])
+  })
+
+  it('pausa e volta: o texto digitado volta na barra; em pausa não há registro', () => {
+    const { rerenderWith } = setup()
+    fireEvent.change(bar()!, { target: { value: 'meio escrito' } })
+    rerenderWith({ live: false })
+    expect(bar()).toBeNull()
+    expect(inputFor('t1')).toBeNull()
+    rerenderWith({ live: true })
+    expect(bar()).toHaveValue('meio escrito')
+    expect(inputFor('t1')).not.toBeNull()
+  })
+
+  it('Liberar entrada de um nobre run continua valendo depois da pausa', () => {
+    const run = term({ origin: 'nobre run' })
+    const { rerenderWith } = setup({ t: run })
+    fireEvent.click(screen.getByRole('button', { name: 'Liberar entrada' }))
+    fireEvent.change(bar()!, { target: { value: 'oi' } })
+    rerenderWith({ t: run, live: false })
+    expect(screen.queryByRole('button', { name: 'Liberar entrada' })).toBeNull()
+    rerenderWith({ t: run, live: true })
+    expect(screen.queryByRole('button', { name: 'Liberar entrada' })).toBeNull()
+    expect(bar()).toHaveValue('oi')
+  })
+
+  it('terminal encerrado esquece o rascunho', () => {
+    const { rerenderWith } = setup()
+    fireEvent.change(bar()!, { target: { value: 'oi' } })
+    rerenderWith({ t: term({ ended_at: new Date().toISOString(), exit_code: 0 }) })
+    expect(bar()).toBeNull()
+    expect(draftFor('t1')).toEqual({ text: '', freed: false })
   })
 
   it('o corpo marca data-interactive só no modo Interagir', () => {

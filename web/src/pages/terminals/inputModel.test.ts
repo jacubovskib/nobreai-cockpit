@@ -6,7 +6,7 @@ const post = vi.fn()
 vi.mock('../../api/client', async (orig) => ({ ...(await orig<typeof import('../../api/client')>()), post: (...a: unknown[]) => post(...a) }))
 
 import {
-  MAX_GROUP, cardPiece, commandWarning, inputError, insertAt, memoryPiece, paletteCards, paletteMemories, promptsFor, sendInput,
+  MAX_GROUP, cardPiece, commandWarning, inputError, insertAt, memoryPiece, paletteCards, paletteMemories, promptsFor, replacedAll, sendInput,
 } from './inputModel'
 
 const prompt = (o: Partial<Prompt>) => ({ name: 'P', slug: 'p', tag: '', agents: ['claude'], project_id: null, uses: 0, ...o }) as Prompt
@@ -123,5 +123,24 @@ describe('inputError', () => {
     expect(e(504)).toBe('O agente não leu a entrada. Tente de novo.')
     expect(e(500)).toBe('Não foi possível enviar.')
     expect(inputError(new Error('x'))).toBe('Não foi possível enviar.')
+  })
+})
+
+describe('replacedAll', () => {
+  it('sem começo nem fim em comum: trocou tudo', () => {
+    expect(replacedAll('Texto do prompt', 'x')).toBe(true)
+    expect(replacedAll('abc', 'xyz')).toBe(true)
+  })
+  it('começo ou fim em comum: edição parcial', () => {
+    expect(replacedAll('Texto do prompt', 'Texto do prompt e mais')).toBe(false) // acrescentou no fim
+    expect(replacedAll('Texto do prompt', 'Antes. Texto do prompt')).toBe(false) // acrescentou no começo
+    expect(replacedAll('Texto do prompt', 'Texto prompt')).toBe(false) // apagou no meio
+    expect(replacedAll('abc', 'axc')).toBe(false)
+  })
+  it('esvaziar conta como trocar tudo; texto igual não', () => {
+    expect(replacedAll('abc', '')).toBe(true)
+    expect(replacedAll('', 'x')).toBe(true)
+    expect(replacedAll('abc', 'abc')).toBe(false)
+    expect(replacedAll('', '')).toBe(false)
   })
 })

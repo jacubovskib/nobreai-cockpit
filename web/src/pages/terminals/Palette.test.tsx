@@ -14,7 +14,7 @@ const mem = (o: object) => ({ id: 1, project_id: null, rule: 'regra', do: 'fazer
 function mount(over: Partial<React.ComponentProps<typeof Palette>> = {}) {
   const onClose = vi.fn()
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(
+  mounted = render(
     <QueryClientProvider client={qc}>
       <Palette targetId="t1" targetLabel="Claude Code · NAC-63" agent="claude" project={PROJECT} onClose={onClose} {...over} />
     </QueryClientProvider>,
@@ -22,6 +22,7 @@ function mount(over: Partial<React.ComponentProps<typeof Palette>> = {}) {
   return onClose
 }
 
+let mounted: ReturnType<typeof render> | null = null
 const handle = (): TileInputHandle => ({ insert: vi.fn(), pickPrompt: vi.fn(), focus: vi.fn() })
 let off: () => void = () => {}
 let h: TileInputHandle
@@ -116,6 +117,36 @@ describe('Palette', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     fireEvent.mouseDown(screen.getByRole('dialog').parentElement!)
     expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
+  it('clique num item desligado leva o foco ao body e Esc ainda fecha', async () => {
+    off()
+    const onClose = mount()
+    const item = (await screen.findByText('NAC-7 · Título')).closest('button')!
+    fireEvent.mouseDown(item)
+    ;(document.activeElement as HTMLElement).blur()
+    expect(document.activeElement).toBe(document.body)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('com o foco no body (clique no título do grupo), setas e Enter ainda escolhem', async () => {
+    mount()
+    await screen.findByText('NAC-7 · Título')
+    fireEvent.mouseDown(screen.getByText('Cards'))
+    ;(document.activeElement as HTMLElement).blur()
+    fireEvent.keyDown(document.body, { key: 'ArrowDown' })
+    fireEvent.keyDown(document.body, { key: 'Enter' })
+    expect(h.insert).toHaveBeenCalledWith('NAC-7 · Título\nOnde parei: x')
+    expect(h.insert).toHaveBeenCalledTimes(1)
+  })
+
+  it('fechada (desmontada), Esc não chama mais onClose', async () => {
+    const onClose = mount()
+    await screen.findByText('Revisar')
+    mounted!.unmount()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('nada encontrado', async () => {

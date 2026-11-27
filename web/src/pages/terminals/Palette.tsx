@@ -77,17 +77,27 @@ export function Palette({ targetId, targetLabel, agent, project, onClose }: Pale
     it.pick(h)
   }
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
+  // Teclas na janela, não no diálogo: clicar num título, no espaço vazio ou
+  // num item desligado manda o foco para o body, e Esc/setas/Enter seguem
+  // valendo. O ref evita reassinar a cada render.
+  const onKey = useRef<(e: KeyboardEvent) => void>(() => {})
+  onKey.current = (e) => {
+    if (e.isComposing) return
     if (e.key === 'Escape') { e.preventDefault(); onClose(); return }
     if (!usable || flat.length === 0) return
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive((mark + 1) % flat.length) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((mark - 1 + flat.length) % flat.length) }
     else if (e.key === 'Enter') { e.preventDefault(); choose(flat[mark]) }
   }
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => onKey.current(e)
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [])
 
   return (
     <div style={overlay} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div role="dialog" aria-modal="true" aria-label="Buscar" style={box} onKeyDown={onKeyDown}>
+      <div role="dialog" aria-modal="true" aria-label="Buscar" style={box}>
         <input
           ref={inputRef}
           aria-label="Buscar"
