@@ -33,7 +33,10 @@ export const forCard = (list: TerminalInfo[] | undefined, key: string) =>
   (list ?? []).filter((t) => t.card_key === key).sort((a, b) => startedMs(b) - startedMs(a))
 
 // wsUrl monta ws(s)://host/api/terminals/{id}/ws a partir de window.location.
-export function wsUrl(id: string, readonly: boolean, loc: Pick<Location, 'protocol' | 'host'> = window.location) {
+// batch pede ao daemon a saída agrupada em janelas de 100 ms (só para quem
+// assiste: quem digita quer o eco na hora).
+export function wsUrl(id: string, readonly: boolean, loc: Pick<Location, 'protocol' | 'host'> = window.location, batch = false) {
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${loc.host}/api/terminals/${encodeURIComponent(id)}/ws${readonly ? '?readonly=1' : ''}`
+  const q = [readonly && 'readonly=1', batch && 'batch=1'].filter(Boolean).join('&')
+  return `${proto}//${loc.host}/api/terminals/${encodeURIComponent(id)}/ws${q ? `?${q}` : ''}`
 }

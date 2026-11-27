@@ -243,6 +243,7 @@ func (s *server) terminalWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	readonly := r.URL.Query().Get("readonly") == "1"
+	batch := r.URL.Query().Get("batch") == "1"
 	// A checagem de Origin acima é nossa (aceita a ausência, usada pelo CLI);
 	// a da biblioteca rejeitaria esse caso.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
@@ -260,6 +261,12 @@ func (s *server) terminalWS(w http.ResponseWriter, r *http.Request) {
 
 	snap, out, unsub := tm.Subscribe()
 	defer unsub()
+	if batch {
+		// A grade pede a saída agrupada em janelas. O canal agrupado fecha
+		// quando o do terminal fecha (depois de entregar o resto), então a
+		// decisão exit/lento abaixo continua a mesma.
+		out = batchChunks(ctx, out, wsBatchWindow)
+	}
 
 	go func() { // leitor: entrada e resize; só erro do socket derruba a conexão
 		defer cancel()
