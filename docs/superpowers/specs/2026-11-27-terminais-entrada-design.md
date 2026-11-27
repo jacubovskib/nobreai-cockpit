@@ -50,9 +50,9 @@ Testei num terminal descartável da plataforma, no daemon instalado, digitando p
 | Uma linha + Enter no mesmo envio | enviou | não registrei o resultado |
 | Duas linhas com quebra crua + Enter no mesmo envio | ficou no campo, **não enviou** | não testei |
 | Colagem marcada (`ESC[200~ … ESC[201~`), 150 ms, Enter em envio separado | enviou as duas linhas juntas | enviou as duas linhas juntas |
-| Colagem começando com `#` | enviou, mas o `#` inicial sumiu | enviou com o `#` |
+| Colagem começando com `#` | enviou, mas o `#` inicial sumiu (com um espaço antes também) | enviou com o `#` |
 | Colagem começando com `/` | tratou como comando | não testei |
-| Colagem começando com `!` | rodou no shell | não testei |
+| Colagem começando com `!` | rodou no shell; com um espaço antes, não rodou | não testei |
 | Texto enviado com o agente ocupado | entrou na fila e rodou depois | o Kiro avisa "Type to steer" |
 
 Codex não está instalado nesta máquina: vale o mesmo protocolo, sem teste.
@@ -74,6 +74,7 @@ Não testei o envio com o agente parado num menu de permissão. Ver "Riscos acei
 - O daemon troca `\r\n` e `\r` por `\n`, remove do texto qualquer `ESC[200~` e `ESC[201~` (para o texto não fechar a colagem por conta própria) e tira quebras de linha do fim.
 - Grava `ESC[200~` + texto + `ESC[201~`, espera 150 ms e grava `\r`. Dois envios ao mesmo terminal não se misturam: um termina antes de o outro começar.
 - Não redimensiona o PTY e não depende de haver alguém conectado ao WebSocket.
+- A sequência não é cancelada se o browser desistir do pedido no meio: depois da colagem, o Enter é sempre tentado. Se o terminal encerrar entre a colagem e o Enter, a resposta é `409` e o uso do prompt não é contado.
 - Se `prompt` vier e o envio der certo, conta um uso do prompt (`MarkPromptUsed`) e publica `prompts`. Slug que não existe não derruba o envio.
 - Respostas: `204` enviado; `400` texto vazio depois da limpeza; `404` terminal não existe; `409` terminal encerrado; `413` texto acima de 256 KiB; `504` se o agente não leu a entrada no prazo de escrita do PTY.
 - Mesma proteção das outras rotas: só `application/json`, daemon em loopback. Não há checagem de origem a mais.
@@ -82,7 +83,8 @@ Não testei o envio com o agente parado num menu de permissão. Ver "Riscos acei
 ### Barra no tile
 
 - Fica no rodapé do tile, sob o terminal, em todo tile **ligado e não encerrado**. Tile em pausa e tile encerrado não mostram a barra.
-- Campo de texto que cresce de 1 até 6 linhas, com rolagem depois disso. `Enter` envia; `Shift+Enter` quebra linha. Botão "Enviar" ao lado.
+- Campo de texto que cresce de 1 até 6 linhas, com rolagem depois disso; a área do terminal encolhe na mesma medida (a barra não cobre o terminal). `Enter` envia; `Shift+Enter` quebra linha; `Enter` durante a composição de um caractere (IME) não envia. Botão "Enviar" ao lado.
+- Vale para os três agentes (Claude, Codex, Kiro).
 - Enviar chama o endpoint. Com `204` o campo esvazia e mantém o foco. Com erro o texto fica no campo e uma linha mostra o motivo (encerrado, grande demais, daemon sem a rota).
 - Enquanto um envio está pendente, o botão e o `Enter` ficam desligados.
 - **Terminal de `nobre run`:** o rodapé mostra "Sessão do `nobre run`: você só assiste." e o link "Liberar entrada", como no mock. Clicar mostra a barra naquele tile, até recarregar a página. Não muda o tamanho do PTY (diferente de "Interagir").
@@ -93,11 +95,12 @@ Não testei o envio com o agente parado num menu de permissão. Ver "Riscos acei
 ### `#`: prompts salvos
 
 - Quando o texto da barra **começa** com `#`, abre uma lista acima da barra com os prompts salvos. O que vem depois do `#` filtra por nome, slug e tag.
-- Entram na lista os prompts cujo `agents` inclui o agente do tile e cujo `project_id` é nulo, o projeto do tile ou um ancestral dele. Ordem: mais usados primeiro.
+- Entram na lista os prompts cujo `agents` inclui o agente do tile e cujo `project_id` é nulo, o projeto do tile ou o pai dele (a mesma regra da tela Prompts). Tile sem projeto: só os de `project_id` nulo. Ordem: mais usados primeiro.
 - Setas movem a seleção; `Enter` ou clique escolhe; `Esc` fecha a lista e deixa o texto como está.
 - Escolher renderiza o prompt com o card do tile (`POST /api/prompts/{slug}/render`, sem `use`) e **troca** o texto da barra pelo resultado. Aparece a linha "Prévia: o agente vai receber este texto. Edite antes de enviar." com "Limpar".
 - Tile sem card: o prompt entra com as variáveis do card vazias e a prévia avisa "sem card: as variáveis do card ficaram vazias".
-- Variável desconhecida (422): a barra não muda e a lista mostra o erro com o nome da variável.
+- Variável desconhecida (422): a barra não muda e a lista mostra o erro com o nome da variável. Card do tile que não existe mais (404): renderiza como tile sem card.
+- Se o texto da barra começa com `#`, `/` ou `!` depois de um prompt entrar, a prévia avisa: "O agente pode tratar o primeiro caractere como comando."
 - O uso só é contado no envio: a barra manda o slug junto. Se o usuário apagar o texto inteiro ou clicar em "Limpar", o slug é esquecido.
 - Com a lista fechada por `Esc`, `Enter` envia o texto como está, com o `#`.
 
@@ -111,6 +114,9 @@ Não testei o envio com o agente parado num menu de permissão. Ver "Riscos acei
   - **Prompt:** mesmo efeito do `#` (texto renderizado troca o conteúdo da barra, com prévia). Os prompts da paleta seguem o mesmo filtro de agente e projeto do alvo.
   - **Card:** insere na posição do cursor `NAC-12 · <título>` e, se houver, uma segunda linha `Onde parei: <texto>`.
   - **Memória:** insere na posição do cursor a regra e, se houver, ` — <o que fazer>`.
+- **Quais cards:** os não concluídos, de todos os projetos, do mais recente para o mais antigo por `updated_at`; a busca casa chave e título. O "Onde parei" entra mesmo se estiver vencido.
+- **Quais memórias:** as de status `ativa` do projeto do alvo, com as herdadas da família; sem alvo ou alvo sem projeto, as globais. A busca casa regra e "o que fazer".
+- O atalho chama `preventDefault`, para o browser não usar o `Ctrl+K` dele.
 - Nada é enviado ao escolher. O usuário sempre revê e aperta `Enter`.
 - Cards e memórias só são buscados no servidor quando a paleta abre.
 
@@ -119,12 +125,14 @@ Não testei o envio com o agente parado num menu de permissão. Ver "Riscos acei
 - O tile continua memoizado e recebe só valores simples e callbacks estáveis. A paleta vive na página e só existe montada enquanto aberta.
 - A inserção vinda da paleta chega ao tile sem passar texto novo por props de todos os tiles.
 - A bancada (`web/bench`) roda de novo antes do merge, com a mesma meta da entrega 1.
-- A barra ocupa altura fixa do tile. Um tile em "Interagir" tem o PTY redimensionado uma vez quando a barra cresce ou encolhe de linhas e quando a linha de dicas aparece ou some (troca Simples/Detalhado), como já acontece com a faixa de contexto.
+- Um tile em "Interagir" tem o PTY redimensionado uma vez quando a barra cresce ou encolhe de linhas e quando a linha de dicas aparece ou some (troca Simples/Detalhado), como já acontece com a faixa de contexto.
 
 ## Riscos aceitos (decisões minhas)
 
 - **Agente parado num menu de permissão.** O Cockpit não sabe quando o agente está num menu. Um envio nessa hora termina com Enter, que confirma a opção marcada. O usuário vê o terminal logo acima da barra; a barra não tenta adivinhar. Se isso incomodar, o passo seguinte é o daemon expor o estado "espera você".
-- **Texto começando com `#`, `/` ou `!`.** Segue cru. No Claude Code, `/` vira comando, `!` roda no shell e o `#` inicial some. Vale para texto digitado e para prompt salvo cujo corpo começa assim; a prévia mostra o texto antes do envio.
+- **Texto começando com `#`, `/` ou `!`.** Segue cru. No Claude Code, `/` vira comando, `!` roda no shell e o `#` inicial some (um título markdown na primeira linha perde o `#`). Vale para texto digitado e para prompt salvo cujo corpo começa assim; a prévia avisa, mas não corrige.
+- **Espera de 150 ms** calibrada com uma rodada por agente. Fica numa constante do daemon.
+- **Origem do pedido.** O WebSocket confere a origem; o POST só exige `application/json`, como todas as outras rotas que mudam estado.
 - **Colagem marcada com o agente fora do campo de texto.** Se o programa no terminal não estiver com a colagem marcada ligada, os marcadores aparecem como texto. Os terminais da plataforma sempre rodam um agente, que liga esse modo no campo dele.
 - **Codex sem teste.**
 
