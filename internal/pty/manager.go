@@ -52,7 +52,9 @@ type Options struct {
 	Retention    time.Duration
 	SubLimit     int
 	WriteTimeout time.Duration
-	Now          func() time.Time
+	// PasteSettle é a espera entre o fim da colagem e o Enter em Submit (150 ms).
+	PasteSettle time.Duration
+	Now         func() time.Time
 }
 
 // StartSpec descreve o processo a rodar no PTY. Origin: "plataforma" | "nobre run".
@@ -113,6 +115,9 @@ func NewManager(opts Options) *Manager {
 	if opts.WriteTimeout <= 0 {
 		opts.WriteTimeout = defaultWriteTO
 	}
+	if opts.PasteSettle <= 0 {
+		opts.PasteSettle = defaultPasteSettle
+	}
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
@@ -166,7 +171,7 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	}
 	t := &Terminal{
 		ptmx: ptmx, cmd: cmd, ring: NewRing(m.opts.RingSize), now: m.opts.Now,
-		subLimit: m.opts.SubLimit, writeTimeout: m.opts.WriteTimeout,
+		subLimit: m.opts.SubLimit, writeTimeout: m.opts.WriteTimeout, pasteSettle: m.opts.PasteSettle,
 		subs: map[*sub]struct{}{}, done: make(chan struct{}),
 		info: Info{
 			ID: newID(), CardKey: spec.CardKey, Agent: spec.Agent, Origin: spec.Origin, Dir: spec.Dir,
@@ -356,6 +361,7 @@ type Terminal struct {
 
 	subLimit     int
 	writeTimeout time.Duration
+	pasteSettle  time.Duration
 
 	mu     sync.Mutex
 	info   Info
@@ -364,6 +370,7 @@ type Terminal struct {
 	// ptmxClosed (sob mu) evita Setsize concorrente com o Close do ptmx.
 	ptmxClosed bool
 	wmu        sync.Mutex // serializa Write (prazo por escrita)
+	inMu       sync.Mutex // serializa Submit (colagem + Enter sem intercalar)
 }
 
 func (t *Terminal) ended() bool {
