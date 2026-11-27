@@ -66,6 +66,43 @@ func (f fieldFlags) fields(fs *flag.FlagSet) (client.CardFields, error) {
 	return cf, nil
 }
 
+// commandDir é a pasta onde o comando rodou, que nobre start e nobre card add
+// enviam ao daemon: o card nasce no projeto dela (o repositório filho de uma
+// pasta de repositórios, por exemplo), não no da pasta em que a sessão
+// começou. "" quando não dá para ler a pasta: vale o projeto da sessão.
+func (c *cli) commandDir() string {
+	if c.cwd == nil {
+		return ""
+	}
+	dir, err := c.cwd()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// printLinked avisa do repositório que o comando cadastrou no grupo (e com
+// que nome, se o da pasta já existia lá) ou que o grupo recusou.
+func (c *cli) printLinked(card client.CreatedCard) {
+	switch {
+	case card.LinkRefused != "":
+		fmt.Fprintf(c.out, "Repositório %s não pôde ser ligado ao grupo %s: o card ficou no grupo.\n", card.LinkRefused, card.LinkedGroup)
+	case card.LinkedDir != "":
+		fmt.Fprintf(c.out, "Repositório %s cadastrado no grupo %s com o nome %s (já existe %s no grupo).\n",
+			card.LinkedDir, card.LinkedGroup, card.LinkedRepo, card.LinkedDir)
+	case card.LinkedRepo != "":
+		fmt.Fprintf(c.out, "Repositório %s cadastrado no grupo %s.\n", card.LinkedRepo, card.LinkedGroup)
+	}
+}
+
+// inProject é " em <projeto>" quando o card nasceu fora do projeto da sessão.
+func inProject(card client.CreatedCard) string {
+	if card.ProjectLabel == "" {
+		return ""
+	}
+	return " em " + card.ProjectLabel
+}
+
 func (c *cli) start(args []string) error {
 	const u = `uso: nobre start "<título>" [--goal ...] [--done-when ...] [--type epico|historia|tarefa|bug] [--epic <KEY>] [--priority ...] [--label ... | --no-labels] [--points n]`
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
@@ -84,11 +121,12 @@ func (c *cli) start(args []string) error {
 	if err != nil {
 		return err
 	}
-	card, err := c.client().Start(ctx(), title, *goal, *done, cf)
+	card, err := c.client().Start(ctx(), title, *goal, *done, c.commandDir(), cf)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(c.out, "Card %s criado e ligado a esta sessão.\n", card.Key)
+	c.printLinked(card)
+	fmt.Fprintf(c.out, "Card %s criado%s e ligado a esta sessão.\n", card.Key, inProject(card))
 	return nil
 }
 
@@ -120,10 +158,19 @@ func (c *cli) card(args []string) error {
 	if err != nil {
 		return err
 	}
-	card, err := c.client().AddCard(ctx(), map[string]string{"title": title, "goal": *goal, "done_when": *done,
-		"branch": *branch, "where_stopped": *where, "column": *column}, cf)
+	in := map[string]string{"title": title, "goal": *goal, "done_when": *done,
+		"branch": *branch, "where_stopped": *where, "column": *column}
+	if dir := c.commandDir(); dir != "" {
+		in["cwd"] = dir
+	}
+	card, err := c.client().AddCard(ctx(), in, cf)
 	if err != nil {
 		return err
+	}
+	c.printLinked(card)
+	if card.ProjectLabel != "" {
+		fmt.Fprintf(c.out, "Card %s criado em %s, no %s (sessão não ligada).\n", card.Key, card.ProjectLabel, card.Column)
+		return nil
 	}
 	fmt.Fprintf(c.out, "Card %s criado no %s (sessão não ligada).\n", card.Key, card.Column)
 	return nil

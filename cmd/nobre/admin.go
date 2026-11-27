@@ -19,7 +19,7 @@ import (
 )
 
 func (c *cli) project(args []string) error {
-	const u = "uso: nobre project add [path] [--name <nome>] [--pai <id|pasta>] | nobre project pai <id|pasta> <id|pasta|--nenhum> | nobre project grupo \"<nome>\" | nobre project base <branch> [path] | nobre project scan [path] [--nao-sugerir rel,rel] | nobre project list"
+	const u = "uso: nobre project add [path] [--name <nome>] [--pai <id|pasta>] [--sem-filhos] | nobre project pai <id|pasta> <id|pasta|--nenhum> | nobre project grupo \"<nome>\" | nobre project base <branch> [path] | nobre project scan [path] [--nao-sugerir rel,rel] | nobre project list"
 	if len(args) == 0 {
 		return usagef(u)
 	}
@@ -28,6 +28,7 @@ func (c *cli) project(args []string) error {
 		fs := flag.NewFlagSet("project add", flag.ContinueOnError)
 		name := fs.String("name", "", "nome do projeto (padrão: nome da pasta)")
 		pai := fs.String("pai", "", "projeto principal (id ou pasta)")
+		semFilhos := fs.Bool("sem-filhos", false, "numa pasta de repositórios, cadastra só o grupo")
 		pos, err := c.parse(fs, args[1:])
 		if err != nil {
 			return err
@@ -47,7 +48,7 @@ func (c *cli) project(args []string) error {
 			if *pai != "" {
 				return fmt.Errorf("%s não é um repositório git: o NobreAI Cockpit só cadastra repositórios git", path)
 			}
-			return c.addGroupFolder(*name, path)
+			return c.addGroupFolder(*name, path, *semFilhos)
 		}
 		var p client.AddedProject
 		if *pai != "" {
@@ -72,6 +73,12 @@ func (c *cli) project(args []string) error {
 			info = append(info, fmt.Sprintf("%d sessões religadas", p.Reassigned))
 		}
 		fmt.Fprintf(c.out, "Projeto %s cadastrado: %s (%s)\n", p.Name, p.Path, strings.Join(info, ", "))
+		if p.AttachedTo != "" {
+			fmt.Fprintf(c.out, "Ligado ao grupo %s.\n", p.AttachedTo)
+		}
+		if p.NotAttached != "" {
+			fmt.Fprintf(c.out, "Não ligado ao grupo %s: já existe um projeto com esse nome nele.\n", p.NotAttached)
+		}
 		c.printMoved(p.Moved, p.Name)
 		if sg := p.Suggestions; len(sg) > 0 {
 			const max = 5
@@ -138,10 +145,17 @@ func (c *cli) project(args []string) error {
 	return nil
 }
 
-// addGroupFolder cadastra uma pasta que não é git como grupo com pasta e lista
-// os repositórios dentro dela como sugestões (sem cadastrá-los). Pasta sem
+// addGroupFolder cadastra uma pasta que não é git como grupo com pasta e liga
+// a ele os repositórios que a varredura acha dentro dela: os novos e os
+// projetos soltos; o que pertence a outro projeto fica de fora e é citado.
+// Os repositórios vão sem nome (auto_name): o daemon usa o da pasta e, se ele já existe no
+// grupo, um nome distinto, que a saída mostra; o projeto solto cujo nome já
+// existe no grupo não é ligado e é citado.
+// Num grupo já cadastrado, só acrescenta os repositórios novos: um projeto
+// solto dentro da pasta não é religado, só citado. Com semFilhos,
+// cadastra só o grupo e lista os repositórios como sugestões. Pasta sem
 // repositórios continua recusada.
-func (c *cli) addGroupFolder(name, path string) error {
+func (c *cli) addGroupFolder(name, path string, semFilhos bool) error {
 	notGit := fmt.Errorf("%s não é um repositório git: o NobreAI Cockpit só cadastra repositórios git", path)
 	scan, err := c.client().ScanFolder(ctx(), path)
 	if err != nil {
@@ -156,22 +170,76 @@ func (c *cli) addGroupFolder(name, path string) error {
 	if len(scan.Suggestions) == 0 {
 		return notGit
 	}
-	res, err := c.client().ProjectsBatch(ctx(), name, path)
+	groupID := int64(0)
+	if scan.Registered != nil {
+		groupID = scan.Registered.ID
+	}
+	var kids []client.BatchChild
+	var sent, open, out []string
+	for _, x := range scan.Suggestions {
+		switch reg := x.Registered; {
+		case x.Blocked != "":
+			out = append(out, fmt.Sprintf("%s (%s)", x.Rel, x.Blocked))
+		case reg != nil && reg.ParentID != nil && *reg.ParentID == groupID:
+			// já é filho deste grupo
+		case reg != nil && scan.Registered != nil:
+			// Projeto solto dentro de um grupo que já existia: pode ter sido
+			// desligado pelo usuário (project pai --nenhum). Religar trocaria a
+			// captura dele pela do grupo; só quem pede (project pai) religa.
+			out = append(out, fmt.Sprintf("%s (projeto solto: ligue com nobre project pai)", x.Rel))
+		default:
+			if reg == nil {
+				open = append(open, fmt.Sprintf("  %s  (%s)\n", x.Rel, x.Source))
+			}
+			if !semFilhos {
+				kids = append(kids, client.BatchChild{Path: x.Path, AutoName: true})
+				sent = append(sent, x.Rel)
+			}
+		}
+	}
+	res, err := c.client().ProjectsBatch(ctx(), name, path, kids)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(c.out, "Grupo %s cadastrado: %s\n", res.Project.Name, res.Project.Path)
+	state := "cadastrado"
+	if scan.Registered != nil {
+		state = "já cadastrado"
+	}
+	fmt.Fprintf(c.out, "Grupo %s %s: %s\n", res.Project.Name, state, res.Project.Path)
 	c.printMoved(res.Moved, res.Project.Name)
-	const max = 5
-	var open []string
-	for _, x := range scan.Suggestions {
-		if x.Registered == nil && x.Blocked == "" {
-			open = append(open, fmt.Sprintf("  %s  (%s)\n", x.Rel, x.Source))
+	if !semFilhos {
+		// O que o daemon ligou, pelo caminho: o nome pode não ser o da pasta e
+		// o que não voltou ficou de fora.
+		names := map[string]string{}
+		for _, k := range res.Children {
+			names[k.Path] = k.Name
 		}
+		var linked, clash []string
+		for i, k := range kids {
+			switch name, ok := names[k.Path]; {
+			case !ok:
+				clash = append(clash, sent[i])
+			case name != filepath.Base(k.Path):
+				linked = append(linked, fmt.Sprintf("%s (como %s)", sent[i], name))
+			default:
+				linked = append(linked, sent[i])
+			}
+		}
+		if len(linked) > 0 {
+			fmt.Fprintf(c.out, "Repositórios ligados ao grupo: %s\n", strings.Join(linked, ", "))
+		}
+		if len(clash) > 0 {
+			fmt.Fprintf(c.out, "Não ligados, já existe um projeto com esse nome no grupo: %s\n", strings.Join(clash, ", "))
+		}
+		if len(out) > 0 {
+			fmt.Fprintf(c.out, "Fora do grupo: %s\n", strings.Join(out, ", "))
+		}
+		return nil
 	}
 	if len(open) == 0 {
 		return nil
 	}
+	const max = 5
 	fmt.Fprintln(c.out, "Sub-projetos sugeridos (liste ao usuário, não cadastre sem ele pedir):")
 	for i, line := range open {
 		if i == max {

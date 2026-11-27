@@ -159,7 +159,10 @@ func TestUnregisteredNonGitFolderWithRepos(t *testing.T) {
 	}
 }
 
-func TestUnregisteredRepoInsideGroupSuggestsPai(t *testing.T) {
+// Repositório ainda não cadastrado dentro de um grupo: o aviso diz que o
+// primeiro card criado nele o liga ao grupo (não manda mais cadastrar com
+// --pai); o repositório recusado nas sugestões não avisa.
+func TestUnregisteredRepoInsideGroupSaysItWillBeLinked(t *testing.T) {
 	e := newEnv(t)
 	e.realGit()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -178,7 +181,7 @@ func TestUnregisteredRepoInsideGroupSuggestsPai(t *testing.T) {
 		t.Skipf("git init: %v %s", err, out)
 	}
 	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", novo), with("session_id", "s1")))
-	if !strings.Contains(ctx, "--pai") || !strings.Contains(ctx, registeredPhrase) {
+	if !strings.Contains(ctx, "ligado ao grupo sozinho") || strings.Contains(ctx, "--pai") || !strings.Contains(ctx, registeredPhrase) {
 		t.Fatalf("contexto = %q", ctx)
 	}
 	sess, err := e.st.GetSession("claude:s1")
@@ -190,7 +193,7 @@ func TestUnregisteredRepoInsideGroupSuggestsPai(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx = additionalContext(t, e.call(t, "session_start", with("cwd", novo), with("session_id", "s2")))
-	if strings.Contains(ctx, "--pai") {
+	if strings.Contains(ctx, "ainda não está cadastrado") {
 		t.Fatalf("recusado não avisa: %q", ctx)
 	}
 }
@@ -283,7 +286,7 @@ func TestUnregisteredInGroupFollowsScanRules(t *testing.T) {
 		{"/w/grp/a/b2/c", false},
 	} {
 		ctx := additionalContext(t, e.call(t, "session_start", with("cwd", c.cwd), with("session_id", "s"+strconv.Itoa(i))))
-		if strings.Contains(ctx, "--pai") != c.warn {
+		if strings.Contains(ctx, "ainda não está cadastrado") != c.warn {
 			t.Fatalf("%s: aviso = %v, quer %v: %q", c.cwd, !c.warn, c.warn, ctx)
 		}
 	}
@@ -296,6 +299,10 @@ func TestGroupSessionGetsNoAppsGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := additionalContext(t, e.call(t, "session_start", with("cwd", "/w/grp/docs")))
+	// A sessão do grupo aprende a rodar o comando dentro do repositório.
+	if !strings.Contains(ctx, "dentro do repositório do trabalho") {
+		t.Fatalf("sem a orientação de grupo: %q", ctx)
+	}
 	if !strings.Contains(ctx, registeredPhrase) || strings.Contains(ctx, "Apps deste projeto") || strings.Contains(ctx, "nobre app") {
 		t.Fatalf("contexto = %q", ctx)
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"maps"
 	"net/http"
@@ -307,7 +308,8 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgHomeProject)
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" {
+	autoName := strings.TrimSpace(in.Name) == ""
+	if autoName {
 		in.Name = filepath.Base(in.Path)
 	}
 	var (
@@ -315,9 +317,45 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		moved store.Moved
 		err   error
 	)
-	if in.ParentID != nil {
+	// Sem pai informado, um repositório dentro de um grupo com pasta nasce
+	// ligado a esse grupo (attached diz qual), dentro das travas do vínculo
+	// automático (groupAccepts); fora delas nasce solto. Nome de pasta que já existe no
+	// grupo vira um nome distinto (store.ChildSpec.Auto); se quem bate é o nome
+	// que o usuário escolheu, o projeto nasce solto, como sem o vínculo
+	// automático, e notAttached diz de qual grupo ficou fora.
+	attached, notAttached := "", ""
+	if in.ParentID == nil {
+		g, err := s.st.ProjectForPath(in.Path)
+		if err != nil {
+			writeStoreError(w, err, "")
+			return
+		}
+		ok := false
+		if g != nil {
+			if _, ok, err = s.groupAccepts(*g, in.Path); err != nil {
+				writeStoreError(w, err, "")
+				return
+			}
+		}
+		if ok {
+			var kids []domain.Project
+			_, kids, moved, err = s.st.CreateFamily(*g, []store.ChildSpec{{Name: in.Name, Path: in.Path, Auto: autoName}})
+			switch {
+			case errors.Is(err, store.ErrNameTaken):
+				notAttached = g.Name
+			case err != nil:
+				writeProjectError(w, err, "")
+				return
+			case len(kids) == 1:
+				p, attached = kids[0], g.Name
+			}
+		}
+	}
+	switch {
+	case attached != "":
+	case in.ParentID != nil:
 		p, moved, err = s.st.CreateChild(in.Name, in.Path, *in.ParentID)
-	} else {
+	default:
 		p, err = s.st.CreateProject(in.Name, in.Path)
 	}
 	if err != nil {
@@ -383,7 +421,9 @@ func (s *server) createProject(w http.ResponseWriter, r *http.Request) {
 		Reassigned  int                     `json:"reassigned"`
 		Moved       store.Moved             `json:"moved"`
 		Suggestions []workspaces.Suggestion `json:"suggestions"`
-	}{p, n, moved, sugg})
+		AttachedTo  string                  `json:"attached_to,omitempty"`
+		NotAttached string                  `json:"not_attached,omitempty"`
+	}{p, n, moved, sugg, attached, notAttached})
 }
 
 // readPatchBody lê o corpo do PATCH de projeto: aplica os campos em p e devolve

@@ -42,6 +42,10 @@ const AskOnlyGuidance = `Só crie card quando o usuário pedir ("crie um card pa
 // commandsGuidance são os comandos nobre para uma sessão com card.
 const commandsGuidance = `Com card: nobre note "<onde parei>" a cada passo relevante; nobre decide "<decisão>" --why "<porquê>"; nobre file <caminho> --why "<motivo>"; nobre todo add "<texto>"; nobre plan <arquivo> --task "<tarefa>" ... ao terminar um plano; nobre task <n> <estado> a cada tarefa; nobre ask "<pergunta>" quando precisar de uma decisão do usuário; nobre answer <id> "<resposta>" quando uma pergunta for decidida; nobre block <KEY> quando o card só puder continuar depois de outro, antes de parar; nobre branch <nome> ao criar ou entrar no branch do card; nobre test "<como testar>"; nobre done ao terminar; nobre card set [--type historia|bug|...] [--epic <KEY>] quando o card for parte de um épico; nobre status mostra o card.`
 
+// groupGuidance ensina, na sessão de um grupo com pasta, onde rodar o comando
+// que cria o card.
+const groupGuidance = "Esta sessão está numa pasta com vários repositórios: rode nobre start e nobre card add dentro do repositório do trabalho, para o card nascer no projeto dele. Um repositório do grupo que ainda não é projeto é ligado ao grupo sozinho nessa hora."
+
 // appGuidance ensina o nobre app em projetos com sub-projetos.
 const appGuidance = "Quando o card for de um app só, rode nobre app <nome> ao criar o card ou ao começar a mexer nele; nobre app --geral devolve ao projeto principal."
 
@@ -133,7 +137,7 @@ func (c *Core) sessionStart(sess domain.Session, ev Event) (Reply, error) {
 			// levantamento, e só com o aval do usuário.
 			phrase = UnregisteredFolderPhrase
 			todo = "Pergunte ao usuário se quer cadastrar esta pasta como grupo com nobre project add " + root +
-				"; só cadastre se ele aceitar. O comando lista os sub-projetos sugeridos, que você mostra ao usuário sem cadastrar. O cadastro liga esta sessão ao board."
+				"; só cadastre se ele aceitar. O comando cadastra o grupo e liga a ele os repositórios que achar na pasta: diga ao usuário quais entraram. O cadastro liga esta sessão ao board."
 		}
 		return Reply{Context: []string{phrase + " (" + root + ").\n" + todo + "\n\n" + Guidance(set)}}, nil
 	}
@@ -303,8 +307,9 @@ func hasRepoChild(dir string) bool {
 }
 
 // unregisteredInGroup é o aviso (com o "\n\n" na frente) de que a sessão está
-// num repositório ainda não cadastrado dentro de um grupo com pasta, ou ""
-// quando não é o caso ou o usuário já recusou a sugestão. Usa só o que a sessão
+// num repositório ainda não cadastrado dentro de um grupo com pasta (que o
+// primeiro card criado nele liga ao grupo), ou "" quando não é o caso ou o
+// usuário já recusou a sugestão (aí o repositório não é ligado sozinho). Usa só o que a sessão
 // guardou: nenhuma chamada ao git.
 func (c *Core) unregisteredInGroup(sess domain.Session) string {
 	if sess.ProjectID == nil || sess.Worktree == "" || sess.WorktreeLinked {
@@ -331,13 +336,14 @@ func (c *Core) unregisteredInGroup(sess domain.Session) string {
 			return ""
 		}
 	}
-	return fmt.Sprintf("\n\nNobreAI Cockpit: o repositório %s fica dentro do grupo %s e não está cadastrado. Liste ao usuário a opção de cadastrá-lo com nobre project add %s --pai %d; não cadastre sem ele pedir.",
-		root, g.Name, root, g.ID)
+	return fmt.Sprintf("\n\nNobreAI Cockpit: o repositório %s fica dentro do grupo %s e ainda não está cadastrado. Ele é ligado ao grupo sozinho quando você cria um card dentro dele (nobre start ou nobre card add); nobre project add %s faz o mesmo antes disso.",
+		root, g.Name, root)
 }
 
 // appsGuidance lista os apps (sub-projetos) da família do projeto da sessão e
-// ensina o nobre app; "" quando o projeto não tem sub-projetos ou a família é
-// um grupo (apps e nobre app são só de monorepo).
+// ensina o nobre app; "" quando o projeto não tem sub-projetos. Numa família
+// de grupo não há apps nem nobre app (são só de monorepo): a sessão do próprio
+// grupo com pasta recebe groupGuidance.
 func (c *Core) appsGuidance(sess domain.Session) (string, error) {
 	if sess.ProjectID == nil {
 		return "", nil
@@ -351,8 +357,14 @@ func (c *Core) appsGuidance(sess domain.Session) (string, error) {
 			continue
 		}
 		repo, err := c.st.RepoProject(p)
-		if err != nil || repo.IsGroup() {
+		if err != nil {
 			return "", err
+		}
+		if repo.IsGroup() {
+			if p.IsGroup() && p.Path != "" {
+				return groupGuidance, nil
+			}
+			return "", nil
 		}
 		kids, err := c.st.Children(repo.ID)
 		if err != nil || len(kids) == 0 {
