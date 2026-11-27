@@ -54,6 +54,7 @@ function TileInputView(p: TileInputProps) {
         const cur = textRef.current
         const start = el?.selectionStart ?? cur.length
         const end = el?.selectionEnd ?? cur.length
+        pickSeq.current++
         const r = insertAt(cur, start, end, piece)
         caret.current = r.caret
         setText(r.text)
@@ -103,8 +104,10 @@ function TileInputView(p: TileInputProps) {
   pickRef.current = (s) => { void pick(s) }
 
   const clear = () => {
+    pickSeq.current++
     slug.current = ''
     setText('')
+    setClosed(false)
     setPreview(null)
     setPickError('')
     area.current?.focus()
@@ -114,13 +117,14 @@ function TileInputView(p: TileInputProps) {
     const t = textRef.current
     if (busy.current || t.trim() === '') return
     busy.current = true
+    pickSeq.current++ // render em andamento não vale mais depois do envio
     setPending(true)
     try {
       await sendInput(p.terminalId, t, slug.current)
       slug.current = ''
       setPreview(null)
       // Só esvazia se nada foi digitado enquanto o envio estava pendente.
-      if (textRef.current === t) setText('')
+      if (textRef.current === t) { setText(''); setClosed(false) }
       setError('')
       area.current?.focus()
     } catch (e) {
@@ -169,11 +173,12 @@ function TileInputView(p: TileInputProps) {
           value={text}
           onChange={(e) => {
             const v = e.target.value
+            pickSeq.current++ // edição à mão invalida o render em andamento
             setText(v)
             setError('')
             setPickError('')
             setSel(0)
-            if (!v.startsWith('#')) setClosed(false)
+            if (!v.startsWith('#') || v === '') setClosed(false)
             if (v === '') { slug.current = ''; setPreview(null) }
           }}
           onKeyDown={(e) => {

@@ -368,6 +368,51 @@ describe('TileInput', () => {
       await waitFor(() => expect(bodies(fn)).toEqual([{ text: 'y', prompt: '' }]))
     })
 
+    it('depois de enviar o prompt escolhido, # abre a lista de novo', async () => {
+      mockApi()
+      setup()
+      type('#')
+      await waitFor(() => expect(opts()).toHaveLength(2))
+      fireEvent.click(opts()[0])
+      await waitFor(() => expect(box()).toHaveValue('Texto de alfa NAC-7'))
+      fireEvent.keyDown(box(), { key: 'Enter' })
+      await waitFor(() => expect(box()).toHaveValue(''))
+      type('#')
+      await waitFor(() => expect(list()).not.toBeNull())
+    })
+
+    it('depois de Limpar, # abre a lista de novo', async () => {
+      mockApi()
+      setup()
+      type('#')
+      await waitFor(() => expect(opts()).toHaveLength(2))
+      fireEvent.click(opts()[0])
+      await waitFor(() => expect(box()).toHaveValue('Texto de alfa NAC-7'))
+      fireEvent.click(screen.getByRole('button', { name: 'Limpar' }))
+      type('#')
+      await waitFor(() => expect(list()).not.toBeNull())
+    })
+
+    it('resposta atrasada do render não sobrescreve o que foi digitado', async () => {
+      let reply: (r: Response) => void = () => {}
+      const fn = vi.fn((url: string, _init?: { body?: string }) => {
+        if (url === '/api/prompts') return Promise.resolve(new Response(JSON.stringify(PROMPTS), { status: 200 }))
+        if (url.endsWith('/render')) return new Promise<Response>((res) => { reply = res })
+        return Promise.resolve(new Response('{}', { status: 200 }))
+      })
+      vi.stubGlobal('fetch', fn)
+      setup()
+      type('#')
+      await waitFor(() => expect(opts()).toHaveLength(2))
+      fireEvent.click(opts()[0])
+      type('outra coisa')
+      await act(async () => { reply(new Response(JSON.stringify({ text: 'tardio' }), { status: 200 })) })
+      expect(box()).toHaveValue('outra coisa')
+      expect(screen.queryByText(/^Prévia:/)).toBeNull()
+      fireEvent.keyDown(box(), { key: 'Enter' })
+      await waitFor(() => expect(bodies(fn)).toEqual([{ text: 'outra coisa', prompt: '' }]))
+    })
+
     it('pickPrompt do registro tem o mesmo efeito do clique', async () => {
       const fn = mockApi()
       setup()
