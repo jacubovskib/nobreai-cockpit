@@ -444,3 +444,40 @@ describe('Limpar e continuar', () => {
     expect(screen.queryByRole('button', { name: 'Encerrar este terminal' })).toBeNull()
   })
 })
+
+describe('barra de entrada no tile', () => {
+  const bar = () => screen.queryByRole('textbox', { name: 'Enviar ao agente Claude Code' })
+
+  it('tile ligado mostra a barra; em pausa e encerrado não', () => {
+    const a = setup()
+    expect(bar()).toBeInTheDocument()
+    a.unmount()
+    const b = setup({ live: false })
+    expect(bar()).toBeNull()
+    b.unmount()
+    setup({ t: term({ ended_at: new Date().toISOString(), exit_code: 0 }) })
+    expect(bar()).toBeNull()
+  })
+
+  it('terminal de nobre run mostra Liberar entrada em vez da barra', () => {
+    setup({ t: term({ origin: 'nobre run' }) })
+    expect(bar()).toBeNull()
+    expect(screen.getByRole('button', { name: 'Liberar entrada' })).toBeInTheDocument()
+  })
+
+  it('digitar na barra não chama callback do tile além de onFocus', () => {
+    const { props } = setup()
+    ;(props.onFocus as ReturnType<typeof vi.fn>).mockClear()
+    fireEvent.change(bar()!, { target: { value: 'oi' } })
+    const calls = Object.entries(props).filter(([, v]) => typeof v === 'function' && (v as ReturnType<typeof vi.fn>).mock?.calls.length)
+    expect(calls.map(([k]) => k).filter((k) => k !== 'onFocus')).toEqual([])
+  })
+
+  it('o corpo marca data-interactive só no modo Interagir', () => {
+    setup()
+    const body = () => screen.getByTestId('fake-term').parentElement as HTMLElement
+    expect(body()).not.toHaveAttribute('data-interactive')
+    act(() => last!.onMode!(false))
+    expect(body()).toHaveAttribute('data-interactive', '1')
+  })
+})
