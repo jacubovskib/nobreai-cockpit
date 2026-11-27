@@ -782,11 +782,12 @@ func TestTerminalInputWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code := e.postInput(t, info.ID, map[string]any{"text": "oi\r\nmundo\n"}, "application/json"); code != http.StatusNoContent {
+	// O ESC do texto sai (o cat -v mostraria ^[); os marcadores do Submit ficam.
+	if code := e.postInput(t, info.ID, map[string]any{"text": "oi\x1b[31m\r\nmundo\x1b\n"}, "application/json"); code != http.StatusNoContent {
 		t.Fatalf("status = %d", code)
 	}
 	out, _ := readUntil(t, c, func(o string) bool { return strings.Contains(o, "mundo^[[201~") })
-	if !strings.Contains(out, "^[[200~oi") || !strings.Contains(out, "mundo^[[201~") {
+	if !strings.Contains(out, "^[[200~oi[31m") || !strings.Contains(out, "mundo^[[201~") || strings.Contains(out, "mundo^[^[") {
 		t.Fatalf("saída = %q", out)
 	}
 	if got := mustTerm(t, e, info.ID).Info(); got.Cols != 90 || got.Rows != 25 {

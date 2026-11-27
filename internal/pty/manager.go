@@ -171,7 +171,7 @@ func (m *Manager) Start(spec StartSpec) (*Terminal, error) {
 	}
 	t := &Terminal{
 		ptmx: ptmx, cmd: cmd, ring: NewRing(m.opts.RingSize), now: m.opts.Now,
-		subLimit: m.opts.SubLimit, writeTimeout: m.opts.WriteTimeout, pasteSettle: m.opts.PasteSettle,
+		subLimit: m.opts.SubLimit, writeTimeout: m.opts.WriteTimeout, pasteSettle: m.opts.PasteSettle, sleep: time.Sleep,
 		subs: map[*sub]struct{}{}, done: make(chan struct{}),
 		info: Info{
 			ID: newID(), CardKey: spec.CardKey, Agent: spec.Agent, Origin: spec.Origin, Dir: spec.Dir,
@@ -362,6 +362,7 @@ type Terminal struct {
 	subLimit     int
 	writeTimeout time.Duration
 	pasteSettle  time.Duration
+	sleep        func(time.Duration) // espera de Submit; os testes trocam
 
 	mu     sync.Mutex
 	info   Info
@@ -523,7 +524,8 @@ func (t *Terminal) Subscribe() ([]byte, <-chan []byte, func()) {
 	return snap, s.out, cancel
 }
 
-// Write envia entrada ao processo.
+// Write envia entrada ao processo. Erro de escrita com o terminal encerrando
+// (PTY já fechado pelo run) vira ErrEnded.
 func (t *Terminal) Write(p []byte) error {
 	if t.ended() {
 		return ErrEnded
@@ -532,7 +534,20 @@ func (t *Terminal) Write(p []byte) error {
 	defer t.wmu.Unlock()
 	_ = t.ptmx.SetWriteDeadline(time.Now().Add(t.writeTimeout))
 	_, err := t.ptmx.Write(p)
+	if err != nil && t.closing() {
+		return ErrEnded
+	}
 	return err
+}
+
+// closing diz se o terminal encerrou ou o run já fechou o PTY.
+func (t *Terminal) closing() bool {
+	if t.ended() {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.ptmxClosed
 }
 
 // Resize ajusta o tamanho do PTY.

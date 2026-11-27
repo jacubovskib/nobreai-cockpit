@@ -13,26 +13,26 @@ const (
 
 	pasteStart = "\x1b[200~"
 	pasteEnd   = "\x1b[201~"
+	csiC1      = "\u009b"
 )
 
-// CleanInput normaliza o texto a colar: quebras de linha viram \n, os
-// marcadores de colagem são removidos (nem os que se formam ao remover outros
-// sobram) e os \n do fim saem. Espaços do começo ficam.
+// CleanInput normaliza o texto a colar: quebras de linha viram \n, todo ESC
+// (0x1b) e todo CSI C1 (U+009B) saem e os \n do fim saem. Sem ESC não há
+// marcador de colagem nem sequência de controle no meio do texto; o resto de um
+// marcador ("[201~") fica como texto comum. Espaços do começo ficam.
 func CleanInput(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
-	for {
-		n := strings.ReplaceAll(strings.ReplaceAll(text, pasteStart, ""), pasteEnd, "")
-		if n == text {
-			break
-		}
-		text = n
+	text = strings.ReplaceAll(text, "\x1b", "")
+	// Tirar um CSI C1 de texto inválido pode formar outro: repete até parar.
+	for strings.Contains(text, csiC1) {
+		text = strings.ReplaceAll(text, csiC1, "")
 	}
 	return strings.TrimRight(text, "\n")
 }
 
 // Submit digita text (já limpo por CleanInput) como colagem marcada, espera
-// pasteSettle e envia Enter em escrita separada. Uma sequência por vez no
+// pasteSettle (por t.sleep) e envia Enter em escrita separada. Uma sequência por vez no
 // terminal. Se a colagem falha, o Enter não é tentado; depois dela, sempre.
 func (t *Terminal) Submit(text string) error {
 	t.inMu.Lock()
@@ -40,6 +40,6 @@ func (t *Terminal) Submit(text string) error {
 	if err := t.Write([]byte(pasteStart + text + pasteEnd)); err != nil {
 		return err
 	}
-	time.Sleep(t.pasteSettle)
+	t.sleep(t.pasteSettle)
 	return t.Write([]byte("\r"))
 }

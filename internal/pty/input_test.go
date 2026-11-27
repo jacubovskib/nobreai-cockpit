@@ -2,7 +2,6 @@ package pty
 
 import (
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -10,8 +9,14 @@ import (
 func TestCleanInput(t *testing.T) {
 	casos := []struct{ in, want string }{
 		{"a\r\nb\rc", "a\nb\nc"},
-		{"x\x1b[201~y\x1b[200~z", "xyz"},
-		{"\x1b[20\x1b[201~1~fim", "fim"},
+		// Todo ESC sai; o resto de um marcador fica como texto comum.
+		{"x\x1b[201~y\x1b[200~z", "x[201~y[200~z"},
+		{"\x1b[20\x1b[201~1~fim", "[20[201~1~fim"},
+		{"fim\x1b", "fim"},           // ESC solto antes do marcador de fim
+		{"fim\x1b[", "fim["},         // início de CSI antes do marcador de fim
+		{"a\u009b31mb", "a31mb"},     // CSI C1 (U+009B) também sai
+		{"\xc2\x1b\x9bx", "x"},       // tirar o ESC não deixa formar um CSI C1
+		{"ě e \u011b", "ě e \u011b"}, // o byte 0x9B dentro de outro caractere fica
 		{"oi\n\n", "oi"},
 		{"\n\n", ""},
 		{" !eco", " !eco"}, // espaços do começo ficam
@@ -50,75 +55,99 @@ func TestSubmitColaMarcadaEEnter(t *testing.T) {
 	})
 }
 
-func TestSubmitNaoIntercalaSequencias(t *testing.T) {
-	_, tm := startCatV(t)
-	var wg sync.WaitGroup
-	for _, txt := range []string{"AAAA", "BBBB"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := tm.Submit(txt); err != nil {
-				t.Error(err)
-			}
-		}()
-	}
-	wg.Wait()
-	eventually(t, "as duas colagens", func() bool {
-		s := snapStr(tm)
-		return strings.Count(s, "^[[201~") == 2
-	})
-	s := snapStr(tm)
-	// A ordem das sequências é livre; cada uma tem de vir inteira antes da outra.
-	ok := strings.Contains(s, "^[[200~AAAA^[[201~") && strings.Contains(s, "^[[200~BBBB^[[201~")
-	if !ok {
-		t.Fatalf("sequências intercaladas: %q", s)
+// fakeSleep substitui a espera entre colagem e Enter: cada chamada avisa em
+// entered e só volta quando o teste solta em release.
+type fakeSleep struct {
+	entered chan time.Duration
+	release chan struct{}
+}
+
+func newFakeSleep(t *testing.T, tm *Terminal) *fakeSleep {
+	t.Helper()
+	f := &fakeSleep{entered: make(chan time.Duration, 4), release: make(chan struct{}, 4)}
+	tm.sleep = func(d time.Duration) { f.entered <- d; <-f.release }
+	// Solta quem ainda estiver parado antes de fechar o manager.
+	t.Cleanup(func() { close(f.release) })
+	return f
+}
+
+func (f *fakeSleep) waitEntered(t *testing.T) time.Duration {
+	t.Helper()
+	select {
+	case d := <-f.entered:
+		return d
+	case <-time.After(10 * time.Second):
+		t.Fatal("Submit não chegou à espera")
+		return 0
 	}
 }
 
-func TestSubmitEsperaEntreSequencias(t *testing.T) {
+func TestSubmitNaoIntercalaSequencias(t *testing.T) {
 	_, tm := startCatV(t)
-	// Observa a saída com carimbo de tempo por chegada.
-	_, out, unsub := tm.Subscribe()
-	defer unsub()
-	type ev struct {
-		at time.Time
-		s  string
+	fs := newFakeSleep(t, tm)
+	errs := make(chan error, 2)
+	go func() { errs <- tm.Submit("AAAA") }()
+	if d := fs.waitEntered(t); d != 20*time.Millisecond {
+		t.Fatalf("espera = %v, quero o PasteSettle (20ms)", d)
 	}
-	var mu sync.Mutex
-	var evs []ev
-	var acc strings.Builder
-	go func() {
-		for b := range out {
-			mu.Lock()
-			acc.Write(b)
-			evs = append(evs, ev{time.Now(), acc.String()})
-			mu.Unlock()
-		}
-	}()
-	var wg sync.WaitGroup
-	for _, txt := range []string{"AAAA", "BBBB"} {
-		wg.Add(1)
-		go func() { defer wg.Done(); _ = tm.Submit(txt) }()
+	eventually(t, "colagem de A", func() bool { return strings.Contains(snapStr(tm), "^[[200~AAAA^[[201~") })
+
+	// A está entre a colagem e o Enter: a sequência segura o terminal.
+	if tm.inMu.TryLock() {
+		tm.inMu.Unlock()
+		t.Fatal("inMu livre com A no meio da sequência")
 	}
-	wg.Wait()
-	eventually(t, "duas colagens", func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return strings.Count(acc.String(), "^[[201~") == 2
+	go func() { errs <- tm.Submit("BBBB") }()
+	select {
+	case <-fs.entered:
+		t.Fatal("B colou antes do Enter de A")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if s := snapStr(tm); strings.Contains(s, "BBBB") {
+		t.Fatalf("B colou antes do Enter de A: %q", s)
+	}
+
+	// Solta A: o Enter de A sai antes da colagem de B.
+	fs.release <- struct{}{}
+	fs.waitEntered(t)
+	eventually(t, "Enter de A antes da colagem de B", func() bool {
+		return strings.Contains(snapStr(tm), "^[[200~AAAA^[[201~^M^[[200~BBBB^[[201~")
 	})
-	mu.Lock()
-	defer mu.Unlock()
-	var fim, ini time.Time
-	for _, e := range evs {
-		if fim.IsZero() && strings.Contains(e.s, "^[[201~") {
-			fim = e.at
-		}
-		if ini.IsZero() && strings.Count(e.s, "^[[200~") == 2 {
-			ini = e.at
+	fs.release <- struct{}{}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
 		}
 	}
-	if d := ini.Sub(fim); d < 15*time.Millisecond {
-		t.Fatalf("segunda sequência começou %v depois do fim da primeira; quero >= 15ms", d)
+	// Cada marcador de fim vem seguido do Enter da própria sequência.
+	eventually(t, "Enter de B", func() bool {
+		return strings.Contains(snapStr(tm), "^[[200~AAAA^[[201~^M^[[200~BBBB^[[201~^M")
+	})
+}
+
+// Simula o run no meio do encerramento (PTY fechado, done ainda aberto): o
+// erro de escrita vira ErrEnded. O processo ignora SIGHUP para não terminar
+// antes da hora e fechar done.
+func TestWriteComPTYFechadoDevolveErrEnded(t *testing.T) {
+	m := NewManager(Options{PasteSettle: time.Millisecond})
+	t.Cleanup(m.Close)
+	tm, err := m.Start(StartSpec{Argv: []string{"/bin/sh", "-c", "trap '' HUP; echo pronto; exec sleep 30"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "sleep pronto", func() bool { return strings.Contains(snapStr(tm), "pronto") })
+	tm.mu.Lock()
+	tm.ptmxClosed = true
+	_ = tm.ptmx.Close()
+	tm.mu.Unlock()
+	if tm.ended() {
+		t.Fatal("terminal já encerrado: o teste não cobre a janela")
+	}
+	if err := tm.Write([]byte("x")); err != ErrEnded {
+		t.Fatalf("Write: err = %v, quero ErrEnded", err)
+	}
+	if err := tm.Submit("x"); err != ErrEnded {
+		t.Fatalf("Submit: err = %v, quero ErrEnded", err)
 	}
 }
 
