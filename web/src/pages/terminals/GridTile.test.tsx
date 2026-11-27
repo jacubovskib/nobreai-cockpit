@@ -405,6 +405,23 @@ describe('Limpar e continuar', () => {
     expect(screen.queryByText('Contexto limpo. O agente novo abriu em outro terminal.')).toBeNull()
   })
 
+  it('Cancelar fica desabilitado enquanto o pedido está pendente', async () => {
+    let reply: (r: Response) => void = () => {}
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((res) => { reply = res })))
+    setup(base())
+    fireEvent.click(screen.getByRole('button', { name: 'Limpar' }))
+    const cancel = within(panel()!).getByRole('button', { name: 'Cancelar' })
+    expect(cancel).toBeEnabled()
+    fireEvent.click(confirm())
+    await waitFor(() => expect(within(panel()!).getByRole('button', { name: 'Abrindo…' })).toBeInTheDocument())
+    expect(cancel).toBeDisabled()
+    fireEvent.click(cancel)
+    expect(panel()).toBeInTheDocument()
+    await act(async () => { reply(new Response(JSON.stringify({ error: MSG }), { status: 409 })) })
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(MSG))
+    expect(within(panel()!).getByRole('button', { name: 'Cancelar' })).toBeEnabled()
+  })
+
   it('sessão trocada com o painel aberto: o POST vai para a sessão em que abriu', async () => {
     const fn = mock({ [`POST ${URL}`]: { status: 409, body: { error: 'a sessão não tem card' } } })
     const { rerenderWith } = setup(base())

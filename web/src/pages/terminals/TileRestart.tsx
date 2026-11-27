@@ -32,7 +32,8 @@ export function RestartPanel(p: RestartPanelProps) {
         <button type="button" style={btnPrimary} disabled={!r.canSend} onClick={r.send}>
           {r.pending ? 'Abrindo…' : 'Limpar e continuar'}
         </button>
-        <button type="button" style={btn} onClick={p.onCancel}>Cancelar</button>
+        {/* Com o pedido em curso, fechar esconderia o resultado (o POST segue). */}
+        <button type="button" style={btn} disabled={r.pending} onClick={p.onCancel}>Cancelar</button>
       </div>
       <ErrorLine error={r.error} />
     </section>
