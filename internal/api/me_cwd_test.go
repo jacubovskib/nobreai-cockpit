@@ -456,3 +456,67 @@ func TestCreateProjectInsideGroupFolderAttaches(t *testing.T) {
 		t.Fatalf("fora do grupo = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// Nome que bate com o do grupo ou com o de um irmão não impede o vínculo: o
+// repositório entra com um nome distinto (o caminho relativo ao grupo; se nem
+// ele serve, um sufixo numerado), o card nasce nele e a resposta diz o nome
+// usado e o da pasta.
+func TestMeCommandLinksRepoWithClashingName(t *testing.T) {
+	const same, deep = "/w/bravonix/bravonix", "/w/bravonix/x/turing-back"
+	a := dirGitAPI(t, &dirGit{roots: map[string]string{same: same, deep: deep}})
+	g, _ := a.bravonix(t)
+	a.liveSess(t, domain.Session{ID: "claude:s", PID: 4242, Cwd: "/w/bravonix", ProjectID: &g.ID})
+	for _, c := range []struct{ cwd, name, dir string }{
+		{same, "bravonix-2", "bravonix"},
+		{deep, "x/turing-back", "turing-back"},
+	} {
+		for _, path := range []string{"/api/me/cards", "/api/me/start"} {
+			rec := a.do(t, "POST", path, map[string]string{"title": "T", "cwd": c.cwd}, 4242)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("%s %s = %d %s", path, c.cwd, rec.Code, rec.Body)
+			}
+			got := decode[struct {
+				created
+				LinkedDir string `json:"linked_dir"`
+			}](t, rec)
+			p := a.projectAt(t, c.cwd)
+			if p == nil || p.ParentID == nil || *p.ParentID != g.ID || p.Name != c.name {
+				t.Fatalf("%s: filho = %+v", c.cwd, p)
+			}
+			if got.ProjectID != p.ID {
+				t.Fatalf("%s %s: card no projeto %d, quer %d", path, c.cwd, got.ProjectID, p.ID)
+			}
+			// Só o comando que cadastrou fala do vínculo.
+			if path == "/api/me/cards" && (got.LinkedRepo != c.name || got.LinkedDir != c.dir || got.LinkedGroup != "Bravonix") {
+				t.Fatalf("%s: resposta = %+v", c.cwd, got)
+			}
+			if path == "/api/me/start" && got.LinkedRepo != "" {
+				t.Fatalf("%s: segunda vez = %+v", c.cwd, got)
+			}
+		}
+	}
+}
+
+// nobre project add <repo> dentro de um grupo, com nome que bate: sem nome
+// informado, liga com o nome distinto; com o nome escolhido pelo usuário, o
+// repositório fica solto (como antes do vínculo automático) e a resposta diz
+// que não ligou.
+func TestCreateProjectInsideGroupNameClash(t *testing.T) {
+	a := newTestAPI(t)
+	g, _ := a.bravonix(t)
+	type resp struct {
+		domain.Project
+		AttachedTo  string `json:"attached_to"`
+		NotAttached string `json:"not_attached"`
+	}
+	rec := a.do(t, "POST", "/api/projects", map[string]any{"path": "/w/bravonix/x/turing-back"}, 0)
+	out := decode[resp](t, rec)
+	if rec.Code != http.StatusCreated || out.ParentID == nil || *out.ParentID != g.ID || out.Name != "x/turing-back" || out.AttachedTo != "Bravonix" {
+		t.Fatalf("sem nome = %d %s", rec.Code, rec.Body)
+	}
+	rec = a.do(t, "POST", "/api/projects", map[string]any{"path": "/w/bravonix/y", "name": "Turing-Back"}, 0)
+	out = decode[resp](t, rec)
+	if rec.Code != http.StatusCreated || out.ParentID != nil || out.Name != "Turing-Back" || out.AttachedTo != "" || out.NotAttached != "Bravonix" {
+		t.Fatalf("com nome = %d %s", rec.Code, rec.Body)
+	}
+}

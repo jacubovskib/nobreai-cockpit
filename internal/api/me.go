@@ -186,12 +186,16 @@ func commandDir(cwd string) string {
 // cardTarget é o projeto escolhido para o card que o comando cria. from é a
 // pasta do comando quando foi ela que definiu o projeto ("" = foi a sessão);
 // other diz que o projeto não é o da sessão; linkedRepo e linkedGroup vêm
-// preenchidos quando o comando cadastrou o repositório no grupo.
+// preenchidos quando o comando cadastrou o repositório no grupo (linkedDir é
+// o nome da pasta, quando o projeto entrou com outro nome porque esse já
+// existia no grupo); linkRefused é a pasta do repositório que o grupo
+// linkedGroup recusou: o card ficou no grupo.
 type cardTarget struct {
 	id                      int64
 	from                    string
 	other                   bool
 	linkedRepo, linkedGroup string
+	linkedDir, linkRefused  string
 }
 
 // commandProject escolhe o projeto do card que o comando cria: o projeto
@@ -230,10 +234,15 @@ func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd 
 		}
 		if p != nil {
 			t := cardTarget{id: p.ID, from: dir}
-			if child, err := s.linkRepoToGroup(*p, loc); err != nil {
+			if child, refused, err := s.linkRepoToGroup(*p, loc); err != nil {
 				return fail(err)
 			} else if child != nil {
 				t.id, t.linkedRepo, t.linkedGroup = child.ID, child.Name, p.Name
+				if dir := filepath.Base(child.Path); dir != child.Name {
+					t.linkedDir = dir
+				}
+			} else if refused != "" {
+				t.linkRefused, t.linkedGroup = refused, p.Name
 			}
 			t.other = own == nil || *own != t.id
 			return t, true
@@ -263,40 +272,43 @@ func (s *server) commandProject(w http.ResponseWriter, sess domain.Session, cwd 
 // o consentimento, então só vale o que a varredura dele sugeriria: até 2
 // níveis, fora das pastas que ela pula, e nada que o usuário mandou não
 // sugerir. Passa pelo cadastro em lote (addFamily), como os filhos marcados na
-// interface. Devolve nil quando não é o caso; um cadastro recusado pelas
-// regras de família só vai para o log e o card fica no grupo.
-func (s *server) linkRepoToGroup(g domain.Project, loc gitinfo.Location) (*domain.Project, error) {
+// interface; nome de pasta que já existe no grupo não impede: o projeto entra
+// com um nome distinto (store.ChildSpec.Auto). Devolve nil quando não é o
+// caso; se as regras de família recusam o cadastro, o card fica no grupo e
+// refused é a pasta do repositório, para a CLI avisar.
+func (s *server) linkRepoToGroup(g domain.Project, loc gitinfo.Location) (child *domain.Project, refused string, err error) {
 	if !g.IsGroup() || g.Path == "" || loc.Root == "" || loc.Main == "" {
-		return nil, nil
+		return nil, "", nil
 	}
 	root := filepath.Clean(loc.Main)
 	rel, err := filepath.Rel(filepath.Clean(g.Path), root)
 	if err != nil || !workspaces.InScan(rel) {
-		return nil, nil
+		return nil, "", nil
 	}
 	hidden, err := s.dismissedFor(g.ID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if hidden[filepath.ToSlash(rel)] {
-		return nil, nil
+		return nil, "", nil
 	}
-	_, kids, _, err := s.addFamily(g, []store.ChildSpec{{Name: filepath.Base(root), Path: root}}, false)
+	_, kids, _, err := s.addFamily(g, []store.ChildSpec{{Name: filepath.Base(root), Path: root, Auto: true}}, false)
 	if err != nil {
 		if errors.Is(err, store.ErrFamily) || isConstraint(err, "UNIQUE") {
 			log.Printf("ligar %s ao grupo %s: %v", root, g.Name, err)
-			return nil, nil
+			return nil, filepath.ToSlash(rel), nil
 		}
-		return nil, err
+		return nil, "", err
 	}
 	if len(kids) != 1 {
-		return nil, nil
+		return nil, "", nil
 	}
-	return &kids[0], nil
+	return &kids[0], "", nil
 }
 
 // writeCreated responde o card criado pelo comando com o que a CLI diz a mais:
-// o projeto, quando não é o da sessão, e o repositório recém-ligado ao grupo.
+// o projeto, quando não é o da sessão, e o repositório recém-ligado ao grupo
+// (ou o que o grupo recusou).
 func (s *server) writeCreated(w http.ResponseWriter, key string, t cardTarget) {
 	c, err := s.st.GetCard(key)
 	if err != nil {
@@ -309,7 +321,9 @@ func (s *server) writeCreated(w http.ResponseWriter, key string, t cardTarget) {
 		ProjectLabel string `json:"project_label,omitempty"`
 		LinkedRepo   string `json:"linked_repo,omitempty"`
 		LinkedGroup  string `json:"linked_group,omitempty"`
-	}{Card: c, LinkedRepo: t.linkedRepo, LinkedGroup: t.linkedGroup}
+		LinkedDir    string `json:"linked_dir,omitempty"`
+		LinkRefused  string `json:"link_refused,omitempty"`
+	}{Card: c, LinkedRepo: t.linkedRepo, LinkedGroup: t.linkedGroup, LinkedDir: t.linkedDir, LinkRefused: t.linkRefused}
 	if t.other {
 		if out.ProjectLabel, err = s.projectLabel(c.ProjectID); err != nil {
 			writeStoreError(w, err, "")
